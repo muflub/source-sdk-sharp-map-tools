@@ -101,7 +101,10 @@ public static class NavInspector
         int joined = 0;
         for (int c = 0; c < nav.CellCount; c++)
         {
-            placed += nav.Cell(c).Room is null ? 0 : 1;
+            // A cell with columns: a linked level's placed room, or a cell of
+            // a compiled map's grid that is not outside the map throughout
+            // (such a grid's cells name no room).
+            placed += nav.CellRoot(c) >= 0 ? 1 : 0;
         }
 
         for (int d = 0; d < nav.DoorCount; d++)
@@ -130,6 +133,11 @@ public static class NavInspector
         }
 
         Line(text, $"level id {nav.LevelId:D}, pack id {nav.PackId:D}, codec {nav.Codec}");
+        if (nav.Bsp is { } binding)
+        {
+            Line(text, $"built from the map with {binding}");
+        }
+
         Line(text, $"doors {nav.DoorCount} ({joined} joined, {nav.DoorCount - joined} capped); points of interest {nav.PoiCount}");
         Line(text, $"leaves {nav.LeafCount} ({grounded} on a player floor, {water} water, {ladder} ladder); jump links {nav.JumpCount}; dynamic obstacles {nav.ObstacleCount}");
         Line(text, $"step {nav.StepHeight:0.###}, jump {nav.JumpHeight:0.###} up and {nav.JumpDistance:0.###} across");
