@@ -208,6 +208,31 @@ public sealed class NavGeometryTests
     }
 
     /// <summary>
+    /// A static prop whose model has collision pieces is one box per piece,
+    /// turned by its angles, so the gap between two posts stays open; a
+    /// model without pieces falls back to its hull.
+    /// </summary>
+    [Fact]
+    public void AStaticPropWithCollisionPiecesIsABoxPerPiece()
+    {
+        StaticPropLump lump = new();
+        lump.ModelNames.AddRange(["models/gate.mdl", "models/crate.mdl"]);
+        lump.Props.Add(new StaticProp { PropType = 0, Origin = new Vec3(100, 200, 16), Angles = new Vec3(0, 90, 0), Solid = 6 });
+        lump.Props.Add(new StaticProp { PropType = 1, Origin = new Vec3(0, 0, 16), Solid = 6 });
+        BspData bsp = new();
+        bsp.GameLumps.Add(lump.Write());
+        (Vec3, Vec3)[] posts = [(new Vec3(-24, -4, 0), new Vec3(-16, 4, 64)), (new Vec3(16, -4, 0), new Vec3(24, 4, 64))];
+
+        (IReadOnlyList<NavBrush> boxes, IReadOnlyList<string> warnings) = NavGeometry.StaticProps(
+            bsp, _ => (new Vec3(-24, -4, 0), new Vec3(24, 4, 64)), m => m == "models/gate.mdl" ? posts : null);
+
+        Assert.Empty(warnings);
+        Assert.Equal(
+            [(96d, 176d, 16d, 104d, 184d, 80d), (96d, 216d, 16d, 104d, 224d, 80d), (-24d, -4d, 16d, 24d, 4d, 80d)],
+            boxes.Select(b => (b.MinX, b.MinY, b.MinZ, b.MaxX, b.MaxY, b.MaxZ)));
+    }
+
+    /// <summary>
     /// Static props are world solids, each its model's hull turned by its
     /// angles; a prop that is not solid adds nothing, and a model the content
     /// lacks is one warning counting its props.

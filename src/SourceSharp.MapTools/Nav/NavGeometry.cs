@@ -344,6 +344,11 @@ public sealed class NavGeometry
     /// </summary>
     /// <param name="bsp">The map.</param>
     /// <param name="modelBounds">A model's movement hull by its path as the prop dictionary names it, or null when unknown.</param>
+    /// <param name="modelPieces">
+    /// A model's collision pieces by its path (<see cref="NavModelBounds.Pieces"/>),
+    /// or null when unknown: a prop whose model has them is one box per
+    /// piece, turned; one without falls back to its hull.
+    /// </param>
     /// <returns>
     /// The boxes in prop order, and one warning per model the content lacks
     /// naming how many props it leaves out. A prop with <c>SOLID_NONE</c> adds
@@ -368,7 +373,7 @@ public sealed class NavGeometry
     /// </para>
     /// </remarks>
     public static (IReadOnlyList<NavBrush> Brushes, IReadOnlyList<string> Warnings) StaticProps(
-        BspData bsp, Func<string, (Vec3 Mins, Vec3 Maxs)?>? modelBounds)
+        BspData bsp, Func<string, (Vec3 Mins, Vec3 Maxs)?>? modelBounds, Func<string, IReadOnlyList<(Vec3 Mins, Vec3 Maxs)>?>? modelPieces = null)
     {
         ArgumentNullException.ThrowIfNull(bsp);
         if (StaticPropLumpOf(bsp) is not { } lump)
@@ -386,7 +391,17 @@ public sealed class NavGeometry
             }
 
             string model = lump.ModelNames[prop.PropType];
-            if (modelBounds?.Invoke(model) is { } hull && TurnedBox(prop.Origin, prop.Angles, hull) is { } box)
+            if (modelPieces?.Invoke(model) is { Count: > 0 } pieces)
+            {
+                foreach ((Vec3 Mins, Vec3 Maxs) piece in pieces)
+                {
+                    if (TurnedBox(prop.Origin, prop.Angles, piece) is { } turned)
+                    {
+                        boxes.Add(NavBrush.Box(turned.Mins, turned.Maxs, StaticPropContents));
+                    }
+                }
+            }
+            else if (modelBounds?.Invoke(model) is { } hull && TurnedBox(prop.Origin, prop.Angles, hull) is { } box)
             {
                 boxes.Add(NavBrush.Box(box.Mins, box.Maxs, StaticPropContents));
             }

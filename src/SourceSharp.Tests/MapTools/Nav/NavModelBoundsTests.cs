@@ -11,7 +11,11 @@ using SourceSharp.MapFormats.Bsp;
 using SourceSharp.MapFormats.Bsp.Structs;
 using SourceSharp.MapFormats.Geometry;
 
+using SourceSharp.MapGen.Content;
 using SourceSharp.MapTools.Io;
+using SourceSharp.MapTools.Options;
+using SourceSharp.MapTools.Phys;
+using SourceSharp.MapTools.Phys.Managed;
 using SourceSharp.MapTools.Nav;
 using SourceSharp.Tests.MapGen.Content;
 
@@ -71,5 +75,71 @@ public sealed class NavModelBoundsTests
         Assert.Equal((new Vec3(-8, -4, 0), new Vec3(8, 4, 20)), hulls["models/crate.mdl"]);
         Assert.Null(hulls["models/gone.mdl"]);
         Assert.Null(hulls["not a path\0"]);
+    }
+    /// <summary>
+    /// A cooked <c>.phy</c> of two posts with a gap between them: the
+    /// collision pieces are the two posts' boxes, not one box over the gap.
+    /// Bytes that are not a <c>.phy</c>, and a <c>.phy</c> whose solid is not
+    /// a compact surface (the content generator's stand-in), give none.
+    /// </summary>
+    [Fact]
+    public async Task APhysFilesPiecesAreItsConvexesBoxes()
+    {
+        await using ManagedCollisionCooker cooker = ManagedCollisionCooker.Create(ComplianceOptions.Correct);
+        static Vec3[] Post(float x0, float x1) =>
+        [
+            new(x0, -4, 0), new(x1, -4, 0), new(x0, 4, 0), new(x1, 4, 0),
+            new(x0, -4, 64), new(x1, -4, 64), new(x0, 4, 64), new(x1, 4, 64),
+        ];
+
+        byte[] collide = await cooker.RunAsync(session =>
+        {
+            ConvexHandle a = session.ConvexFromVerts(Post(-24, -16));
+            ConvexHandle b = session.ConvexFromVerts(Post(16, 24));
+            CollideHandle both = session.ConvertConvexToCollide([a, b]);
+            try
+            {
+                return session.CollideWrite(both);
+            }
+            finally
+            {
+                session.DestroyCollide(both);
+            }
+        });
+
+        byte[] header = new byte[16];
+        BinaryPrimitives.WriteInt32LittleEndian(header, 16);
+        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(8), 1);
+        byte[] phy = [.. header, .. BitConverter.GetBytes(collide.Length), .. collide];
+
+        IReadOnlyList<(Vec3 Mins, Vec3 Maxs)> pieces = NavModelBounds.Pieces(phy)!;
+        Assert.Equal(2, pieces.Count);
+        (Vec3 Mins, Vec3 Maxs)[] sorted = [.. pieces.OrderBy(p => p.Mins.X)];
+        void Near(Vec3 expected, Vec3 actual)
+        {
+            Assert.InRange(actual.X, expected.X - 0.5f, expected.X + 0.5f);
+            Assert.InRange(actual.Y, expected.Y - 0.5f, expected.Y + 0.5f);
+            Assert.InRange(actual.Z, expected.Z - 0.5f, expected.Z + 0.5f);
+        }
+
+        Near(new Vec3(-24, -4, 0), sorted[0].Mins);
+        Near(new Vec3(-16, 4, 64), sorted[0].Maxs);
+        Near(new Vec3(16, -4, 0), sorted[1].Mins);
+        Near(new Vec3(24, 4, 64), sorted[1].Maxs);
+
+        Assert.Null(NavModelBounds.Pieces("not a phy"u8));
+        Dictionary<string, byte[]> stand = new(StringComparer.Ordinal);
+        foreach ((string path, byte[] bytes) in StudioModelWriter.Write(new StudioModelSpec
+        {
+            Name = "props_test/box.mdl",
+            Materials = ["prop"],
+            MaterialSearchPaths = ["models/props_test/"],
+            Meshes = [Primitives.Box(0, new Vec3(-8, -8, 0), new Vec3(8, 8, 32))],
+        }))
+        {
+            stand[path] = bytes;
+        }
+
+        Assert.Null(NavModelBounds.Pieces(stand["models/props_test/box.phy"]));
     }
 }

@@ -68,6 +68,13 @@ public sealed record BspNavOptions
     /// </summary>
     public float Reach { get; init; } = DefaultReach;
 
+    /// <summary>
+    /// A static prop model's collision pieces by path (<see cref="NavModelBounds.LoadPiecesAsync"/>),
+    /// or null: a prop whose model has them is solid by its pieces' boxes,
+    /// one without by its hull box (<see cref="NavGeometry.StaticProps"/>).
+    /// </summary>
+    public Func<string, IReadOnlyList<(Vec3 Mins, Vec3 Maxs)>?>? ModelPieces { get; init; }
+
     /// <summary>How many cells are built at once. The file is the same at any degree.</summary>
     public int MaxDegree { get; init; } = 1;
 }
@@ -196,7 +203,7 @@ public static class LevelNavFromBsp
         // the static props' boxes are solid; doors and the like obstacles.
         double voxel = settings.VoxelSize;
         NavGeometry entities = NavGeometry.FromBsp(bsp, modelBounds);
-        (IReadOnlyList<NavBrush> props, IReadOnlyList<string> propWarnings) = NavGeometry.StaticProps(bsp, modelBounds);
+        (IReadOnlyList<NavBrush> props, IReadOnlyList<string> propWarnings) = NavGeometry.StaticProps(bsp, modelBounds, options.ModelPieces);
         NavGeometry geometry = new()
         {
             Brushes = [.. entities.Brushes, .. NavGeometry.Displacements(bsp, voxel), .. props],

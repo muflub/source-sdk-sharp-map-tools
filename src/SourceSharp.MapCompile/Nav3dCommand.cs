@@ -199,6 +199,7 @@ public static class Nav3dCommand
 
         IReadOnlyList<string> models = LevelNavFromBsp.Models(bsp);
         IReadOnlyDictionary<string, (Vec3 Mins, Vec3 Maxs)?> hulls = new Dictionary<string, (Vec3, Vec3)?>();
+        IReadOnlyDictionary<string, IReadOnlyList<(Vec3 Mins, Vec3 Maxs)>?> pieces = new Dictionary<string, IReadOnlyList<(Vec3, Vec3)>?>();
         if (gameDirectory is not null && models.Count > 0)
         {
             GameContentMounter.Result mounted;
@@ -217,6 +218,8 @@ public static class Nav3dCommand
             {
                 await VbspCommand.WriteSkippedAsync(mounted, tool, output).ConfigureAwait(false);
                 hulls = await NavModelBounds.LoadAsync(mounted.Content, models, cancellationToken).ConfigureAwait(false);
+                pieces = await NavModelBounds.LoadPiecesAsync(mounted.Content, NavModelBounds.StaticPropModels(bsp), cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -225,7 +228,8 @@ public static class Nav3dCommand
         {
             result = await LevelNavFromBsp.BuildAsync(
                 bsp, binding, m => hulls.TryGetValue(m, out (Vec3, Vec3)? hull) ? hull : null,
-                options, cancellationToken).ConfigureAwait(false);
+                options with { ModelPieces = m => pieces.TryGetValue(m, out IReadOnlyList<(Vec3, Vec3)>? found) ? found : null },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (NavBuildException exception)
         {
