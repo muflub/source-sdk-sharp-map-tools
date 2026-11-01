@@ -145,6 +145,14 @@ Readers and writers for every file the chain touches, and nothing else.
   ([`docs/map2d-format.md`](docs/map2d-format.md)) and draws its SVG
   preview; `Bsp/BspMapChecksum` is the map checksum the file binds to.
 
+It is the one library shipped as a NuGet package, for the game mod:
+`tools/pack-mapformats.sh` packs it into the local feed `bin/nupkg`
+(`SourceSharp.MapFormats.<version>.nupkg`), and the game restores it from
+there at a pinned version. The version is the `<Version>` in
+`SourceSharp.MapFormats.csproj`; every drop handed over gets a new one. The
+package holds the assembly and its documentation and has no dependencies
+(`MapFormatsPackageTests` packs the built assembly and checks both).
+
 ### `SourceSharp.MapTools`
 
 The compile passes, grouped by stage and by concern.
