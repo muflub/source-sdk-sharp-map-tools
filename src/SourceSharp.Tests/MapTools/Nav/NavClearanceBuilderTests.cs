@@ -97,6 +97,20 @@ public sealed class NavClearanceBuilderTests
         ], 1)!;
     }
 
+    /// <summary>
+    /// A column may run 255 voxels up (format section 2: a cell's height,
+    /// version 3), not only a cell's edge of 128: a compiled map 166 voxels
+    /// tall at 8-unit voxels was refused by the builder though the file holds it.
+    /// </summary>
+    [Fact]
+    public void AColumnRunsUpTo255VoxelsAndNoFurther()
+    {
+        NavGrid tall = NavClearanceBuilder.Build(new NavGeometry { Brushes = [Floor] }, new NavRegion(0, 0, 0, 2, 2, 255, 16), NavSettings.Default);
+        Assert.True(tall[0, 0, 0].IsSolid);
+        Assert.False(tall[1, 1, 254].IsSolid);
+        Assert.Throws<ArgumentOutOfRangeException>(() => NavClearanceBuilder.Build(new NavGeometry { Brushes = [Floor] }, new NavRegion(0, 0, 0, 2, 2, 256, 16), NavSettings.Default));
+    }
+
     [Fact]
     public void AnOpenFloorIsSolidInItsSlabAWalkableFloorOnTopAndOpenAbove()
     {
@@ -357,7 +371,7 @@ public sealed class NavClearanceBuilderTests
         NavGeometry geometry = new() { Brushes = [Floor] };
         Assert.Throws<ArgumentOutOfRangeException>(() => NavClearanceBuilder.Build(geometry, Cell with { SizeX = 0 }, NavSettings.Default));
         Assert.Throws<ArgumentOutOfRangeException>(() => NavClearanceBuilder.Build(geometry, Cell with { VoxelSize = 0 }, NavSettings.Default));
-        Assert.Throws<ArgumentOutOfRangeException>(() => NavClearanceBuilder.Build(geometry, Cell with { SizeZ = 200 }, NavSettings.Default));
+        Assert.Throws<ArgumentOutOfRangeException>(() => NavClearanceBuilder.Build(geometry, Cell with { SizeZ = Nav3dFormat.MaxColumnVoxels + 1 }, NavSettings.Default));
     }
 
     /// <summary>A threshold is stored as the float at or below it: an agent the grid says fits, fits.</summary>

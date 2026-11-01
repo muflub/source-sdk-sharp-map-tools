@@ -83,7 +83,7 @@ public static class NavClearanceBuilder
         ArgumentOutOfRangeException.ThrowIfLessThan(region.SizeX, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(region.SizeY, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(region.SizeZ, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(region.SizeZ, Nav3dFormat.MaxCellVoxels);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(region.SizeZ, Nav3dFormat.MaxColumnVoxels);
         if (!(region.VoxelSize > 0))
         {
             throw new ArgumentOutOfRangeException(nameof(region), "the voxel has a positive edge.");
