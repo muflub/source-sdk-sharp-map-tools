@@ -641,7 +641,7 @@ public static class Program
               map2d <map.bsp> [-level <level.yaml>] [-out <file.map2d>] [-svg]
                                                       a compiled map's level map overlay,
                                                       cut into the level's cells with -level
-              nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <c>] [-threads <n>]
+              nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <c>] [-voxel <n>] [-threads <n>]
                                                       a compiled map's 3D navigation (.nav3d),
                                                       bound to the map's bytes; -game for
                                                       the props' model hulls

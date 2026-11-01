@@ -118,7 +118,25 @@ public sealed class Nav3dCommandTests(BspNavMap map) : IClassFixture<BspNavMap>
         Assert.Contains("ssmap nav3d: warning: static prop model \"models/props_test/box.mdl\"", output.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary><c>-voxel</c> chooses the voxel: 8 units gives 32 to a 256-unit cell; one that does not divide the cell fails naming it.</summary>
+    [Fact]
+    public async Task VoxelChoosesTheGridsVoxel()
+    {
+        InMemoryFileSystem fs = Game();
+        using StringWriter output = new();
+        Assert.Equal(Program.ExitSuccess, await Nav3dCommand.RunAsync(fs, [], ["/game/maps/hall.bsp", "-voxel", "8"], output));
+        Nav3dReader nav = Nav3dReader.Open(fs.GetBytes(At("/game/maps/hall.nav3d"))!);
+        Assert.Equal((8f, 32), (nav.VoxelSize, nav.CellVoxels));
+
+        using StringWriter refused = new();
+        Assert.Equal(RoomCommands.ExitFailed, await Nav3dCommand.RunAsync(fs, [], ["/game/maps/hall.bsp", "-voxel", "10", "-out", "/game/maps/ten.nav3d"], refused));
+        Assert.Contains("does not divide the 256-unit cell", refused.ToString(), StringComparison.Ordinal);
+        Assert.False(await fs.ExistsAsync(At("/game/maps/ten.nav3d")));
+    }
+
     [Theory]
+    [InlineData("/game/maps/hall.bsp -voxel 0")]
+    [InlineData("/game/maps/hall.bsp -voxel x")]
     [InlineData("")]
     [InlineData("/game/maps/hall.bsp -bogus")]
     [InlineData("/game/maps/hall.bsp -nav-codec zip")]

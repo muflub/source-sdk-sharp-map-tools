@@ -19,7 +19,7 @@ using SourceSharp.MapTools.Nav;
 namespace SourceSharp.MapCompile;
 
 /// <summary>
-/// <c>ssmap nav3d &lt;map.bsp&gt; [-out &lt;file.nav3d&gt;] [-game &lt;dir&gt;] [-nav-codec &lt;codec&gt;] [-threads N]</c>:
+/// <c>ssmap nav3d &lt;map.bsp&gt; [-out &lt;file.nav3d&gt;] [-game &lt;dir&gt;] [-nav-codec &lt;codec&gt;] [-voxel N] [-threads N]</c>:
 /// the 3D navigation of any compiled map, built from the <c>.bsp</c> alone.
 /// </summary>
 /// <remarks>
@@ -41,7 +41,7 @@ namespace SourceSharp.MapCompile;
 /// </remarks>
 public static class Nav3dCommand
 {
-    private const string Usage = "usage: ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-threads <n>]";
+    private const string Usage = "usage: ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>]";
 
     /// <summary>Runs <c>ssmap nav3d</c>.</summary>
     /// <param name="disk">Where the map, the game and the output live.</param>
@@ -63,6 +63,7 @@ public static class Nav3dCommand
         string? game = null;
         NavCompression compression = LevelNavFromPack.DefaultCompression;
         int threads = Environment.ProcessorCount;
+        float voxel = NavSettings.DefaultVoxelSize;
         for (int i = 0; i < args.Count; i++)
         {
             string arg = args[i];
@@ -78,6 +79,12 @@ public static class Nav3dCommand
             else if (Is(arg, "nav-codec") && hasValue && NavCompression.TryParse(args[i + 1], out NavCompression codec))
             {
                 compression = codec;
+                i++;
+            }
+            else if (Is(arg, "voxel") && hasValue && float.TryParse(args[i + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out float v)
+                && v > 0 && float.IsFinite(v))
+            {
+                voxel = v;
                 i++;
             }
             else if (Is(arg, "threads") && hasValue && int.TryParse(args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int n) && n >= 1)
@@ -114,8 +121,19 @@ public static class Nav3dCommand
         }
 
         return await BuildAndWriteAsync(
-            disk, steamRoots, mapPath, navPath, gameDirectory, compression, threads, "ssmap nav3d", output, cancellationToken).ConfigureAwait(false);
+            disk, steamRoots, mapPath, navPath, gameDirectory, compression, Options(voxel, threads), "ssmap nav3d", output, cancellationToken)
+            .ConfigureAwait(false);
     }
+
+    /// <summary>The grid a command line asks for: the defaults with its voxel and thread count.</summary>
+    /// <param name="voxel">The voxel's edge in units; it must divide the 256-unit cell.</param>
+    /// <param name="threads">How many cells are built at once.</param>
+    /// <returns>The options.</returns>
+    public static BspNavOptions Options(float voxel, int threads) => new()
+    {
+        Settings = NavSettings.Default with { VoxelSize = voxel },
+        MaxDegree = Math.Max(1, threads),
+    };
 
     /// <summary>Where a map's navigation goes by default: <c>&lt;map&gt;.nav3d</c> beside it.</summary>
     /// <param name="mapPath">The map.</param>
@@ -136,7 +154,7 @@ public static class Nav3dCommand
     /// <param name="navPath">Where the <c>.nav3d</c> goes.</param>
     /// <param name="gameDirectory">The directory holding <c>gameinfo.txt</c>, or null to build without props.</param>
     /// <param name="compression">How the file is stored.</param>
-    /// <param name="threads">How many cells are built at once.</param>
+    /// <param name="options">The grid and the thread count (<see cref="Options"/>).</param>
     /// <param name="tool">The prefix for each line (<c>ssmap nav3d</c>, <c>ssmap all</c>).</param>
     /// <param name="output">Where the report goes.</param>
     /// <param name="cancellationToken">Cancels the work.</param>
@@ -148,7 +166,7 @@ public static class Nav3dCommand
         VPath navPath,
         string? gameDirectory,
         NavCompression compression,
-        int threads,
+        BspNavOptions options,
         string tool,
         TextWriter output,
         CancellationToken cancellationToken = default)
@@ -207,7 +225,7 @@ public static class Nav3dCommand
         {
             result = await LevelNavFromBsp.BuildAsync(
                 bsp, binding, m => hulls.TryGetValue(m, out (Vec3, Vec3)? hull) ? hull : null,
-                new BspNavOptions { MaxDegree = Math.Max(1, threads) }, cancellationToken).ConfigureAwait(false);
+                options, cancellationToken).ConfigureAwait(false);
         }
         catch (NavBuildException exception)
         {

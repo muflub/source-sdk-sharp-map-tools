@@ -843,7 +843,8 @@ public static class AllCommand
     {
         int exit = await Nav3dCommand.BuildAndWriteAsync(
             disk, searchRoots, bspPath, Nav3dCommand.NavPathOf(bspPath), gameDirectory, parsed.NavCompression,
-            parsed.Threads ?? Environment.ProcessorCount, "ssmap all", output, cancellationToken).ConfigureAwait(false);
+            Nav3dCommand.Options(NavSettings.DefaultVoxelSize, parsed.Threads ?? Environment.ProcessorCount), "ssmap all", output, cancellationToken)
+            .ConfigureAwait(false);
         if (exit == Program.ExitSuccess)
         {
             return exit;
