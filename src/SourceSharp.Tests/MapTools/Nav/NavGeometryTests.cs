@@ -92,6 +92,55 @@ public sealed class NavGeometryTests
         Assert.Equal(NavBrush.FromBsp(room.Bsp).Count - 2, geometry.Brushes.Count);
     }
 
+    /// <summary>
+    /// A map whose leaf lump is version 0 (each leaf 56 bytes, its ambient
+    /// cube inline, as stock BSP version 19 maps store them) splits its
+    /// brushes between the world and its entities exactly as the same map
+    /// with version 1 leaves does. Read as version 1, the door's brushes
+    /// were no longer found and the world lost brushes.
+    /// </summary>
+    [Fact]
+    public async Task AVersionZeroLeafLumpSplitsTheBrushesAsVersionOneDoes()
+    {
+        RoomDefinition definition = RoomHarness.WalkableRoom("leafs", RoomFacing.PositiveX);
+        VmfDocument vmf = RoomHarness.BuildRoomModel(definition);
+        VmfChunk door = Entity("func_door", 800001, ("targetname", "gate"));
+        door.Children.Add(RoomModel.Slab(RoomHarness.Plain, new Vec3(96, 64, 16), new Vec3(112, 192, 176), 800002));
+        vmf.Chunks.Add(door);
+        RoomObject room = await NavRoomsFixture.CompileAsync(vmf, definition);
+        NavGeometry current = NavGeometry.FromBsp(room.Bsp);
+        Assert.Equal(1, room.Bsp[BspLump.Leafs].Version);
+
+        ReadOnlySpan<DLeaf> leafs = BspStructView.As<DLeaf>(room.Bsp[BspLump.Leafs]);
+        DLeafVersion0[] old = new DLeafVersion0[leafs.Length];
+        for (int i = 0; i < leafs.Length; i++)
+        {
+            DLeaf l = leafs[i];
+            old[i] = new DLeafVersion0
+            {
+                Contents = l.Contents,
+                Cluster = l.Cluster,
+                AreaFlags = l.AreaFlags,
+                Mins = l.Mins,
+                Maxs = l.Maxs,
+                FirstLeafFace = l.FirstLeafFace,
+                NumLeafFaces = l.NumLeafFaces,
+                FirstLeafBrush = l.FirstLeafBrush,
+                NumLeafBrushes = l.NumLeafBrushes,
+                LeafWaterDataId = l.LeafWaterDataId,
+            };
+        }
+
+        BspLumpData lump = BspStructView.ToLump<DLeafVersion0>(old, 0);
+        room.Bsp.SetLump(BspLump.Leafs, lump.Data, 0);
+        NavGeometry fromOld = NavGeometry.FromBsp(room.Bsp);
+
+        Assert.Equal(
+            current.Brushes.Select(b => (b.MinX, b.MinY, b.MinZ, b.MaxX, b.MaxY, b.MaxZ, b.Contents)),
+            fromOld.Brushes.Select(b => (b.MinX, b.MinY, b.MinZ, b.MaxX, b.MaxY, b.MaxZ, b.Contents)));
+        Assert.Equal(new Box(new Vec3(96, 64, 16), new Vec3(112, 192, 176)), Assert.Single(fromOld.Obstacles).Bounds);
+    }
+
     [Theory]
     [InlineData("func_door", Nav3dObstacleKind.Door)]
     [InlineData("FUNC_DOOR_ROTATING", Nav3dObstacleKind.Door)]

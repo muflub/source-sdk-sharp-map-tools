@@ -189,11 +189,18 @@ public sealed class NavGeometry
     }
 
     /// <summary>Each model's brush indices, found by walking its tree to its leaves' brush lists.</summary>
+    /// <remarks>
+    /// The leaves are read in the layout the lump's own version names: a map
+    /// whose leaf lump is version 0 (stock maps of BSP version 19, such as
+    /// <c>dm_lockdown</c>) keeps each leaf's ambient cube inline, 56 bytes a
+    /// leaf against version 1's 32. Read as version 1, its brush lists came
+    /// out of the wrong bytes and the world lost brushes to the entities.
+    /// </remarks>
     private static List<int>[] ModelBrushes(BspData bsp)
     {
         ReadOnlySpan<DModel> models = BspStructView.As<DModel>(bsp[BspLump.Models]);
         ReadOnlySpan<DNode> nodes = BspStructView.As<DNode>(bsp[BspLump.Nodes]);
-        ReadOnlySpan<DLeaf> leafs = BspStructView.As<DLeaf>(bsp[BspLump.Leafs]);
+        (ushort First, ushort Count)[] leafs = LeafBrushRuns(bsp);
         ReadOnlySpan<ushort> leafBrushes = BspStructView.As<ushort>(bsp[BspLump.LeafBrushes]);
         List<int>[] result = new List<int>[models.Length];
         Stack<int> pending = new();
@@ -210,9 +217,9 @@ public sealed class NavGeometry
                     int leaf = -(node + 1);
                     if (leaf < leafs.Length)
                     {
-                        for (int b = 0; b < leafs[leaf].NumLeafBrushes; b++)
+                        for (int b = 0; b < leafs[leaf].Count; b++)
                         {
-                            int at = leafs[leaf].FirstLeafBrush + b;
+                            int at = leafs[leaf].First + b;
                             if (at < leafBrushes.Length)
                             {
                                 brushes.Add(leafBrushes[at]);
@@ -231,6 +238,32 @@ public sealed class NavGeometry
             }
 
             result[m] = [.. brushes];
+        }
+
+        return result;
+    }
+
+    /// <summary>Each leaf's run in the leaf-brush list, from either leaf layout.</summary>
+    private static (ushort First, ushort Count)[] LeafBrushRuns(BspData bsp)
+    {
+        BspLumpData lump = bsp[BspLump.Leafs];
+        if (lump.Version == 0)
+        {
+            ReadOnlySpan<DLeafVersion0> old = BspStructView.As<DLeafVersion0>(lump);
+            (ushort, ushort)[] runs = new (ushort, ushort)[old.Length];
+            for (int i = 0; i < old.Length; i++)
+            {
+                runs[i] = (old[i].FirstLeafBrush, old[i].NumLeafBrushes);
+            }
+
+            return runs;
+        }
+
+        ReadOnlySpan<DLeaf> leafs = BspStructView.As<DLeaf>(lump);
+        (ushort, ushort)[] result = new (ushort, ushort)[leafs.Length];
+        for (int i = 0; i < leafs.Length; i++)
+        {
+            result[i] = (leafs[i].FirstLeafBrush, leafs[i].NumLeafBrushes);
         }
 
         return result;
