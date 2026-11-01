@@ -1,6 +1,7 @@
 # The `.nav3d` level navigation file
 
-`ssmap link` writes `<map>.nav3d` beside every linked `<map>.bsp`: a 3D
+`ssmap link` writes `<map>.nav3d` beside every linked `<map>.bsp`, and
+`ssmap nav3d` and `ssmap all` beside any compiled map (section 17.6): a 3D
 navigation of the level's free space for agents that walk, climb, jump,
 swim and fly, of any box size. This document is the file's specification,
 version **2**. It is written so a reader can be built from it alone, in any
@@ -25,7 +26,7 @@ Contents:
 14. [Using the reader from the mod (C#)](#14-using-the-reader-from-the-mod-c)
 15. [A worked example](#15-a-worked-example), byte by byte
 16. [Versioning](#16-versioning)
-17. [Where the data comes from](#17-where-the-data-comes-from): configuration, the room pack, seams, the map-first link
+17. [Where the data comes from](#17-where-the-data-comes-from): configuration, the room pack, seams, the map-first link, a compiled map
 18. [Measurements and the choices they made](#18-measurements-and-the-choices-they-made)
 
 ---
@@ -920,6 +921,53 @@ plan can be built again. The write goes through the file system's replace,
 so a cancelled or failed write leaves the previous file, never half of one.
 When the navigation fails after the map is written, `ssmap link` says `the
 map was written, but its navigation failed: …` and exits with failure.
+
+### 17.6 Built from a compiled map
+
+`ssmap nav3d <map.bsp>` builds the file for any compiled map, and
+`ssmap all` writes it after vrad (`LevelNavFromBsp` in
+`SourceSharp.MapTools`). Nothing in the format changes; what such a file
+holds differs from a linked level's in these ways:
+
+- **The grid** is laid over the world model's bounds: the origin is its
+  low corner rounded down to the voxel, cells are 256 units (16 voxels of
+  16), and every cell is as tall as the map. A map more than 16 voxels tall
+  is a version 3 file whose `CHGT` gives every placed cell the same
+  height; a map taller than 255 voxels is refused.
+- **Cells are not rooms.** `CELL` names no room, there are no doors and no
+  points of interest, and the spawn and arrivals are −1. A neighbour across
+  a cell face (section 8) is only a step across a grid line.
+- **Solid** is the world's brushes, each displacement's surface (every
+  triangle extruded one voxel down, or along its normal for a wall or
+  ceiling), and each solid static prop's model hull turned by its angles
+  (the box around it: an over-estimate, never an under-estimate). A voxel
+  whose centre lies in a solid leaf of the compiled tree is outside the
+  map's sealed hull and solid too; a cell outside throughout is empty
+  (`ROOT` −1).
+- **Each cell is built from the solids within 128 units of it**, so a
+  record's corners are exact for every agent up to 256 units wide; a wider
+  agent may be told it fits where only a wall farther off would stop it. A
+  fact builds a map with 256-unit and with 512-unit cells and compares the
+  standing and flying answers voxel for voxel.
+- **Ids**: `levelId` and `packId` are zero and `BSPB` names the map
+  (section 12).
+
+The file is the same bytes at any thread count and on every run (cells are
+built independently and stitched in cell order); a fact compares two runs,
+one and four threads, and four builds at once in one process.
+
+`dm_lockdown` (the stock map, BSP 19, 2,239 brushes, 40 displacements,
+261 static props), with the Source SDK Base 2013 Multiplayer content
+mounted, Microsoft's .NET 10 runtime: 2.9 s on 32 threads and 20.9 s on one
+for the whole command, the same 482,383 bytes (Brotli 5) both times; 177 of
+264 cells (11 × 24, 83 voxels up), 128,117 leaves, 660 jump links, 215
+obstacles, 59 ladder leaves; the standing preset's largest component holds
+42,913 leaves. Every spawn has a floor a standing player fits on within a
+voxel of it. One catwalk is its own component for the 32-wide standing
+preset: a box fits in a voxel only with its origin anywhere in it, so it
+needs 48 units across to pass, and the catwalk's ladder stands closer to
+its wall than that; for a 16-wide agent every spawn is in one component (a
+fact checks both).
 
 ## 18. Measurements and the choices they made
 
