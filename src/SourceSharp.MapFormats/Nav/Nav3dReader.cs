@@ -674,6 +674,130 @@ public sealed class Nav3dReader
     }
 
     /// <summary>
+    /// Whether an agent fits with its origin at a voxel's horizontal centre
+    /// and at a given height: the question a game asks of an agent that stands
+    /// in the middle of a voxel, where <see cref="Passable"/> asks it of an
+    /// origin anywhere in the voxel.
+    /// </summary>
+    /// <param name="leaf">The leaf.</param>
+    /// <param name="z">The voxel, within the leaf's run.</param>
+    /// <param name="width">The agent's width.</param>
+    /// <param name="height">The agent's height.</param>
+    /// <param name="originZ">The height of the agent's origin (its feet): the voxel's bottom, or a floor under it; never above the voxel's top.</param>
+    /// <param name="clipClass">Its clip class.</param>
+    /// <param name="blocking">Per dynamic obstacle, whether it is in the way now; empty for none.</param>
+    /// <returns>True when the agent fits there.</returns>
+    /// <remarks>
+    /// <para>
+    /// <b>Why the records answer it exactly.</b> A corner's width threshold
+    /// is how far the voxel's footprint, grown the same amount on every side,
+    /// can grow before it meets the solid (format section 5). A box of
+    /// half-width <c>r</c> centred on the voxel's centre is that footprint
+    /// grown by <c>r - voxel/2</c>, so the corners answer the centred box with
+    /// the half-width less half a voxel, and its top from the origin's
+    /// height in place of the voxel's top. A 32-wide player then needs 32
+    /// units across to stand in a voxel, not the 48 a fit anywhere in a
+    /// 16-unit voxel needs, and its 72 units of head room from its feet, not
+    /// from the voxel's top.
+    /// </para>
+    /// <para>
+    /// A solid that reaches into the voxel's footprint is stored with no
+    /// width (it blocks every width), which this answer keeps: the exact gap
+    /// from the centre is not in the file, so such a voxel is answered as
+    /// blocked whenever the agent reaches the solid's bottom, which can only
+    /// say no where the truth is yes. An agent narrower than a voxel is
+    /// answered the same way. Overhanging brushes are tested with the
+    /// centred box directly.
+    /// </para>
+    /// </remarks>
+    public bool FitsAtCentre(int leaf, int z, float width, float height, double originZ, Nav3dClipClass clipClass, ReadOnlySpan<bool> blocking = default)
+    {
+        Nav3dLeaf l = Leaf(leaf);
+        if (z < l.ZLo || z > l.ZHi)
+        {
+            return false;
+        }
+
+        ReadOnlySpan<byte> record = ClearanceRecord(leaf, clipClass);
+        double r = width * 0.5;
+        if (Nav3dClearance.CornersBlock(record, r - (VoxelSize * 0.5), height, originZ, blocking))
+        {
+            return false;
+        }
+
+        int brushes = Nav3dClearance.BrushCount(record);
+        if (brushes == 0)
+        {
+            return true;
+        }
+
+        (Vec3 mins, Vec3 maxs) = LeafBounds(leaf);
+        double cx = (mins.X + (double)maxs.X) * 0.5;
+        double cy = (mins.Y + (double)maxs.Y) * 0.5;
+        NavBox box = new(cx - r, cy - r, originZ, cx + r, cy + r, originZ + height);
+        for (int i = 0; i < brushes; i++)
+        {
+            if (_brushes[Nav3dClearance.Brush(record, i)].Overlaps(box))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>Whether an agent fits at a voxel's centre with its feet on the voxel's bottom (<see cref="FitsAtCentre"/>).</summary>
+    /// <param name="leaf">The leaf.</param>
+    /// <param name="z">The voxel.</param>
+    /// <param name="width">The agent's width.</param>
+    /// <param name="height">The agent's height.</param>
+    /// <param name="clipClass">Its clip class.</param>
+    /// <param name="blocking">Per dynamic obstacle, whether it is in the way now; empty for none.</param>
+    /// <returns>True when it fits.</returns>
+    public bool PassableAtCentre(int leaf, int z, float width, float height, Nav3dClipClass clipClass, ReadOnlySpan<bool> blocking = default) =>
+        FitsAtCentre(leaf, z, width, height, Origin.Z + (z * (double)VoxelSize), clipClass, blocking);
+
+    /// <summary>
+    /// Whether an agent stands in a leaf with its origin at the centre of the
+    /// leaf's bottom voxel, its feet on the leaf's floor: the leaf is grounded
+    /// and walkable for the class and the agent fits there from the floor up
+    /// (<see cref="FitsAtCentre"/>).
+    /// </summary>
+    /// <param name="leaf">The leaf.</param>
+    /// <param name="width">The agent's width.</param>
+    /// <param name="height">The agent's height.</param>
+    /// <param name="clipClass">Its clip class.</param>
+    /// <param name="blocking">Per dynamic obstacle, whether it is in the way now; empty for none.</param>
+    /// <returns>True when it stands there.</returns>
+    public bool StandableAtCentre(int leaf, float width, float height, Nav3dClipClass clipClass, ReadOnlySpan<bool> blocking = default)
+    {
+        Nav3dLeaf l = Leaf(leaf);
+        return l.IsWalkable(clipClass) && FitsAtCentre(leaf, l.ZLo, width, height, l.FloorZ(clipClass), clipClass, blocking);
+    }
+
+    /// <summary>The leaves of one voxel column, low to high: indices <c>[First, End)</c>, empty for a column of an empty cell or outside the grid.</summary>
+    /// <param name="cell">The cell.</param>
+    /// <param name="x">The column within the cell, along x.</param>
+    /// <param name="y">Along y.</param>
+    /// <returns>The range.</returns>
+    public (int First, int End) ColumnLeaves(int cell, int x, int y)
+    {
+        if ((uint)cell >= (uint)CellCount || (uint)x >= (uint)CellVoxels || (uint)y >= (uint)CellVoxels)
+        {
+            return (0, 0);
+        }
+
+        int root = CellRoot(cell);
+        if (root < 0)
+        {
+            return (0, 0);
+        }
+
+        int column = root + (y * CellVoxels) + x;
+        return ((int)ReadU32(_s.ColumnStarts, column, 4, 0), (int)ReadU32(_s.ColumnStarts, column + 1, 4, 0));
+    }
+
+    /// <summary>
     /// The highest voxel of a leaf an agent fits in: an agent that fits in a
     /// voxel fits in every voxel below it in the run, so its room is the run
     /// from the bottom up to this.

@@ -201,7 +201,7 @@ public static class LevelNavFromBsp
         {
             Brushes = [.. entities.Brushes, .. NavGeometry.Displacements(bsp, voxel), .. props],
             Obstacles = entities.Obstacles,
-            Ladders = entities.Ladders,
+            Ladders = ClimbVolumes(bsp, entities.Brushes),
             Warnings = [.. entities.Warnings, .. propWarnings],
         };
 
@@ -240,6 +240,59 @@ public static class LevelNavFromBsp
         return new BspNavResult(
             Stitch(built, geometry, overhang, settings, options, columns, rows, n, nz, new Vec3((float)ox, (float)oy, (float)oz), binding, cancellationToken),
             geometry.Warnings);
+    }
+
+    /// <summary>
+    /// Where a climbing player's origin can be: each ladder grown sideways by
+    /// a player's half-width (<see cref="NavGeometry.LadderHalfWidth"/>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The game moves a climbing player with its box held against the
+    /// ladder, so its origin is a half-width out from the ladder's face. A
+    /// <c>func_useableladder</c>'s volume already says so (its climb line is
+    /// where the origin runs, widened by the half-width). An
+    /// <c>info_ladder</c>'s box and a <c>CONTENTS_LADDER</c> brush are the
+    /// ladder itself: flagging only the voxels they overlap marks the voxels
+    /// the player's box reaches into, which for a ladder against a wall are
+    /// the ones it does not fit in, and for a solid ladder brush none at all.
+    /// Grown by the half-width, they mark the voxels a climbing player's
+    /// origin is in, as the useable ladder does.
+    /// </para>
+    /// <para>
+    /// Only for a compiled map's navigation: a room's navigation keeps its
+    /// ladder volumes as they were, so a room pack's bytes do not change.
+    /// </para>
+    /// </remarks>
+    internal static IReadOnlyList<Box> ClimbVolumes(BspData bsp, IReadOnlyList<NavBrush> worldBrushes)
+    {
+        float grow = NavGeometry.LadderHalfWidth;
+        Vec3 side = new(grow, grow, 0);
+        List<Box> volumes = [];
+        foreach (BspEntity entity in EntityLump.Parse(bsp[BspLump.Entities]))
+        {
+            string lower = entity.ClassName.ToLowerInvariant();
+            if (lower == "info_ladder" && NavGeometry.LadderBox(entity) is { } box)
+            {
+                volumes.Add(new Box(box.Mins - side, box.Maxs + side));
+            }
+            else if (lower == "func_useableladder" && NavGeometry.UseableLadder(entity) is { } climb)
+            {
+                volumes.Add(climb);
+            }
+        }
+
+        foreach (NavBrush brush in worldBrushes)
+        {
+            if ((brush.Contents & Nav3dFormat.LadderContents) != 0)
+            {
+                volumes.Add(new Box(
+                    new Vec3((float)brush.MinX - grow, (float)brush.MinY - grow, (float)brush.MinZ),
+                    new Vec3((float)brush.MaxX + grow, (float)brush.MaxY + grow, (float)brush.MaxZ)));
+            }
+        }
+
+        return volumes;
     }
 
     /// <summary>One cell: its columns, its own records, and its overhanging brushes' places in the level's list; null when it is outside throughout.</summary>
