@@ -428,6 +428,49 @@ way. The zip is a game directory:
 Unzip it anywhere and compile against it with no Steam install:
 `ssmap all <map> -game <unzipped dir>`.
 
+### `nav3d`
+
+```sh
+ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-threads <n>]
+```
+
+Builds the 3D navigation (`.nav3d`, the format `link` writes for a level
+of rooms) of any compiled map, from the `.bsp` alone: a stock map such as
+`dm_lockdown`, or one from `ssmap all`. The file goes beside the map
+(`<map>.nav3d`) unless `-out` names it, Brotli 5 unless `-nav-codec` says
+otherwise (`none`, `deflate[:0-9]`, `brotli[:0-11]`).
+
+- **The grid** is 256-unit cells of 16-unit voxels laid over the world
+  model's bounds, every cell as tall as the map (at most 255 voxels), with
+  the room defaults: step 18, jump 56 up and 100 across, the presets
+  `standing 32 72 player; flyer 32 32 npc`. Each cell is built from the
+  solids within 128 units of it, so a clearance is exact for any agent up to
+  256 units wide; cells are built on `-threads` threads (all cores by
+  default), and the file is the same bytes at any count.
+- **Solid**: the world's brushes (player clips for the player class, monster
+  clips for the NPC class), each displacement's triangles (the compile keeps
+  no brush for them), and each solid static prop's model hull turned by its
+  angles (a box around the prop: an arch or a gate frame is closed in the
+  navigation). **Outside** the map's sealed hull is solid too, read from the
+  compiled tree, so a cell outside throughout holds nothing.
+- **Dynamic obstacles** are the doors, movers, toggles, breakables and
+  physics and dynamic props, by their `targetname`; **ladders** are
+  `CONTENTS_LADDER` brushes, `info_ladder` boxes and `func_useableladder`
+  climbs.
+- **Props need the game**: their hulls come from the models in the game's
+  content, `-game <dir>` (the folder with `gameinfo.txt`), or the map's
+  folder's parent when the map is in `<game>/maps/`. A model the content
+  lacks is one warning and its props are left out; with no game at all the
+  navigation is built without props and says so.
+- **Bound to the map**: the file's optional `BSPB` section records the
+  map's checksum and SHA-256, and the reader's `MatchesBsp(bspBytes)` says
+  whether a loaded map is the one it was built from (format section 12). It
+  carries no level id: that binding is for linked levels.
+
+One line reports the file: its size, the cells holding navigation, the
+leaves, walkable floors, jump links, obstacles and ladder leaves, and the
+time. `ssmap nav` inspects it.
+
 ### Per-machine defaults
 
 `vbsp`, `vvis`, `vrad` and `all` read defaults for this machine from a small
@@ -502,6 +545,7 @@ ssmap layout <key>=<library.vmf> [<key>=<library.vmf> ...] -rows R -columns C -s
 ssmap layout <library.vmf> ... -sequence K -name <base> [-out <folder>]
 ssmap nav <map.nav3d | level.yaml> [-rooms <pack.roompack>] [--obj <out.obj>] [--floor] [--agent <index|name>]
 ssmap map2d <map.bsp> [-level <level.yaml>] [-out <file.map2d>] [-svg]
+ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-threads <n>]
 ```
 
 `ssmap rooms` lists a library without compiling it: each room's name, its
