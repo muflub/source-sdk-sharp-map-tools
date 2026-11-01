@@ -60,7 +60,7 @@ public readonly record struct Nav3dBspBinding(uint MapChecksum, string Sha256)
     /// <exception cref="ArgumentException"><see cref="Sha256"/> is not 64 hex digits.</exception>
     public byte[] ToBytes()
     {
-        if (Sha256 is not { Length: Sha256Bytes * 2 } || !Sha256.All(Uri.IsHexDigit))
+        if (Sha256 is not { Length: Sha256Bytes * 2 } || Sha256.AsSpan().ContainsAnyExcept("0123456789abcdefABCDEF"))
         {
             throw new ArgumentException($"a bsp binding's hash is {Sha256Bytes * 2} hex digits, not \"{Sha256}\".", nameof(Sha256));
         }
