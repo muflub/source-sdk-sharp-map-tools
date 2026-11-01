@@ -188,6 +188,236 @@ public sealed class NavGeometry
         };
     }
 
+    /// <summary>The <c>CONTENTS_SOLID</c> bit a static prop's box is given.</summary>
+    public const int StaticPropContents = 0x1;
+
+    /// <summary>
+    /// A compiled map's displacements as solids: each triangle of each
+    /// displacement's surface, extruded <paramref name="depth"/> units into
+    /// the side its base face's back is on, with the displacement's contents.
+    /// </summary>
+    /// <param name="bsp">The map.</param>
+    /// <param name="depth">How far each triangle is extruded: the navigation's voxel, so the voxel the surface passes through is solid and the one above it stands on it.</param>
+    /// <returns>The solids, displacement by displacement, triangle by triangle; a triangle tagged removed, or one with no area, adds none.</returns>
+    /// <exception cref="SourceSharp.MapFormats.InvalidBspException">A displacement has no usable base face, or its lumps are out of range.</exception>
+    /// <remarks>
+    /// <para>
+    /// <b>Why displacements need this.</b> A displacement is not a brush in
+    /// the compiled map: the compile discards the brush whose side it
+    /// replaced, and the game collides with the displacement's own triangle
+    /// surface. Read as brushes alone, terrain and displaced floors are open
+    /// space with nothing to stand on.
+    /// </para>
+    /// <para>
+    /// <b>The shape.</b> A triangle facing up (its normal's z above
+    /// <see cref="UpFacingNormalZ"/>) is extruded straight down to
+    /// <paramref name="depth"/> below its lowest corner: its top is the
+    /// surface, its sides are vertical, and its bottom is flat, so it has no
+    /// sloped underside and is never an overhanging brush (which the file
+    /// would list per voxel). Any other triangle (a wall or ceiling made of a
+    /// displacement) is extruded along its normal, backwards: a ceiling's
+    /// slab then has the sloped underside it really has. The surface is a
+    /// thin shell, as it is in the game: space below a terrain displacement
+    /// more than <paramref name="depth"/> down is open in the navigation as it
+    /// is in the game, only unreachable.
+    /// </para>
+    /// <para>
+    /// The surface's front is the side its base face faces, and each
+    /// triangle's normal is turned to agree with it, so a triangle's winding
+    /// does not decide which side is solid.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<NavBrush> Displacements(BspData bsp, double depth)
+    {
+        ArgumentNullException.ThrowIfNull(bsp);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(depth);
+        IReadOnlyList<Rad.DisplacementSurface> surfaces = Rad.DisplacementShadowCasters.Build(bsp);
+        if (surfaces.Count == 0)
+        {
+            return [];
+        }
+
+        ReadOnlySpan<DispInfo> infos = BspStructView.As<DispInfo>(bsp[BspLump.DispInfo]);
+        ReadOnlySpan<DispTri> tags = BspStructView.As<DispTri>(bsp[BspLump.DispTris]);
+        ReadOnlySpan<DFace> faces = BspStructView.As<DFace>(bsp[BspLump.Faces]);
+        ReadOnlySpan<DPlane> planes = BspStructView.As<DPlane>(bsp[BspLump.Planes]);
+        List<NavBrush> result = [];
+        foreach (Rad.DisplacementSurface surface in surfaces)
+        {
+            DFace face = faces[surface.FaceIndex];
+            DPlane plane = planes[face.PlaneNum];
+            Vec3 front = face.Side == 0 ? plane.Normal : -plane.Normal;
+            ReadOnlySpan<Vec3> vertices = surface.Vertices;
+            ReadOnlySpan<int> indices = surface.TriangleIndices;
+            int triangles = indices.Length / 3;
+            int firstTag = infos[surface.Index].DispTriStart;
+            bool tagged = firstTag >= 0 && firstTag + triangles <= tags.Length;
+            for (int t = 0; t < triangles; t++)
+            {
+                if (tagged && (tags[firstTag + t].Tags & (ushort)DispTriTags.Remove) != 0)
+                {
+                    continue;
+                }
+
+                if (Prism(vertices[indices[3 * t]], vertices[indices[(3 * t) + 1]], vertices[indices[(3 * t) + 2]], front, depth, (int)surface.Contents)
+                    is { } prism)
+                {
+                    result.Add(prism);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>The least normal z of a displacement triangle extruded straight down; one below it is extruded along its normal.</summary>
+    public const double UpFacingNormalZ = 0.01;
+
+    /// <summary>A triangle extruded into a convex solid: see <see cref="Displacements"/>.</summary>
+    internal static NavBrush? Prism(Vec3 a, Vec3 b, Vec3 c, Vec3 front, double depth, int contents)
+    {
+        (double X, double Y, double Z) A = (a.X, a.Y, a.Z), B = (b.X, b.Y, b.Z), C = (c.X, c.Y, c.Z);
+        (double X, double Y, double Z) n = Cross(Sub(B, A), Sub(C, A));
+        double length = Math.Sqrt(Dot(n, n));
+        if (length < 1e-6)
+        {
+            return null;
+        }
+
+        n = Scale(n, 1 / length);
+        if (Dot(n, (front.X, front.Y, front.Z)) < 0)
+        {
+            n = Scale(n, -1);
+        }
+
+        List<(Vec3 Normal, float Dist)> faces = [(V(n), (float)Dot(n, A))];
+        (double X, double Y, double Z) sweep;
+        if (n.Z > UpFacingNormalZ)
+        {
+            double bottom = Math.Min(A.Z, Math.Min(B.Z, C.Z)) - depth;
+            faces.Add((new Vec3(0, 0, -1), (float)-bottom));
+            sweep = (0, 0, 1);
+        }
+        else
+        {
+            faces.Add((V(Scale(n, -1)), (float)(depth - Dot(n, A))));
+            sweep = n;
+        }
+
+        // Each edge's side: the plane through the edge that holds the sweep
+        // direction, turned away from the triangle's third corner.
+        (double X, double Y, double Z)[] corners = [A, B, C];
+        for (int e = 0; e < 3; e++)
+        {
+            (double X, double Y, double Z) p = corners[e];
+            (double X, double Y, double Z) q = corners[(e + 1) % 3];
+            (double X, double Y, double Z) r = corners[(e + 2) % 3];
+            (double X, double Y, double Z) m = Cross(Sub(q, p), sweep);
+            double size = Math.Sqrt(Dot(m, m));
+            if (size < 1e-9)
+            {
+                return null;
+            }
+
+            m = Scale(m, 1 / size);
+            if (Dot(m, Sub(r, p)) > 0)
+            {
+                m = Scale(m, -1);
+            }
+
+            faces.Add((V(m), (float)Dot(m, p)));
+        }
+
+        return NavBrush.FromPlanes(faces, contents);
+
+        static (double X, double Y, double Z) Sub((double X, double Y, double Z) u, (double X, double Y, double Z) v) => (u.X - v.X, u.Y - v.Y, u.Z - v.Z);
+        static (double X, double Y, double Z) Cross((double X, double Y, double Z) u, (double X, double Y, double Z) v) =>
+            ((u.Y * v.Z) - (u.Z * v.Y), (u.Z * v.X) - (u.X * v.Z), (u.X * v.Y) - (u.Y * v.X));
+        static double Dot((double X, double Y, double Z) u, (double X, double Y, double Z) v) => (u.X * v.X) + (u.Y * v.Y) + (u.Z * v.Z);
+        static (double X, double Y, double Z) Scale((double X, double Y, double Z) u, double s) => (u.X * s, u.Y * s, u.Z * s);
+        static Vec3 V((double X, double Y, double Z) u) => new((float)u.X, (float)u.Y, (float)u.Z);
+    }
+
+    /// <summary>
+    /// A compiled map's static props as solids: each solid prop's model hull,
+    /// turned by its angles, as one box.
+    /// </summary>
+    /// <param name="bsp">The map.</param>
+    /// <param name="modelBounds">A model's movement hull by its path as the prop dictionary names it, or null when unknown.</param>
+    /// <returns>
+    /// The boxes in prop order, and one warning per model the content lacks
+    /// naming how many props it leaves out. A prop with <c>SOLID_NONE</c> adds
+    /// nothing, as it blocks nothing in the game.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Static props are not entities: the compile moves them into the
+    /// <c>sprp</c> game lump, and the game makes them solid from their model.
+    /// They never move, so they are world solids here, not obstacles.
+    /// </para>
+    /// <para>
+    /// <b>The box is an over-estimate.</b> The game collides with a prop's
+    /// <c>.phy</c> convex pieces (or its hull box for a box-solid prop); the
+    /// navigation takes the model's movement hull, turned, and the box around
+    /// that. A prop shaped like an arch or a gate frame therefore closes its
+    /// opening in the navigation, and a turned prop blocks the corners of its
+    /// box. Reading the <c>.phy</c> pieces is the change that would make it
+    /// exact; the box is what the content gives every model without decoding
+    /// the physics format, and it can only make the navigation block more,
+    /// never less.
+    /// </para>
+    /// </remarks>
+    public static (IReadOnlyList<NavBrush> Brushes, IReadOnlyList<string> Warnings) StaticProps(
+        BspData bsp, Func<string, (Vec3 Mins, Vec3 Maxs)?>? modelBounds)
+    {
+        ArgumentNullException.ThrowIfNull(bsp);
+        if (StaticPropLumpOf(bsp) is not { } lump)
+        {
+            return ([], []);
+        }
+
+        List<NavBrush> boxes = [];
+        SortedDictionary<string, int> missing = new(StringComparer.Ordinal);
+        foreach (StaticProp prop in lump.Props)
+        {
+            if (prop.Solid == 0 || prop.PropType >= lump.ModelNames.Count)
+            {
+                continue;
+            }
+
+            string model = lump.ModelNames[prop.PropType];
+            if (modelBounds?.Invoke(model) is { } hull && TurnedBox(prop.Origin, prop.Angles, hull) is { } box)
+            {
+                boxes.Add(NavBrush.Box(box.Mins, box.Maxs, StaticPropContents));
+            }
+            else
+            {
+                missing[model] = missing.GetValueOrDefault(model) + 1;
+            }
+        }
+
+        return (boxes, [.. missing.Select(m => string.Create(CultureInfo.InvariantCulture,
+            $"static prop model \"{m.Key}\" has no hull the content gives, so its {m.Value} solid prop{(m.Value == 1 ? string.Empty : "s")} {(m.Value == 1 ? "is" : "are")} left out of the navigation's solids."))]);
+    }
+
+    /// <summary>A map's static prop lump, or null when it has none.</summary>
+    /// <param name="bsp">The map.</param>
+    /// <returns>The lump.</returns>
+    /// <exception cref="SourceSharp.MapFormats.InvalidBspException">The lump is malformed.</exception>
+    public static StaticPropLump? StaticPropLumpOf(BspData bsp)
+    {
+        ArgumentNullException.ThrowIfNull(bsp);
+        foreach (GameLumpEntry entry in bsp.GameLumps)
+        {
+            if (entry.Id == GameLumpId.MakeId(GameLumpId.StaticProps))
+            {
+                return StaticPropLump.Read(entry);
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Each model's brush indices, found by walking its tree to its leaves' brush lists.</summary>
     /// <remarks>
     /// The leaves are read in the layout the lump's own version names: a map
@@ -321,6 +551,12 @@ public sealed class NavGeometry
         }
 
         Vec3 angles = TryVector(entity.Get("angles"), out Vec3 a) ? a : default;
+        return TurnedBox(origin, angles, hull);
+    }
+
+    /// <summary>A hull turned by Source angles (pitch, yaw, roll) and moved to an origin: the box of the turned corners, or null when it is empty.</summary>
+    internal static Box? TurnedBox(Vec3 origin, Vec3 angles, (Vec3 Mins, Vec3 Maxs) hull)
+    {
         (double sp, double cp) = SinCos(angles.X);
         (double sy, double cy) = SinCos(angles.Y);
         (double sr, double cr) = SinCos(angles.Z);

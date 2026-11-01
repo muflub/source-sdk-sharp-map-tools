@@ -55,6 +55,25 @@ public static class NavModelBounds
         return models;
     }
 
+    /// <summary>
+    /// The model paths a BSP's solid static props name, distinct, in the
+    /// prop dictionary's order: the hulls <see cref="NavGeometry.StaticProps"/>
+    /// asks for.
+    /// </summary>
+    /// <param name="bsp">The BSP.</param>
+    /// <returns>The paths, as the dictionary spells them; none for a map without a static prop lump.</returns>
+    public static IReadOnlyList<string> StaticPropModels(BspData bsp)
+    {
+        ArgumentNullException.ThrowIfNull(bsp);
+        if (NavGeometry.StaticPropLumpOf(bsp) is not { } lump)
+        {
+            return [];
+        }
+
+        HashSet<int> used = [.. lump.Props.Where(p => p.Solid != 0).Select(p => (int)p.PropType)];
+        return [.. lump.ModelNames.Where((_, i) => used.Contains(i)).Distinct(StringComparer.Ordinal)];
+    }
+
     /// <summary>Reads models' hulls from the content.</summary>
     /// <param name="content">The game's content.</param>
     /// <param name="models">The model paths.</param>

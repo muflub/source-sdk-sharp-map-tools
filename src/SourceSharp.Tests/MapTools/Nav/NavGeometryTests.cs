@@ -141,6 +141,103 @@ public sealed class NavGeometryTests
         Assert.Equal(new Box(new Vec3(96, 64, 16), new Vec3(112, 192, 176)), Assert.Single(fromOld.Obstacles).Bounds);
     }
 
+    /// <summary>
+    /// A displacement is no brush in the compiled map (its brush is
+    /// discarded), so it is read from the displacement lumps: one solid per
+    /// triangle, its top the surface, extruded straight down the given depth,
+    /// none of them an overhang; a triangle tagged removed adds none.
+    /// </summary>
+    [Fact]
+    public async Task ADisplacementIsATriangleShellOfSolidsWithFlatBottoms()
+    {
+        RoomDefinition definition = RoomHarness.WalkableRoom("terrain", RoomFacing.PositiveX);
+        VmfDocument vmf = RoomHarness.BuildRoomModel(definition);
+        Box patch = new(new Vec3(64, 64, 16), new Vec3(128, 176, 24));
+        vmf.GetChunk(MapFileLoader.WorldChunk)!.Children.Add(
+            RoomDisplacementHarness.Patch(RoomDisplacementHarness.PatchBrush, patch, power: 2, offsets: false, heights: (_, _) => 8));
+        RoomObject room = await NavRoomsFixture.CompileAsync(vmf, definition);
+        Assert.DoesNotContain(NavGeometry.FromBsp(room.Bsp).Brushes, b => b.MinX == 64 && b.MaxX == 128 && b.MinY == 64 && b.MaxY == 176);
+
+        IReadOnlyList<NavBrush> shell = NavGeometry.Displacements(room.Bsp, 16);
+
+        // Power 2: 4 x 4 quads, two triangles each; the surface at 24 + 8.
+        Assert.Equal(32, shell.Count);
+        Assert.All(shell, b =>
+        {
+            Assert.False(b.IsOverhang);
+            Assert.Equal(32, b.MaxZ, 3);
+            Assert.Equal(16, b.MinZ, 3);
+            Assert.InRange(b.MinX, 64 - 0.01, 128);
+            Assert.InRange(b.MaxY, 64, 176 + 0.01);
+            Assert.True((b.Contents & 1) != 0);
+        });
+        Assert.Equal(64 * 112, shell.Sum(b => (b.MaxX - b.MinX) * (b.MaxY - b.MinY)) / 2, 1);
+
+        DispInfo info = BspStructView.As<DispInfo>(room.Bsp[BspLump.DispInfo])[0];
+        byte[] tags = room.Bsp[BspLump.DispTris].Data.ToArray();
+        tags[info.DispTriStart * 2] |= (byte)DispTriTags.Remove;
+        room.Bsp.SetLump(BspLump.DispTris, tags, room.Bsp[BspLump.DispTris].Version);
+        Assert.Equal(31, NavGeometry.Displacements(room.Bsp, 16).Count);
+    }
+
+    /// <summary>
+    /// A triangle facing up is extruded straight down (flat bottom, vertical
+    /// sides); a wall triangle along its normal, backwards; and the side the
+    /// base face faces is the front whichever way the triangle is wound.
+    /// </summary>
+    [Fact]
+    public void APrismIsExtrudedAwayFromItsFront()
+    {
+        Vec3 up = new(0, 0, 1);
+        NavBrush floor = NavGeometry.Prism(new Vec3(0, 0, 10), new Vec3(32, 0, 18), new Vec3(0, 32, 10), up, 16, 1)!;
+        Assert.Equal((0d, 0d, -6d, 32d, 32d, 18d), (floor.MinX, floor.MinY, floor.MinZ, floor.MaxX, floor.MaxY, Math.Round(floor.MaxZ, 3)));
+        Assert.False(floor.IsOverhang);
+        Assert.False(floor.IsAxial);
+        Assert.Equal(5, floor.PlaneCount);
+
+        NavBrush wound = NavGeometry.Prism(new Vec3(0, 0, 10), new Vec3(0, 32, 10), new Vec3(32, 0, 18), up, 16, 1)!;
+        Assert.Equal((floor.MinZ, Math.Round(floor.MaxZ, 3)), (wound.MinZ, Math.Round(wound.MaxZ, 3)));
+
+        NavBrush wall = NavGeometry.Prism(new Vec3(0, 0, 0), new Vec3(0, 32, 0), new Vec3(0, 0, 32), new Vec3(1, 0, 0), 16, 1)!;
+        Assert.Equal((-16d, 0d, 0d, 0d, 32d, 32d), (Math.Round(wall.MinX, 3), wall.MinY, wall.MinZ, Math.Round(wall.MaxX, 3), wall.MaxY, wall.MaxZ));
+
+        NavBrush ceiling = NavGeometry.Prism(new Vec3(0, 0, 64), new Vec3(32, 0, 64), new Vec3(0, 32, 64), new Vec3(0, 0, -1), 16, 1)!;
+        Assert.Equal((64d, 80d), (Math.Round(ceiling.MinZ, 3), Math.Round(ceiling.MaxZ, 3)));
+
+        Assert.Null(NavGeometry.Prism(new Vec3(0, 0, 0), new Vec3(1, 1, 1), new Vec3(2, 2, 2), up, 16, 1));
+    }
+
+    /// <summary>
+    /// Static props are world solids, each its model's hull turned by its
+    /// angles; a prop that is not solid adds nothing, and a model the content
+    /// lacks is one warning counting its props.
+    /// </summary>
+    [Fact]
+    public void StaticPropsAreTheirHullsTurnedAndAMissingModelIsOneWarning()
+    {
+        StaticPropLump lump = new();
+        lump.ModelNames.AddRange(["models/crate.mdl", "models/missing.mdl", "models/ghost.mdl"]);
+        lump.Props.Add(new StaticProp { PropType = 0, Origin = new Vec3(64, 64, 16), Angles = new Vec3(0, 90, 0), Solid = 6 });
+        lump.Props.Add(new StaticProp { PropType = 1, Origin = new Vec3(0, 0, 0), Solid = 6 });
+        lump.Props.Add(new StaticProp { PropType = 1, Origin = new Vec3(8, 0, 0), Solid = 2 });
+        lump.Props.Add(new StaticProp { PropType = 2, Origin = new Vec3(0, 0, 0), Solid = 0 });
+        BspData bsp = new();
+        bsp.GameLumps.Add(lump.Write());
+
+        (IReadOnlyList<NavBrush> boxes, IReadOnlyList<string> warnings) = NavGeometry.StaticProps(
+            bsp, m => m == "models/crate.mdl" || m == "models/ghost.mdl" ? (new Vec3(-8, -4, 0), new Vec3(8, 4, 20)) : null);
+
+        NavBrush crate = Assert.Single(boxes);
+        Assert.Equal((60d, 56d, 16d, 68d, 72d, 36d), (crate.MinX, crate.MinY, crate.MinZ, crate.MaxX, crate.MaxY, crate.MaxZ));
+        Assert.True(crate.IsAxial);
+        Assert.Equal(NavGeometry.StaticPropContents, crate.Contents);
+        Assert.Equal(
+            ["static prop model \"models/missing.mdl\" has no hull the content gives, so its 2 solid props are left out of the navigation's solids."],
+            warnings);
+        Assert.Equal(["models/crate.mdl", "models/missing.mdl"], NavModelBounds.StaticPropModels(bsp));
+        Assert.Equal(([], []), (NavGeometry.StaticProps(new BspData(), null).Brushes.ToArray(), NavModelBounds.StaticPropModels(new BspData()).ToArray()));
+    }
+
     [Theory]
     [InlineData("func_door", Nav3dObstacleKind.Door)]
     [InlineData("FUNC_DOOR_ROTATING", Nav3dObstacleKind.Door)]
