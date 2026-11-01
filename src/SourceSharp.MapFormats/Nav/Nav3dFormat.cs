@@ -94,6 +94,19 @@ public static class Nav3dFormat
     /// </summary>
     public const string CellHeightsTag = "CHGT";
 
+    /// <summary>
+    /// Section, optional in versions 2 and 3: the compiled map the navigation
+    /// was built from (<see cref="Nav3dBspBinding"/>), <see cref="BspBindingBytes"/>
+    /// bytes. A new tag rather than a header field, so no version changes:
+    /// a reader that does not know it skips it, and a file without it (every
+    /// file <c>ssmap link</c> writes, and every file before it existed) reads
+    /// as bound to no map.
+    /// </summary>
+    public const string BspBindingTag = "BSPB";
+
+    /// <summary>The <see cref="BspBindingTag"/> section's length: <c>uint32</c> map checksum, four zero bytes, the 32-byte SHA-256.</summary>
+    public const int BspBindingBytes = 40;
+
     /// <summary>Section: the string table (NUL-terminated UTF-8; offset 0 is the empty string).</summary>
     public const string StringsTag = "STRS";
 

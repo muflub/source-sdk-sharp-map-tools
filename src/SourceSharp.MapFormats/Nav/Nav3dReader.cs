@@ -75,12 +75,14 @@ public sealed class Nav3dReader
     private readonly int[] _componentCounts;
     private readonly int[]? _cellHeights;
 
-    private Nav3dReader(ReadOnlyMemory<byte> file, Header header, Sections sections, NavBrush[] brushes, int[]? cellHeights)
+    private Nav3dReader(
+        ReadOnlyMemory<byte> file, Header header, Sections sections, NavBrush[] brushes, int[]? cellHeights, Nav3dBspBinding? bsp)
     {
         _file = file;
         _s = sections;
         _brushes = brushes;
         _cellHeights = cellHeights;
+        Bsp = bsp;
         TallestCell = cellHeights is null ? header.CellVoxels : Math.Max(1, cellHeights.Max());
         Version = header.Version;
         Codec = header.Codec;
@@ -226,6 +228,44 @@ public sealed class Nav3dReader
     /// <returns>True when both ids parse and are equal, and are not empty.</returns>
     public bool MatchesMap(string? mapLevelId) =>
         LevelId != Guid.Empty && Guid.TryParse(mapLevelId, out Guid id) && id == LevelId;
+
+    /// <summary>
+    /// The compiled map this navigation was built from (the optional
+    /// <see cref="Nav3dFormat.BspBindingTag"/> section), or null when the file
+    /// names none: a linked level, which binds by <see cref="LevelId"/>, or a
+    /// file written before the section existed.
+    /// </summary>
+    public Nav3dBspBinding? Bsp { get; }
+
+    /// <summary>
+    /// Whether this navigation was built from exactly this map file: the
+    /// file's map checksum and SHA-256 (<see cref="Nav3dBspBinding.Of"/>)
+    /// equal the ones it records. The check a game makes for a map that
+    /// carries no <c>ss_level_id</c>, such as a stock map.
+    /// </summary>
+    /// <param name="bspFile">The whole <c>.bsp</c> the game loaded, as it is on disk.</param>
+    /// <returns>True when the file records a binding and it is this map's; false for any other map, for bytes that are not a map, or for a file that records none.</returns>
+    public bool MatchesBsp(ReadOnlySpan<byte> bspFile)
+    {
+        if (Bsp is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return MatchesBsp(Nav3dBspBinding.Of(bspFile));
+        }
+        catch (InvalidBspException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Whether this navigation was built from the map a binding describes, for a caller that computed it once (<see cref="Nav3dBspBinding.Of"/>).</summary>
+    /// <param name="binding">The loaded map's binding.</param>
+    /// <returns>True when the file records a binding equal to it.</returns>
+    public bool MatchesBsp(Nav3dBspBinding binding) => Bsp is { } own && own == binding;
 
     /// <summary>Opens a file held in memory, validating all of it and deriving its neighbours, components and indexes.</summary>
     /// <param name="file">
@@ -396,7 +436,14 @@ public sealed class Nav3dReader
         ValidateGrid(b, s, header, cells, cellHeights);
         NavBrush[] brushes = ValidateBrushes(b, s, header.BrushCount);
         ValidateRecords(b, s, header, cells);
-        return new Nav3dReader(file, header, s, brushes, cellHeights);
+
+        // The optional binding to a compiled map: absent is no binding (a
+        // linked level, or a file from before the section), malformed is a
+        // broken file.
+        Nav3dBspBinding? bsp = sections.TryGetValue(Nav3dFormat.BspBindingTag, out Section binding)
+            ? Nav3dBspBinding.FromBytes(b.Slice(binding.Offset, binding.Length))
+            : null;
+        return new Nav3dReader(file, header, s, brushes, cellHeights, bsp);
     }
 
     /// <summary>One agent preset.</summary>
@@ -1029,6 +1076,7 @@ public sealed class Nav3dReader
             DownArrivalPoi = DownArrivalPoi,
             LevelId = LevelId,
             PackId = PackId,
+            Bsp = Bsp,
         };
     }
 

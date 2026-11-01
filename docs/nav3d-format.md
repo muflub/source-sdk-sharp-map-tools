@@ -190,6 +190,7 @@ A reader looks sections up by tag and **ignores tags it does not know**.
 | `BRSP` | 16 bytes | the overhanging brushes' planes: `float32` normal x, y, z, distance |
 | `JUMP` | 16 bytes | `jumpCount` |
 | `CHGT` | `int32` | `columns × rows`, **version 3 only**: each cell's height in voxels, 1 to 255 for a placed cell, 0 for an empty one |
+| `BSPB` | 40 bytes | one, **optional** (versions 2 and 3): the compiled map the navigation was built from (section 12) |
 
 **`CHGT`** (version 3, written after `JUMP`) gives each cell its own
 height in voxels: how far up its columns run from the floor. A room taller
@@ -198,6 +199,19 @@ file has no `CHGT`, and every placed cell is `cellVoxels` tall; the linker
 writes version 2, byte for byte as before heights, for a level whose rooms
 are all cubes. A version 3 reader requires `CHGT` and holds every leaf of a
 cell's columns under its height.
+
+**`BSPB`** (optional, written last) binds a navigation built from a
+compiled map (`ssmap nav3d`, `ssmap all`; section 17.6) to that map's
+exact bytes. A file without it (every linked level, and every file
+written before the section existed) is bound to no map; a reader that
+does not know the tag skips it (section 3.3), which is why it changes no
+version.
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| 0 | `uint32` | the map's checksum: the CRC-32 of every lump but the entities, in lump order, as the engine computes it (`BspMapChecksum`) |
+| 4 | `uint32` | zero |
+| 8 | `byte[32]` | the SHA-256 of the whole `.bsp` file |
 
 **`AGNT`** (per preset)
 
@@ -576,6 +590,19 @@ version; level: pack id, level file bytes, link options). The keys are
 written only when the link writes a `.nav3d`: a link without navigation
 writes byte for byte the map a link wrote before navigation existed.
 
+**A map compiled any other way** (a stock map such as `dm_lockdown`, or a
+map from `ssmap all`) has no `ss_level_id`, and its navigation is built
+from the compiled file afterwards (section 17.6). That navigation's
+`levelId` and `packId` are zero, and its `BSPB` section names the map
+instead: the map checksum (the CRC-32 the engine computes, every lump but
+the entities) and the SHA-256 of the whole file. The mod checks the map
+it loaded with `MatchesBsp(bspFileBytes)`, true only when both are equal.
+Both, because the engine's checksum leaves the entities out while the
+navigation reads doors, ladders and props from them: an entity-only edit
+keeps the checksum and changes the hash. `Nav3dBspBinding.Of(bytes)` in
+`SourceSharp.MapFormats` computes the pair, so the tools and the mod
+compute it the same way.
+
 ## 13. How a reader walks it
 
 ```c++
@@ -656,6 +683,10 @@ using SourceSharp.MapFormats.Nav;
 Nav3dReader nav = Nav3dReader.Open(File.ReadAllBytes("maps/level.nav3d"));  // InvalidDataException on a bad file
 if (!nav.MatchesMap(worldspawn["ss_level_id"]))
     throw new InvalidOperationException("level.nav3d belongs to another build of the map");
+
+// A map with no ss_level_id (a stock map, or one from ssmap all): bind by the map's bytes.
+if (!nav.MatchesBsp(File.ReadAllBytes("maps/dm_lockdown.bsp")))
+    throw new InvalidOperationException($"dm_lockdown.nav3d was built for another map ({nav.Bsp?.ToString() ?? "none named"})");
 
 if (nav.TryGetSpawn(out Vec3 spawn, out float yaw))
     SpawnPlayer(spawn, yaw);
@@ -765,6 +796,11 @@ step, so the walk needs the jump.
   changes. It is written only for such a level: a level of cube rooms is
   still version 2, byte for byte, and this build reads both.
 - A **new optional section** gets a new tag and changes no version.
+  **`BSPB`** (the binding to a compiled map, section 12) is the first: an
+  older reader skips it and sees a level bound to no map, and this build
+  reads a file without it the same way, so a version 2 or 3 file written
+  before it is read unchanged and a level without a binding still writes
+  the same bytes.
 - The **header** records its size; a reader finds the directory by
   `headerBytes`, never the constant 160.
 - The room pack's navigation sections carry their own **revision**: **2**
