@@ -464,6 +464,41 @@ step from leaf A to B is `floor(B) − floor(A)`; a walker takes it when it
 is at most `stepHeight` (18 by default: exactly 18 walks, 18.001 does not),
 and down any drop. More, and it needs a jump link.
 
+### 7.6 Fit at the voxel's centre
+
+A fit (7.1) holds for an origin **anywhere** in the voxel, so an agent of
+half-width `r` needs `r` clear on every side of the whole voxel: a 32-wide
+player needs 48 units across at 16-unit voxels, and 72 units of head room
+above the voxel's **top**. A passage 40 wide, a ladder close to its wall or
+a 48-high crawlway is closed to it. The same records answer an agent whose
+origin is at the voxel's **horizontal centre** and at a chosen height `z`
+(its feet), with no change to the file:
+
+```
+fits at centre (r, h, z) = not CornersBlock(record, r - voxelSize/2, h, voxelTop := z)
+                           and no listed overhanging brush overlaps
+                           (centre ± r, z .. z + h)
+```
+
+A corner's width is how far the voxel's footprint, grown the same on every
+side, can grow before it meets the solid; a box of half-width `r` centred
+on the voxel is that footprint grown by `r − voxelSize/2`, so the threshold
+is exact for any solid. A solid that reaches into the footprint is stored
+with no width (5.2) and so blocks such an agent whenever it reaches the
+solid's bottom: the answer can be no where the truth is yes, never the
+reverse. The C# reader answers it as `FitsAtCentre` (any height),
+`PassableAtCentre` (feet on the voxel's bottom) and `StandableAtCentre`
+(feet on the leaf's floor). A 32-wide player then needs 32 across and 72
+above its feet.
+
+`Nav3dWalk.Components` derives, from these answers alone, which leaves a
+walking agent reaches: places to stand (walkable floors it fits on standing
+or crouched), places to climb (ladder leaves it fits in), and moves between
+them (a step to a column beside within `stepHeight`, the file's jump links,
+up and down a ladder's column, and on and off a ladder to floors its box
+reaches). It is a reference for a game's own graph and what the facts
+check maps with.
+
 ## 8. What a reader derives at load
 
 All of it in a fixed order, so every load of a file gives the same arrays.
@@ -939,8 +974,16 @@ holds differs from a linked level's in these ways:
   a cell face (section 8) is only a step across a grid line.
 - **Solid** is the world's brushes, each displacement's surface (every
   triangle extruded one voxel down, or along its normal for a wall or
-  ceiling), and each solid static prop's model hull turned by its angles
-  (the box around it: an over-estimate, never an under-estimate). A voxel
+  ceiling), and each solid static prop's collision: the box of each convex
+  piece of its model's `.phy`, turned by its angles, or the model's hull box
+  when the content has no `.phy` (each an over-estimate, never an
+  under-estimate; the pieces keep the gaps between them, which one box
+  around a gate frame or a rail does not).
+- **Ladder leaves** are where a climbing player's origin is: a
+  `CONTENTS_LADDER` brush and an `info_ladder` box are grown sideways by a
+  player's half-width (16), as a `func_useableladder`'s climb already is, so
+  a ladder close to its wall, or a solid ladder brush, has ladder leaves the
+  player fits in at their centre (7.6). A voxel
   whose centre lies in a solid leaf of the compiled tree is outside the
   map's sealed hull and solid too; a cell outside throughout is empty
   (`ROOT` −1).
@@ -957,17 +1000,27 @@ built independently and stitched in cell order); a fact compares two runs,
 one and four threads, and four builds at once in one process.
 
 `dm_lockdown` (the stock map, BSP 19, 2,239 brushes, 40 displacements,
-261 static props), with the Source SDK Base 2013 Multiplayer content
-mounted, Microsoft's .NET 10 runtime: 2.9 s on 32 threads and 20.9 s on one
-for the whole command, the same 482,383 bytes (Brotli 5) both times; 177 of
-264 cells (11 × 24, 83 voxels up), 128,117 leaves, 660 jump links, 215
-obstacles, 59 ladder leaves; the standing preset's largest component holds
-42,913 leaves. Every spawn has a floor a standing player fits on within a
-voxel of it. One catwalk is its own component for the 32-wide standing
-preset: a box fits in a voxel only with its origin anywhere in it, so it
-needs 48 units across to pass, and the catwalk's ladder stands closer to
-its wall than that; for a 16-wide agent every spawn is in one component (a
-fact checks both).
+261 static props, three `func_useableladder`s), with the Source SDK Base
+2013 Multiplayer content mounted, Microsoft's .NET 10 runtime, 32 threads
+against one, the same bytes both ways. What a 32-wide player (72 standing,
+36 crouched, `Nav3dWalker.Player`) reaches of its nine deathmatch spawns
+and 77 weapons and items (a spawn's own floor must hold the player; an item
+is reached from a floor within two columns and the player's height):
+
+| build | time | bytes (Brotli 5) | leaves | spawns the player does not fit at | targets in one component |
+| --- | --- | --- | --- | --- | --- |
+| 16-unit voxels, prop hull boxes, fit anywhere (before) | 3.2 s / 23.5 s | 482,383 | 128,117 | 3 | 20 of 86 |
+| 8-unit voxels, prop hull boxes, fit anywhere | 56.9 s / 190.9 s | 1,816,669 | 765,915 | 2 | 41 of 86 |
+| 8-unit voxels, prop pieces, ladders grown, fit at centre | 41.1 s (32 threads) | 2,334,724 | 855,012 | 0 | 68 of 86 |
+| 16-unit voxels, prop hull boxes, fit at centre | 3.2 s | 482,383 | 128,117 | 0 | 50 of 86 |
+| **16-unit voxels, prop pieces, ladders grown, fit at centre** | **3.6 s / 21.9 s** | **598,892** | **143,399** | **0** | **86 of 86** |
+
+Three things close the gap, and a finer voxel is none of them: the fit at
+the voxel's centre (7.6, a reader query on the same records), the static
+props' collision pieces in place of one box each (a hull box closes the
+openings between a prop's pieces), and the grown ladder volumes. Without
+the game's content (no props at all) the same map gives 86 of 86 at the
+centre and 44 of 86 anywhere; a fact checks both on the repo's copy.
 
 ## 18. Measurements and the choices they made
 

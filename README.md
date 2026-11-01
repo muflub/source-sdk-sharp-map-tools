@@ -441,7 +441,7 @@ Unzip it anywhere and compile against it with no Steam install:
 ### `nav3d`
 
 ```sh
-ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-threads <n>]
+ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>]
 ```
 
 Builds the 3D navigation (`.nav3d`, the format `link` writes for a level
@@ -459,14 +459,23 @@ otherwise (`none`, `deflate[:0-9]`, `brotli[:0-11]`).
   default), and the file is the same bytes at any count.
 - **Solid**: the world's brushes (player clips for the player class, monster
   clips for the NPC class), each displacement's triangles (the compile keeps
-  no brush for them), and each solid static prop's model hull turned by its
-  angles (a box around the prop: an arch or a gate frame is closed in the
-  navigation). **Outside** the map's sealed hull is solid too, read from the
-  compiled tree, so a cell outside throughout holds nothing.
+  no brush for them), and each solid static prop's collision: a box per
+  convex piece of its model's `.phy`, turned by its angles, so the gaps
+  between a gate's or a rail's pieces stay open (the model's hull box when
+  the content has no `.phy`). **Outside** the map's sealed hull is solid too,
+  read from the compiled tree, so a cell outside throughout holds nothing.
 - **Dynamic obstacles** are the doors, movers, toggles, breakables and
   physics and dynamic props, by their `targetname`; **ladders** are
   `CONTENTS_LADDER` brushes, `info_ladder` boxes and `func_useableladder`
-  climbs.
+  climbs, each grown by a player's half-width so the voxels a climbing
+  player's origin is in are ladder leaves even beside a wall.
+- **A player's exact width**: the reader's `FitsAtCentre`,
+  `StandableAtCentre` and `Nav3dWalk.Components` answer a 32-wide player
+  standing in the middle of a 16-unit voxel (32 units across, not the 48 a
+  fit anywhere in the voxel needs), and which floors it reaches walking,
+  crouching, jumping and climbing (format section 7.6). `-voxel 8` halves
+  the voxel (it must divide 256) at about 13 times the time and 4 times the
+  file on `dm_lockdown`, and does not reach more.
 - **Props need the game**: their hulls come from the models in the game's
   content, `-game <dir>` (the folder with `gameinfo.txt`), or the map's
   folder's parent when the map is in `<game>/maps/`. A model the content
@@ -555,7 +564,7 @@ ssmap layout <key>=<library.vmf> [<key>=<library.vmf> ...] -rows R -columns C -s
 ssmap layout <library.vmf> ... -sequence K -name <base> [-out <folder>]
 ssmap nav <map.nav3d | level.yaml> [-rooms <pack.roompack>] [--obj <out.obj>] [--floor] [--agent <index|name>]
 ssmap map2d <map.bsp> [-level <level.yaml>] [-out <file.map2d>] [-svg]
-ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-threads <n>]
+ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>]
 ```
 
 `ssmap rooms` lists a library without compiling it: each room's name, its
