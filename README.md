@@ -407,6 +407,16 @@ Chain options apply to every stage: `-game`, `-threads`, `-compliance`, `-v`,
 
 A `--vvis` section also takes `-fastflow[=N]` and `-separator auto|256|512`.
 
+After vrad, when the map was written, the chain builds the finished map's
+navigation and writes `<map>.nav3d` beside it by the same path as
+[`ssmap nav3d`](#nav3d), with the chain's game and `-threads`. Not after
+vbsp alone: vvis and vrad rewrite lumps the navigation's binding covers, so
+only the final map can be named. `-no-nav` writes none; `-nav-codec <codec>`
+chooses its storage (Brotli 5 by default). A navigation that cannot be
+written leaves the map as written and warns; `-require-nav` makes that a
+failure. A `.nav3d` left from an earlier compile names the old map's bytes,
+so the game's `MatchesBsp` refuses it.
+
 `--record-content <zip>` records every game file the compile looked up and
 writes the ones it found to a zip, whether the compile succeeds or fails part
 way. The zip is a game directory:

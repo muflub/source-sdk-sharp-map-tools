@@ -567,6 +567,10 @@ public static class Program
                                                        --record-content <zip>: also write every
                                                        game file the compile read, as a game
                                                        directory with its own gameinfo.txt
+                                                       then <map>.nav3d beside the map, as
+                                                       ssmap nav3d builds it (-no-nav: none;
+                                                       -require-nav: a failed one fails the
+                                                       run; -nav-codec <c>: its codec)
               room <library.vmf> [-out <pack.roompack>] [-nav-turn0] [-nav-codec <c>]
                    [-nolight | -vrad "<vrad options>" [-nodoorlight]]
                    [-incremental [-cache-dir <dir>] | -nocache] [vbsp options]

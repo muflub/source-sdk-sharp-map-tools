@@ -7,10 +7,13 @@
 
 using System.Globalization;
 
+using SourceSharp.MapFormats.Nav;
+
 using SourceSharp.MapTools.Compile.Cache;
 using SourceSharp.MapTools.Compile;
 using SourceSharp.MapTools.Diagnostics;
 using SourceSharp.MapTools.Io;
+using SourceSharp.MapTools.Nav;
 using SourceSharp.MapTools.Options;
 using SourceSharp.MapTools.Parallel;
 using SourceSharp.MapTools.Phys;
@@ -92,6 +95,23 @@ public sealed record AllArgs(
     /// </summary>
     public string? RecordContent { get; init; }
 
+    /// <summary>
+    /// Whether the chain writes the map's <c>.nav3d</c> after the map
+    /// (<see cref="Nav3dCommand.BuildAndWriteAsync"/>): true unless
+    /// <see cref="AllCommand.NoNavSwitch"/> was given.
+    /// </summary>
+    public bool Navigation { get; init; } = true;
+
+    /// <summary>
+    /// Whether a navigation that cannot be built fails the run
+    /// (<see cref="AllCommand.RequireNavSwitch"/>); without it the map is
+    /// written and the run says why there is no navigation.
+    /// </summary>
+    public bool RequireNavigation { get; init; }
+
+    /// <summary>How the <c>.nav3d</c> is stored: <c>-nav-codec</c>, Brotli 5 by default.</summary>
+    public NavCompression NavCompression { get; init; } = LevelNavFromPack.DefaultCompression;
+
     /// <summary>Whether any diagnostic is an error.</summary>
     public bool HasErrors => Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
 }
@@ -159,6 +179,15 @@ public static class AllCommand
     /// </remarks>
     public const string RecordContentSwitch = "--record-content";
 
+    /// <summary>Writes no <c>.nav3d</c> beside the map.</summary>
+    public const string NoNavSwitch = "-no-nav";
+
+    /// <summary>Fails the run when the map's <c>.nav3d</c> cannot be built.</summary>
+    public const string RequireNavSwitch = "-require-nav";
+
+    /// <summary>How the <c>.nav3d</c> is stored: <c>none</c>, <c>deflate[:0-9]</c> or <c>brotli[:0-11]</c>.</summary>
+    public const string NavCodecSwitch = "-nav-codec";
+
     /// <summary>The diagnostic code for a chain option the command line got wrong.</summary>
     public const string ChainArgument = "ALLARGS";
 
@@ -208,6 +237,9 @@ public static class AllCommand
     int? gpuPipelineDepth = null;
     bool overlap = false;
     string? recordContent = null;
+    bool noNav = false;
+    bool requireNav = false;
+    NavCompression navCompression = LevelNavFromPack.DefaultCompression;
 
         for (int i = 0; i < shared.Count; i++)
         {
@@ -293,6 +325,39 @@ public static class AllCommand
                     {
                         toVbsp.Add(arg);
                         toVbsp.Add(v);
+                    }
+
+                    break;
+
+                case "-NO-NAV":
+                    if (requireNav)
+                    {
+                        Problem($"{NoNavSwitch} and {RequireNavSwitch}: give one");
+                    }
+
+                    noNav = true;
+                    break;
+
+                case "-REQUIRE-NAV":
+                    if (noNav)
+                    {
+                        Problem($"{NoNavSwitch} and {RequireNavSwitch}: give one");
+                    }
+
+                    requireNav = true;
+                    break;
+
+                case "-NAV-CODEC":
+                    if (TakeValue(out string codec))
+                    {
+                        if (NavCompression.TryParse(codec, out NavCompression parsedCodec))
+                        {
+                            navCompression = parsedCodec;
+                        }
+                        else
+                        {
+                            Problem($"{NavCodecSwitch} \"{codec}\" is not none, deflate[:0-9] or brotli[:0-11]");
+                        }
                     }
 
                     break;
@@ -494,6 +559,9 @@ public static class AllCommand
             GpuPipelineDepth = vrad.GpuPipelineDepth ?? gpuPipelineDepth,
             Overlap = overlap,
             RecordContent = recordContent,
+            Navigation = !noNav,
+            RequireNavigation = requireNav,
+            NavCompression = navCompression,
         };
     }
 
@@ -738,9 +806,59 @@ public static class AllCommand
         // managed cooker's cooks run on it too rather than on the .NET pool.
         CompileParallelism parallel = ChainParallelism(parsed);
         using CompilePool pool = new(parallel.MaxDegree);
-        return await CompileOnPoolAsync(
+        int exit = await CompileOnPoolAsync(
             disk, parsed, paths, mapFile, CookOnPool(cooker, pool), output, start, resolution, content, mapName,
             parallel with { Pool = pool }, record, cancellationToken).ConfigureAwait(false);
+        if (exit != Program.ExitSuccess || parsed.NoWrite || !parsed.Navigation)
+        {
+            return exit;
+        }
+
+        return await WriteNavigationAsync(
+            disk, searchRoots, parsed, VPath.Create(Path.Combine(Path.GetDirectoryName(paths.Source)!, mapName + ".bsp")), gameDirectory,
+            output, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The chain's last step: the finished map's <c>.nav3d</c> beside it,
+    /// through the one path <c>ssmap nav3d</c> takes
+    /// (<see cref="Nav3dCommand.BuildAndWriteAsync"/>), after vrad, because
+    /// the navigation is bound to the map's final bytes.
+    /// </summary>
+    /// <remarks>
+    /// A navigation that cannot be built leaves the written map as it is: the
+    /// run says so and succeeds, unless <see cref="AllCommand.RequireNavSwitch"/>
+    /// makes it a failure. A <c>.nav3d</c> from an earlier compile is
+    /// replaced only by a new one; left behind, it names the old map's bytes,
+    /// and the game's <c>MatchesBsp</c> refuses it.
+    /// </remarks>
+    private static async Task<int> WriteNavigationAsync(
+        PhysicalFileSystem disk,
+        IReadOnlyList<VPath> searchRoots,
+        AllArgs parsed,
+        VPath bspPath,
+        string gameDirectory,
+        TextWriter output,
+        CancellationToken cancellationToken)
+    {
+        int exit = await Nav3dCommand.BuildAndWriteAsync(
+            disk, searchRoots, bspPath, Nav3dCommand.NavPathOf(bspPath), gameDirectory, parsed.NavCompression,
+            parsed.Threads ?? Environment.ProcessorCount, "ssmap all", output, cancellationToken).ConfigureAwait(false);
+        if (exit == Program.ExitSuccess)
+        {
+            return exit;
+        }
+
+        if (parsed.RequireNavigation)
+        {
+            await output.WriteLineAsync("ssmap all: the map was written, but its navigation failed").ConfigureAwait(false);
+            return exit;
+        }
+
+        await output.WriteLineAsync(
+            $"ssmap all: warning: the map was written without a .nav3d ({RequireNavSwitch} makes this an error, {NoNavSwitch} skips it)")
+            .ConfigureAwait(false);
+        return Program.ExitSuccess;
     }
 
     /// <summary>The recorded game's own <c>gameinfo.txt</c>, which the bundle's is made from.</summary>
