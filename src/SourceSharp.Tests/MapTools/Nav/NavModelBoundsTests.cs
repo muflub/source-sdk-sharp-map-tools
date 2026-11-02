@@ -112,9 +112,9 @@ public sealed class NavModelBoundsTests
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(8), 1);
         byte[] phy = [.. header, .. BitConverter.GetBytes(collide.Length), .. collide];
 
-        IReadOnlyList<(Vec3 Mins, Vec3 Maxs)> pieces = NavModelBounds.Pieces(phy)!;
+        IReadOnlyList<NavPiece> pieces = NavModelBounds.Pieces(phy)!;
         Assert.Equal(2, pieces.Count);
-        (Vec3 Mins, Vec3 Maxs)[] sorted = [.. pieces.OrderBy(p => p.Mins.X)];
+        (Vec3 Mins, Vec3 Maxs)[] sorted = [.. pieces.Select(p => p.Bounds).OrderBy(p => p.Mins.X)];
         void Near(Vec3 expected, Vec3 actual)
         {
             Assert.InRange(actual.X, expected.X - 0.5f, expected.X + 0.5f);

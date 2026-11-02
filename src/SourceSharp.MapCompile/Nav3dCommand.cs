@@ -19,8 +19,9 @@ using SourceSharp.MapTools.Nav;
 namespace SourceSharp.MapCompile;
 
 /// <summary>
-/// <c>ssmap nav3d &lt;map.bsp&gt; [-out &lt;file.nav3d&gt;] [-game &lt;dir&gt;] [-nav-codec &lt;codec&gt;] [-voxel N] [-threads N]</c>:
-/// the 3D navigation of any compiled map, built from the <c>.bsp</c> alone.
+/// <c>ssmap nav3d &lt;map.bsp&gt; [-out &lt;file.nav3d&gt;] [-game &lt;dir&gt;] [-nav-codec &lt;codec&gt;] [-voxel N] [-threads N] [-check]</c>:
+/// the 3D navigation of any compiled map, built from the <c>.bsp</c> alone,
+/// or with <c>-check</c> a built one checked against the map.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -38,10 +39,21 @@ namespace SourceSharp.MapCompile;
 /// holds one (a map in <c>&lt;game&gt;/maps/</c>), and otherwise the
 /// navigation is built without props and says so.
 /// </para>
+/// <para>
+/// <b>The check.</b> <c>-check</c> builds nothing: it reads the navigation
+/// (beside the map, or where <c>-out</c> says), refuses one bound to other
+/// bytes, and checks that every place a player stands has ground under it
+/// in the map's own collision (<see cref="NavFloorCheck"/>), the props'
+/// from the game's content. It prints the count and the first places that
+/// have none, and fails when there is any.
+/// </para>
 /// </remarks>
 public static class Nav3dCommand
 {
-    private const string Usage = "usage: ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>]";
+    private const string Usage = "usage: ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>] [-check]";
+
+    /// <summary>How many places without ground <c>-check</c> lists before it says how many more there are.</summary>
+    public const int ListedFindings = 20;
 
     /// <summary>Runs <c>ssmap nav3d</c>.</summary>
     /// <param name="disk">Where the map, the game and the output live.</param>
@@ -64,6 +76,7 @@ public static class Nav3dCommand
         NavCompression compression = LevelNavFromPack.DefaultCompression;
         int threads = Environment.ProcessorCount;
         float voxel = NavSettings.DefaultVoxelSize;
+        bool check = false;
         for (int i = 0; i < args.Count; i++)
         {
             string arg = args[i];
@@ -91,6 +104,10 @@ public static class Nav3dCommand
             {
                 threads = n;
                 i++;
+            }
+            else if (Is(arg, "check") && !check)
+            {
+                check = true;
             }
             else if (target is null && !arg.StartsWith('-'))
             {
@@ -120,9 +137,99 @@ public static class Nav3dCommand
                 .ConfigureAwait(false);
         }
 
-        return await BuildAndWriteAsync(
-            disk, steamRoots, mapPath, navPath, gameDirectory, compression, Options(voxel, threads), "ssmap nav3d", output, cancellationToken)
+        return check
+            ? await CheckAsync(disk, steamRoots, mapPath, navPath, gameDirectory, threads, "ssmap nav3d", output, cancellationToken).ConfigureAwait(false)
+            : await BuildAndWriteAsync(
+                disk, steamRoots, mapPath, navPath, gameDirectory, compression, Options(voxel, threads), "ssmap nav3d", output, cancellationToken)
+                .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Checks a built navigation against its map: every place a player
+    /// stands has ground under it in the map's collision (<see cref="NavFloorCheck"/>).
+    /// </summary>
+    /// <param name="disk">Where the map, the game and the navigation live.</param>
+    /// <param name="steamRoots">Where Steam keeps its games.</param>
+    /// <param name="mapPath">The <c>.bsp</c>.</param>
+    /// <param name="navPath">The <c>.nav3d</c> built from it.</param>
+    /// <param name="gameDirectory">The directory holding <c>gameinfo.txt</c>, or null to check without props.</param>
+    /// <param name="threads">How many leaves are checked at once.</param>
+    /// <param name="tool">The prefix for each line.</param>
+    /// <param name="output">Where the report goes.</param>
+    /// <param name="cancellationToken">Cancels the work.</param>
+    /// <returns><see cref="Program.ExitSuccess"/> when every place has ground, else <see cref="RoomCommands.ExitFailed"/>.</returns>
+    public static async Task<int> CheckAsync(
+        IFileSystem disk,
+        IReadOnlyList<VPath> steamRoots,
+        VPath mapPath,
+        VPath navPath,
+        string? gameDirectory,
+        int threads,
+        string tool,
+        TextWriter output,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(disk);
+        ArgumentNullException.ThrowIfNull(steamRoots);
+        ArgumentNullException.ThrowIfNull(output);
+        Stopwatch clock = Stopwatch.StartNew();
+        if (await ReadMapAsync(disk, mapPath, tool, output, cancellationToken).ConfigureAwait(false) is not { } map)
+        {
+            return RoomCommands.ExitFailed;
+        }
+
+        Nav3dReader nav;
+        try
+        {
+            byte[] bytes;
+            await using (Stream stream = await disk.OpenReadAsync(navPath, cancellationToken).ConfigureAwait(false))
+            {
+                using MemoryStream copy = new();
+                await stream.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
+                bytes = copy.ToArray();
+            }
+
+            nav = Nav3dReader.Open(bytes);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            await output.WriteLineAsync($"{tool}: {HostPaths.Display(navPath)}: {exception.Message}").ConfigureAwait(false);
+            return RoomCommands.ExitFailed;
+        }
+
+        if (!nav.MatchesBsp(map.Binding))
+        {
+            await output.WriteLineAsync($"{tool}: {HostPaths.Display(navPath)} was not built from {HostPaths.Display(mapPath)}: build it again").ConfigureAwait(false);
+            return RoomCommands.ExitFailed;
+        }
+
+        if (await LoadModelsAsync(disk, steamRoots, map.Bsp, gameDirectory, tool, output, cancellationToken).ConfigureAwait(false) is not { } models)
+        {
+            return RoomCommands.ExitFailed;
+        }
+
+        NavFloorReport report = NavFloorCheck.Check(
+            nav, map.Bsp, models.Hull, models.Pieces, new NavFloorCheckOptions { MaxDegree = Math.Max(1, threads) }, cancellationToken);
+        foreach (string warning in report.Warnings)
+        {
+            await output.WriteLineAsync($"{tool}: warning: {warning}").ConfigureAwait(false);
+        }
+
+        foreach (NavFloorFinding finding in report.Missing.Take(ListedFindings))
+        {
+            await output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
+                $"{tool}: no ground under ({finding.Position.X:0.##} {finding.Position.Y:0.##} {finding.Position.Z:0.##}), leaf {finding.Leaf}")).ConfigureAwait(false);
+        }
+
+        if (report.Missing.Count > ListedFindings)
+        {
+            await output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture, $"{tool}: ... and {report.Missing.Count - ListedFindings:N0} more")).ConfigureAwait(false);
+        }
+
+        await output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
+            $"{tool}: checked {HostPaths.Display(navPath)}: {report.Standable:N0} places a player stands, {report.Missing.Count:N0} with no ground within {report.Depth:0.##} units under its box, {clock.Elapsed.TotalSeconds:0.0} s"))
             .ConfigureAwait(false);
+        return report.Missing.Count == 0 ? Program.ExitSuccess : RoomCommands.ExitFailed;
     }
 
     /// <summary>The grid a command line asks for: the defaults with its voxel and thread count.</summary>
@@ -176,59 +283,19 @@ public static class Nav3dCommand
         ArgumentNullException.ThrowIfNull(output);
         Stopwatch clock = Stopwatch.StartNew();
         string display = HostPaths.Display(mapPath);
-        BspData bsp;
-        Nav3dBspBinding binding;
-        try
+        if (await ReadMapAsync(disk, mapPath, tool, output, cancellationToken).ConfigureAwait(false) is not { } map
+            || await LoadModelsAsync(disk, steamRoots, map.Bsp, gameDirectory, tool, output, cancellationToken).ConfigureAwait(false) is not { } models)
         {
-            byte[] bytes;
-            await using (Stream stream = await disk.OpenReadAsync(mapPath, cancellationToken).ConfigureAwait(false))
-            {
-                using MemoryStream copy = new();
-                await stream.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
-                bytes = copy.ToArray();
-            }
-
-            binding = Nav3dBspBinding.Of(bytes);
-            bsp = await BspFile.LoadAsync(new MemoryStream(bytes, writable: false), cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidBspException)
-        {
-            await output.WriteLineAsync($"{tool}: {display}: {exception.Message}").ConfigureAwait(false);
             return RoomCommands.ExitFailed;
         }
 
-        IReadOnlyList<string> models = LevelNavFromBsp.Models(bsp);
-        IReadOnlyDictionary<string, (Vec3 Mins, Vec3 Maxs)?> hulls = new Dictionary<string, (Vec3, Vec3)?>();
-        IReadOnlyDictionary<string, IReadOnlyList<(Vec3 Mins, Vec3 Maxs)>?> pieces = new Dictionary<string, IReadOnlyList<(Vec3, Vec3)>?>();
-        if (gameDirectory is not null && models.Count > 0)
-        {
-            GameContentMounter.Result mounted;
-            try
-            {
-                mounted = await VbspCommand.MountGameAsync(disk, gameDirectory, VbspHost.SteamFor(disk, steamRoots), cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception exception) when (exception is IOException or InvalidDataException or InvalidOperationException)
-            {
-                await output.WriteLineAsync($"{tool}: cannot mount {gameDirectory}: {exception.Message}").ConfigureAwait(false);
-                return RoomCommands.ExitFailed;
-            }
-
-            await using (mounted.Content.ConfigureAwait(false))
-            {
-                await VbspCommand.WriteSkippedAsync(mounted, tool, output).ConfigureAwait(false);
-                hulls = await NavModelBounds.LoadAsync(mounted.Content, models, cancellationToken).ConfigureAwait(false);
-                pieces = await NavModelBounds.LoadPiecesAsync(mounted.Content, NavModelBounds.StaticPropModels(bsp), cancellationToken)
-                    .ConfigureAwait(false);
-            }
-        }
-
+        BspData bsp = map.Bsp;
+        Nav3dBspBinding binding = map.Binding;
         BspNavResult result;
         try
         {
             result = await LevelNavFromBsp.BuildAsync(
-                bsp, binding, m => hulls.TryGetValue(m, out (Vec3, Vec3)? hull) ? hull : null,
-                options with { ModelPieces = m => pieces.TryGetValue(m, out IReadOnlyList<(Vec3, Vec3)>? found) ? found : null },
+                bsp, binding, models.Hull, options with { ModelPieces = models.Pieces },
                 cancellationToken).ConfigureAwait(false);
         }
         catch (NavBuildException exception)
@@ -257,6 +324,71 @@ public static class Nav3dCommand
         return Program.ExitSuccess;
     }
 
+    /// <summary>Reads a compiled map and its binding, or writes a line saying why it cannot.</summary>
+    private static async Task<(BspData Bsp, Nav3dBspBinding Binding)?> ReadMapAsync(
+        IFileSystem disk, VPath mapPath, string tool, TextWriter output, CancellationToken cancellationToken)
+    {
+        try
+        {
+            byte[] bytes;
+            await using (Stream stream = await disk.OpenReadAsync(mapPath, cancellationToken).ConfigureAwait(false))
+            {
+                using MemoryStream copy = new();
+                await stream.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
+                bytes = copy.ToArray();
+            }
+
+            Nav3dBspBinding binding = Nav3dBspBinding.Of(bytes);
+            BspData bsp = await BspFile.LoadAsync(new MemoryStream(bytes, writable: false), cancellationToken).ConfigureAwait(false);
+            return (bsp, binding);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidBspException)
+        {
+            await output.WriteLineAsync($"{tool}: {HostPaths.Display(mapPath)}: {exception.Message}").ConfigureAwait(false);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The hulls of a map's prop models and the collision pieces of its
+    /// static props' models, from the game's content; none without a game.
+    /// Null, after a line saying why, when the game cannot be mounted.
+    /// </summary>
+    private static async Task<ModelCollision?> LoadModelsAsync(
+        IFileSystem disk, IReadOnlyList<VPath> steamRoots, BspData bsp, string? gameDirectory, string tool, TextWriter output,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string> models = LevelNavFromBsp.Models(bsp);
+        IReadOnlyDictionary<string, (Vec3 Mins, Vec3 Maxs)?> hulls = new Dictionary<string, (Vec3, Vec3)?>();
+        IReadOnlyDictionary<string, IReadOnlyList<NavPiece>?> pieces = new Dictionary<string, IReadOnlyList<NavPiece>?>();
+        if (gameDirectory is not null && models.Count > 0)
+        {
+            GameContentMounter.Result mounted;
+            try
+            {
+                mounted = await VbspCommand.MountGameAsync(disk, gameDirectory, VbspHost.SteamFor(disk, steamRoots), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or InvalidDataException or InvalidOperationException)
+            {
+                await output.WriteLineAsync($"{tool}: cannot mount {gameDirectory}: {exception.Message}").ConfigureAwait(false);
+                return null;
+            }
+
+            await using (mounted.Content.ConfigureAwait(false))
+            {
+                await VbspCommand.WriteSkippedAsync(mounted, tool, output).ConfigureAwait(false);
+                hulls = await NavModelBounds.LoadAsync(mounted.Content, models, cancellationToken).ConfigureAwait(false);
+                pieces = await NavModelBounds.LoadPiecesAsync(mounted.Content, NavModelBounds.StaticPropModels(bsp), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        return new ModelCollision(
+            m => hulls.TryGetValue(m, out (Vec3, Vec3)? hull) ? hull : null,
+            m => pieces.TryGetValue(m, out IReadOnlyList<NavPiece>? found) ? found : null);
+    }
+
     /// <summary>One line of a built navigation's numbers.</summary>
     /// <param name="level">The navigation.</param>
     /// <param name="bytes">The file's length.</param>
@@ -282,6 +414,9 @@ public static class Nav3dCommand
             ? folder
             : null;
     }
+
+    /// <summary>A map's model collision: hulls by path, and static props' pieces by path.</summary>
+    private sealed record ModelCollision(Func<string, (Vec3 Mins, Vec3 Maxs)?> Hull, Func<string, IReadOnlyList<NavPiece>?> Pieces);
 
     private static bool Is(string arg, string name) =>
         string.Equals(arg, "-" + name, StringComparison.OrdinalIgnoreCase)

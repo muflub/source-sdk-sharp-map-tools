@@ -73,7 +73,7 @@ public sealed record BspNavOptions
     /// or null: a prop whose model has them is solid by its pieces' boxes,
     /// one without by its hull box (<see cref="NavGeometry.StaticProps"/>).
     /// </summary>
-    public Func<string, IReadOnlyList<(Vec3 Mins, Vec3 Maxs)>?>? ModelPieces { get; init; }
+    public Func<string, IReadOnlyList<NavPiece>?>? ModelPieces { get; init; }
 
     /// <summary>How many cells are built at once. The file is the same at any degree.</summary>
     public int MaxDegree { get; init; } = 1;

@@ -373,7 +373,7 @@ public sealed class NavGeometry
     /// </para>
     /// </remarks>
     public static (IReadOnlyList<NavBrush> Brushes, IReadOnlyList<string> Warnings) StaticProps(
-        BspData bsp, Func<string, (Vec3 Mins, Vec3 Maxs)?>? modelBounds, Func<string, IReadOnlyList<(Vec3 Mins, Vec3 Maxs)>?>? modelPieces = null)
+        BspData bsp, Func<string, (Vec3 Mins, Vec3 Maxs)?>? modelBounds, Func<string, IReadOnlyList<NavPiece>?>? modelPieces = null)
     {
         ArgumentNullException.ThrowIfNull(bsp);
         if (StaticPropLumpOf(bsp) is not { } lump)
@@ -393,9 +393,9 @@ public sealed class NavGeometry
             string model = lump.ModelNames[prop.PropType];
             if (modelPieces?.Invoke(model) is { Count: > 0 } pieces)
             {
-                foreach ((Vec3 Mins, Vec3 Maxs) piece in pieces)
+                foreach (NavPiece piece in pieces)
                 {
-                    if (TurnedBox(prop.Origin, prop.Angles, piece) is { } turned)
+                    if (TurnedBox(prop.Origin, prop.Angles, piece.Bounds) is { } turned)
                     {
                         boxes.Add(NavBrush.Box(turned.Mins, turned.Maxs, StaticPropContents));
                     }
@@ -572,17 +572,7 @@ public sealed class NavGeometry
     /// <summary>A hull turned by Source angles (pitch, yaw, roll) and moved to an origin: the box of the turned corners, or null when it is empty.</summary>
     internal static Box? TurnedBox(Vec3 origin, Vec3 angles, (Vec3 Mins, Vec3 Maxs) hull)
     {
-        (double sp, double cp) = SinCos(angles.X);
-        (double sy, double cy) = SinCos(angles.Y);
-        (double sr, double cr) = SinCos(angles.Z);
-
-        // Source's angle order: yaw about z, pitch about y, roll about x.
-        double[,] m =
-        {
-            { cp * cy, (sr * sp * cy) - (cr * sy), (cr * sp * cy) + (sr * sy) },
-            { cp * sy, (sr * sp * sy) + (cr * cy), (cr * sp * sy) - (sr * cy) },
-            { -sp, sr * cp, cr * cp },
-        };
+        double[] m = TurnMatrix(angles);
         double[] lo = [double.MaxValue, double.MaxValue, double.MaxValue];
         double[] hi = [double.MinValue, double.MinValue, double.MinValue];
         for (int c = 0; c < 8; c++)
@@ -592,7 +582,7 @@ public sealed class NavGeometry
             double pz = (c & 4) == 0 ? hull.Mins.Z : hull.Maxs.Z;
             for (int k = 0; k < 3; k++)
             {
-                double v = (m[k, 0] * px) + (m[k, 1] * py) + (m[k, 2] * pz);
+                double v = (m[3 * k] * px) + (m[(3 * k) + 1] * py) + (m[(3 * k) + 2] * pz);
                 lo[k] = Math.Min(lo[k], v);
                 hi[k] = Math.Max(hi[k], v);
             }
@@ -601,6 +591,136 @@ public sealed class NavGeometry
         Vec3 mins = new((float)(origin.X + lo[0]), (float)(origin.Y + lo[1]), (float)(origin.Z + lo[2]));
         Vec3 maxs = new((float)(origin.X + hi[0]), (float)(origin.Y + hi[1]), (float)(origin.Z + hi[2]));
         return mins.X < maxs.X && mins.Y < maxs.Y && mins.Z < maxs.Z ? new Box(mins, maxs) : null;
+    }
+
+    /// <summary>
+    /// A piece's corners turned by Source angles and moved to an origin, in
+    /// double: the same turn <see cref="TurnedBox"/> gives a hull.
+    /// </summary>
+    internal static (double X, double Y, double Z)[] TurnedPoints(Vec3 origin, Vec3 angles, NavPiece piece)
+    {
+        double[] m = TurnMatrix(angles);
+        (double X, double Y, double Z)[] points = new (double, double, double)[piece.Points.Count];
+        for (int i = 0; i < points.Length; i++)
+        {
+            Vec3 p = piece.Points[i];
+            points[i] = (
+                origin.X + ((m[0] * p.X) + (m[1] * p.Y) + (m[2] * p.Z)),
+                origin.Y + ((m[3] * p.X) + (m[4] * p.Y) + (m[5] * p.Z)),
+                origin.Z + ((m[6] * p.X) + (m[7] * p.Y) + (m[8] * p.Z)));
+        }
+
+        return points;
+    }
+
+    /// <summary>
+    /// A convex piece as a brush: one plane per face, each turned away from
+    /// the corners' centroid, so the brush is the piece itself. Faces that
+    /// share a plane give it once; a face with no area gives none.
+    /// </summary>
+    /// <param name="points">The piece's corners, placed.</param>
+    /// <param name="triangles">Its faces, three corner indices each.</param>
+    /// <param name="contents">The brush's contents.</param>
+    /// <returns>The brush, or null when the faces bound no volume.</returns>
+    internal static NavBrush? ConvexBrush(IReadOnlyList<(double X, double Y, double Z)> points, IReadOnlyList<int> triangles, int contents) =>
+        PlaneBrush([.. FacePlanes(points, triangles).Select(p => (p.X, p.Y, p.Z))], points, contents);
+
+    /// <summary>The outward unit planes of a convex piece's faces, distinct, in face order.</summary>
+    internal static List<(double X, double Y, double Z, double D)> FacePlanes(IReadOnlyList<(double X, double Y, double Z)> points, IReadOnlyList<int> triangles)
+    {
+        double cx = 0, cy = 0, cz = 0;
+        foreach ((double x, double y, double z) in points)
+        {
+            cx += x;
+            cy += y;
+            cz += z;
+        }
+
+        cx /= Math.Max(1, points.Count);
+        cy /= Math.Max(1, points.Count);
+        cz /= Math.Max(1, points.Count);
+        List<(double X, double Y, double Z, double D)> planes = [];
+        for (int t = 0; t + 2 < triangles.Count; t += 3)
+        {
+            (double X, double Y, double Z) a = points[triangles[t]];
+            (double X, double Y, double Z) b = points[triangles[t + 1]];
+            (double X, double Y, double Z) c = points[triangles[t + 2]];
+            double ux = b.X - a.X, uy = b.Y - a.Y, uz = b.Z - a.Z;
+            double vx = c.X - a.X, vy = c.Y - a.Y, vz = c.Z - a.Z;
+            double nx = (uy * vz) - (uz * vy), ny = (uz * vx) - (ux * vz), nz = (ux * vy) - (uy * vx);
+            double length = Math.Sqrt((nx * nx) + (ny * ny) + (nz * nz));
+            if (length < 1e-9)
+            {
+                continue;
+            }
+
+            nx /= length;
+            ny /= length;
+            nz /= length;
+            double d = (nx * a.X) + (ny * a.Y) + (nz * a.Z);
+            if ((nx * cx) + (ny * cy) + (nz * cz) > d)
+            {
+                (nx, ny, nz, d) = (-nx, -ny, -nz, -d);
+            }
+
+            if (!planes.Any(p => Math.Abs(p.X - nx) < 1e-6 && Math.Abs(p.Y - ny) < 1e-6 && Math.Abs(p.Z - nz) < 1e-6 && Math.Abs(p.D - d) < 1e-4))
+            {
+                planes.Add((nx, ny, nz, d));
+            }
+        }
+
+        return planes;
+    }
+
+    /// <summary>
+    /// A brush of planes that each support a set of points: every normal is
+    /// rounded to <c>float32</c>, and its distance is the farthest point
+    /// along that rounded normal, rounded up, so the brush holds every point
+    /// whatever the rounding.
+    /// </summary>
+    /// <param name="normals">The outward normals, unit length.</param>
+    /// <param name="points">The points the brush must hold.</param>
+    /// <param name="contents">Its contents.</param>
+    /// <returns>The brush, or null when the planes bound no volume.</returns>
+    internal static NavBrush? PlaneBrush(
+        IReadOnlyList<(double X, double Y, double Z)> normals, IReadOnlyList<(double X, double Y, double Z)> points, int contents)
+    {
+        List<(Vec3 Normal, float Dist)> faces = new(normals.Count);
+        foreach ((double x, double y, double z) in normals)
+        {
+            Vec3 n = new((float)x, (float)y, (float)z);
+            double d = double.MinValue;
+            foreach ((double px, double py, double pz) in points)
+            {
+                d = Math.Max(d, (n.X * px) + (n.Y * py) + (n.Z * pz));
+            }
+
+            float dist = (float)d;
+            if (dist < d)
+            {
+                dist = MathF.BitIncrement(dist);
+            }
+
+            faces.Add((n, dist));
+        }
+
+        return NavBrush.FromPlanes(faces, contents);
+    }
+
+    /// <summary>The rotation of Source angles (pitch, yaw, roll) as a row-major 3 x 3 matrix, exact at quarter turns.</summary>
+    private static double[] TurnMatrix(Vec3 angles)
+    {
+        (double sp, double cp) = SinCos(angles.X);
+        (double sy, double cy) = SinCos(angles.Y);
+        (double sr, double cr) = SinCos(angles.Z);
+
+        // Source's angle order: yaw about z, pitch about y, roll about x.
+        return
+        [
+            cp * cy, (sr * sp * cy) - (cr * sy), (cr * sp * cy) + (sr * sy),
+            cp * sy, (sr * sp * sy) + (cr * cy), (cr * sp * sy) - (sr * cy),
+            -sp, sr * cp, cr * cp,
+        ];
     }
 
     /// <summary>

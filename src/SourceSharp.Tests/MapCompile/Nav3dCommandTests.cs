@@ -142,6 +142,7 @@ public sealed class Nav3dCommandTests(BspNavMap map) : IClassFixture<BspNavMap>
     [InlineData("/game/maps/hall.bsp -nav-codec zip")]
     [InlineData("/game/maps/hall.bsp -threads 0")]
     [InlineData("/game/maps/hall.bsp /game/maps/other.bsp")]
+    [InlineData("/game/maps/hall.bsp -check -check")]
     public async Task ACommandLineItCannotActOnPrintsTheUsage(string line)
     {
         string[] args = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -168,6 +169,39 @@ public sealed class Nav3dCommandTests(BspNavMap map) : IClassFixture<BspNavMap>
         using StringWriter missing = new();
         Assert.Equal(RoomCommands.ExitFailed, await Nav3dCommand.RunAsync(fs, [], ["/game/maps/none.bsp"], missing));
         Assert.Contains($"ssmap nav3d: {HostPaths.Display(At("/game/maps/none.bsp"))}:", missing.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <c>-check</c> builds nothing: it reads the navigation beside the map
+    /// (or at <c>-out</c>) and reports every place a player stands as having
+    /// ground under it; a navigation built from other bytes, and one that is
+    /// not there, fail naming the file.
+    /// </summary>
+    [Fact]
+    public async Task CheckReadsTheBuiltNavigationAndFindsGroundUnderEveryPlaceToStand()
+    {
+        InMemoryFileSystem fs = Game();
+        using StringWriter built = new();
+        Assert.Equal(Program.ExitSuccess, await Nav3dCommand.RunAsync(fs, [], ["/game/maps/hall.bsp"], built));
+        byte[] before = fs.GetBytes(At("/game/maps/hall.nav3d"))!;
+
+        using StringWriter output = new();
+        int exit = await Nav3dCommand.RunAsync(fs, [], ["/game/maps/hall.bsp", "-check", "-threads", "2"], output);
+
+        Assert.True(exit == Program.ExitSuccess, output.ToString());
+        Assert.Matches(
+            $@"^ssmap nav3d: checked {System.Text.RegularExpressions.Regex.Escape(HostPaths.Display(At("/game/maps/hall.nav3d")))}: [\d,]+ places a player stands, 0 with no ground within 18 units under its box, ",
+            output.ToString());
+        Assert.Equal(before, fs.GetBytes(At("/game/maps/hall.nav3d")));
+
+        fs.AddFile(Rooted("/game/maps/other.bsp"), [.. map.Bytes, 0]);
+        using StringWriter other = new();
+        Assert.Equal(RoomCommands.ExitFailed, await Nav3dCommand.RunAsync(fs, [], ["/game/maps/other.bsp", "-out", "/game/maps/hall.nav3d", "-check"], other));
+        Assert.Contains($"{HostPaths.Display(At("/game/maps/hall.nav3d"))} was not built from {HostPaths.Display(At("/game/maps/other.bsp"))}", other.ToString(), StringComparison.Ordinal);
+
+        using StringWriter missing = new();
+        Assert.Equal(RoomCommands.ExitFailed, await Nav3dCommand.RunAsync(fs, [], ["/game/maps/hall.bsp", "-out", "/game/maps/none.nav3d", "-check"], missing));
+        Assert.Contains($"ssmap nav3d: {HostPaths.Display(At("/game/maps/none.nav3d"))}:", missing.ToString(), StringComparison.Ordinal);
     }
 
     /// <summary>The verb is dispatched and listed in the usage.</summary>

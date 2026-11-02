@@ -999,6 +999,16 @@ The file is the same bytes at any thread count and on every run (cells are
 built independently and stitched in cell order); a fact compares two runs,
 one and four threads, and four builds at once in one process.
 
+**Checked against the map.** `ssmap nav3d <map.bsp> -check` (`NavFloorCheck`)
+reads a built file and checks that every place a player stands (7.6) has
+ground under it in the map's own collision, taken exactly: the world's
+player-solid brushes, each displacement's surface, and each solid static
+prop's `.phy` pieces turned and placed. The player's box, at the voxel's
+centre with its feet on the leaf's floor, is moved down the step height;
+a place where it meets nothing is reported. An over-estimated side
+(above) never fails it; an over-estimated top does, where it puts a floor
+over nothing.
+
 `dm_lockdown` (the stock map, BSP 19, 2,239 brushes, 40 displacements,
 261 static props, three `func_useableladder`s), with the Source SDK Base
 2013 Multiplayer content mounted, Microsoft's .NET 10 runtime, 32 threads

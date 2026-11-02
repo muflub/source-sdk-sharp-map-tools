@@ -221,7 +221,7 @@ public sealed class NavGeometryTests
         lump.Props.Add(new StaticProp { PropType = 1, Origin = new Vec3(0, 0, 16), Solid = 6 });
         BspData bsp = new();
         bsp.GameLumps.Add(lump.Write());
-        (Vec3, Vec3)[] posts = [(new Vec3(-24, -4, 0), new Vec3(-16, 4, 64)), (new Vec3(16, -4, 0), new Vec3(24, 4, 64))];
+        NavPiece[] posts = [NavPiece.Box(new Vec3(-24, -4, 0), new Vec3(-16, 4, 64)), NavPiece.Box(new Vec3(16, -4, 0), new Vec3(24, 4, 64))];
 
         (IReadOnlyList<NavBrush> boxes, IReadOnlyList<string> warnings) = NavGeometry.StaticProps(
             bsp, _ => (new Vec3(-24, -4, 0), new Vec3(24, 4, 64)), m => m == "models/gate.mdl" ? posts : null);

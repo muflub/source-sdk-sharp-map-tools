@@ -441,7 +441,7 @@ Unzip it anywhere and compile against it with no Steam install:
 ### `nav3d`
 
 ```sh
-ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>]
+ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>] [-check]
 ```
 
 Builds the 3D navigation (`.nav3d`, the format `link` writes for a level
@@ -489,6 +489,16 @@ otherwise (`none`, `deflate[:0-9]`, `brotli[:0-11]`).
 One line reports the file: its size, the cells holding navigation, the
 leaves, walkable floors, jump links, obstacles and ladder leaves, and the
 time. `ssmap nav` inspects it.
+
+**`-check`** builds nothing: it reads the built file (beside the map, or
+`-out`), refuses one bound to other bytes, and checks that every place a
+player stands (`Nav3dWalk.IsStand`, fitted at the voxel's centre) has
+ground under it in the map's own collision, taken exactly: the world's
+player-solid brushes, the displacements' surfaces and the solid static
+props' `.phy` pieces from `-game`. A place has ground when the player's box,
+moved down a step (18 units) from its feet, meets a solid. It lists the
+first 20 places that have none, the count, and fails when there is any
+(`NavFloorCheck` in the library).
 
 ### Per-machine defaults
 
@@ -564,7 +574,7 @@ ssmap layout <key>=<library.vmf> [<key>=<library.vmf> ...] -rows R -columns C -s
 ssmap layout <library.vmf> ... -sequence K -name <base> [-out <folder>]
 ssmap nav <map.nav3d | level.yaml> [-rooms <pack.roompack>] [--obj <out.obj>] [--floor] [--agent <index|name>]
 ssmap map2d <map.bsp> [-level <level.yaml>] [-out <file.map2d>] [-svg]
-ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>]
+ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>] [-check]
 ```
 
 `ssmap rooms` lists a library without compiling it: each room's name, its

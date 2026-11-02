@@ -84,15 +84,15 @@ public static class NavModelBounds
     /// <param name="models">The model paths (<c>.mdl</c>); each one's <c>.phy</c> beside it is read.</param>
     /// <param name="cancellationToken">Cancels the reads.</param>
     /// <returns>Each path's pieces, or null when the content has no <c>.phy</c> for it or it is not one this reads.</returns>
-    public static async Task<IReadOnlyDictionary<string, IReadOnlyList<(Vec3 Mins, Vec3 Maxs)>?>> LoadPiecesAsync(
+    public static async Task<IReadOnlyDictionary<string, IReadOnlyList<NavPiece>?>> LoadPiecesAsync(
         IContentFileSystem content, IReadOnlyList<string> models, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(models);
-        Dictionary<string, IReadOnlyList<(Vec3, Vec3)>?> pieces = new(StringComparer.Ordinal);
+        Dictionary<string, IReadOnlyList<NavPiece>?> pieces = new(StringComparer.Ordinal);
         foreach (string model in models)
         {
-            IReadOnlyList<(Vec3, Vec3)>? found = null;
+            IReadOnlyList<NavPiece>? found = null;
             if (VPath.TryCreate(Path.ChangeExtension(model, ".phy"), out VPath path))
             {
                 using IMemoryOwner<byte>? owner = await content.ReadAsync(path, cancellationToken).ConfigureAwait(false);
@@ -107,19 +107,18 @@ public static class NavModelBounds
 
     /// <summary>
     /// A model's collision as the game builds a static prop's from its
-    /// <c>.phy</c>: the first solid's convex pieces, each as its bounding box
-    /// in the model's frame (Source units, z up).
+    /// <c>.phy</c>: the first solid's convex pieces, each its corners and
+    /// faces in the model's frame (Source units, z up).
     /// </summary>
     /// <param name="phy">The <c>.phy</c> file's bytes.</param>
-    /// <returns>The boxes, one per convex piece, in the file's order; null when the bytes are not a <c>.phy</c> this reads.</returns>
+    /// <returns>The pieces, in the file's order; null when the bytes are not a <c>.phy</c> this reads.</returns>
     /// <remarks>
     /// <para>
     /// <b>Why pieces.</b> A static prop's movement hull is one box around
     /// the whole model, which closes every opening a prop has: a gate frame,
     /// an arch, a fence with a gap, a rail over a stair's side. The game
-    /// collides with the <c>.phy</c>'s convex pieces, so the box around each
-    /// piece keeps the openings between pieces; it still over-estimates a
-    /// piece that is not a box, and can only block more, never less.
+    /// collides with the <c>.phy</c>'s convex pieces, so taking each piece on
+    /// its own keeps the openings between pieces.
     /// </para>
     /// <para>
     /// <b>The format.</b> The file is a header and its solids, each a size
@@ -129,10 +128,11 @@ public static class NavModelBounds
     /// surface's ledge tree leads to its convex pieces (ledges); a ledge's
     /// triangles name its corners by index into a point array the ledge
     /// locates relative to itself, each point four floats in IVP's metres
-    /// with y down, turned here into Source units.
+    /// with y down, turned here into Source units. A piece keeps the corners
+    /// its triangles name, renumbered in the order first named.
     /// </para>
     /// </remarks>
-    public static IReadOnlyList<(Vec3 Mins, Vec3 Maxs)>? Pieces(ReadOnlySpan<byte> phy)
+    public static IReadOnlyList<NavPiece>? Pieces(ReadOnlySpan<byte> phy)
     {
         PhyFile file;
         try
@@ -162,38 +162,44 @@ public static class NavModelBounds
 
         try
         {
-            List<(Vec3, Vec3)> boxes = [];
+            List<NavPiece> pieces = [];
             foreach (int ledge in Phys.Managed.IvpCollideQueries.LeafOffsets(surface))
             {
                 int pointOffset = BinaryPrimitives.ReadInt32LittleEndian(surface[ledge..]);
                 int triangles = BinaryPrimitives.ReadInt16LittleEndian(surface[(ledge + 12)..]);
-                double[] lo = [double.MaxValue, double.MaxValue, double.MaxValue];
-                double[] hi = [double.MinValue, double.MinValue, double.MinValue];
+                Dictionary<int, int> corner = [];
+                List<Vec3> points = [];
+                List<int> faces = new(triangles * 3);
                 for (int t = 0; t < triangles; t++)
                 {
                     for (int e = 0; e < 3; e++)
                     {
                         int index = (int)(BinaryPrimitives.ReadUInt32LittleEndian(surface[(ledge + 16 + (16 * t) + 4 + (4 * e))..]) & 0xffff);
-                        int at = ledge + pointOffset + (16 * index);
-                        float x = BinaryPrimitives.ReadSingleLittleEndian(surface[at..]);
-                        float y = BinaryPrimitives.ReadSingleLittleEndian(surface[(at + 4)..]);
-                        float z = BinaryPrimitives.ReadSingleLittleEndian(surface[(at + 8)..]);
-                        double[] hl = [x * (double)Phys.Managed.IvpCollideQueries.IvpToHl, z * (double)Phys.Managed.IvpCollideQueries.IvpToHl, -y * (double)Phys.Managed.IvpCollideQueries.IvpToHl];
-                        for (int k = 0; k < 3; k++)
+                        if (!corner.TryGetValue(index, out int at))
                         {
-                            lo[k] = Math.Min(lo[k], hl[k]);
-                            hi[k] = Math.Max(hi[k], hl[k]);
+                            int offset = ledge + pointOffset + (16 * index);
+                            float x = BinaryPrimitives.ReadSingleLittleEndian(surface[offset..]);
+                            float y = BinaryPrimitives.ReadSingleLittleEndian(surface[(offset + 4)..]);
+                            float z = BinaryPrimitives.ReadSingleLittleEndian(surface[(offset + 8)..]);
+                            double scale = Phys.Managed.IvpCollideQueries.IvpToHl;
+                            at = points.Count;
+                            corner[index] = at;
+                            points.Add(new Vec3((float)(x * scale), (float)(z * scale), (float)(-y * scale)));
                         }
+
+                        faces.Add(at);
                     }
                 }
 
-                if (triangles > 0 && lo[0] < hi[0] && lo[1] < hi[1] && lo[2] < hi[2])
+                NavPiece piece = new(points, faces);
+                if (triangles > 0 && piece.Bounds.Mins.X < piece.Bounds.Maxs.X && piece.Bounds.Mins.Y < piece.Bounds.Maxs.Y
+                    && piece.Bounds.Mins.Z < piece.Bounds.Maxs.Z)
                 {
-                    boxes.Add((new Vec3((float)lo[0], (float)lo[1], (float)lo[2]), new Vec3((float)hi[0], (float)hi[1], (float)hi[2])));
+                    pieces.Add(piece);
                 }
             }
 
-            return boxes.Count > 0 ? boxes : null;
+            return pieces.Count > 0 ? pieces : null;
         }
         catch (ArgumentOutOfRangeException)
         {
