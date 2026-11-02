@@ -459,10 +459,11 @@ otherwise (`none`, `deflate[:0-9]`, `brotli[:0-11]`).
   default), and the file is the same bytes at any count.
 - **Solid**: the world's brushes (player clips for the player class, monster
   clips for the NPC class), each displacement's triangles (the compile keeps
-  no brush for them), and each solid static prop's collision: a box per
-  convex piece of its model's `.phy`, turned by its angles, so the gaps
-  between a gate's or a rail's pieces stay open (the model's hull box when
-  the content has no `.phy`). **Outside** the map's sealed hull is solid too,
+  no brush for them), and each solid static prop's collision: each convex
+  piece of its model's `.phy` (the model's hull box when the content has
+  no `.phy`), turned by its angles, solid up to the piece's own top over
+  its outline, so the gaps between a gate's or a rail's pieces stay open
+  and a floor on a prop is one the game has. **Outside** the map's sealed hull is solid too,
   read from the compiled tree, so a cell outside throughout holds nothing.
 - **Dynamic obstacles** are the doors, movers, toggles, breakables and
   physics and dynamic props, by their `targetname`; **ladders** are

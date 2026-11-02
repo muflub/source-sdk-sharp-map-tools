@@ -339,18 +339,19 @@ public sealed class NavGeometry
     }
 
     /// <summary>
-    /// A compiled map's static props as solids: each solid prop's model hull,
-    /// turned by its angles, as one box.
+    /// A compiled map's static props as solids: each convex piece of each
+    /// solid prop's collision, turned by its angles and placed, as the solid
+    /// an agent stands on (<see cref="StandingShell"/>).
     /// </summary>
     /// <param name="bsp">The map.</param>
     /// <param name="modelBounds">A model's movement hull by its path as the prop dictionary names it, or null when unknown.</param>
     /// <param name="modelPieces">
     /// A model's collision pieces by its path (<see cref="NavModelBounds.Pieces"/>),
-    /// or null when unknown: a prop whose model has them is one box per
-    /// piece, turned; one without falls back to its hull.
+    /// or null when unknown: a prop whose model has none is its hull, one
+    /// box piece.
     /// </param>
     /// <returns>
-    /// The boxes in prop order, and one warning per model the content lacks
+    /// The solids in prop order, and one warning per model the content lacks
     /// naming how many props it leaves out. A prop with <c>SOLID_NONE</c> adds
     /// nothing, as it blocks nothing in the game.
     /// </returns>
@@ -361,15 +362,13 @@ public sealed class NavGeometry
     /// They never move, so they are world solids here, not obstacles.
     /// </para>
     /// <para>
-    /// <b>The box is an over-estimate.</b> The game collides with a prop's
-    /// <c>.phy</c> convex pieces (or its hull box for a box-solid prop); the
-    /// navigation takes the model's movement hull, turned, and the box around
-    /// that. A prop shaped like an arch or a gate frame therefore closes its
-    /// opening in the navigation, and a turned prop blocks the corners of its
-    /// box. Reading the <c>.phy</c> pieces is the change that would make it
-    /// exact; the box is what the content gives every model without decoding
-    /// the physics format, and it can only make the navigation block more,
-    /// never less.
+    /// <b>The top is exact, the sides an over-estimate.</b> The game collides
+    /// with a prop's <c>.phy</c> convex pieces. Each piece is solid up to its
+    /// own upward faces, so a floor the navigation finds on a prop is one the
+    /// game has; its sides are its outline straight down to its lowest
+    /// corner, which can only make the navigation block more, never less. A
+    /// box around each piece put floors over nothing beside a sloped, turned
+    /// or rounded piece.
     /// </para>
     /// </remarks>
     public static (IReadOnlyList<NavBrush> Brushes, IReadOnlyList<string> Warnings) StaticProps(
@@ -381,7 +380,7 @@ public sealed class NavGeometry
             return ([], []);
         }
 
-        List<NavBrush> boxes = [];
+        List<NavBrush> solids = [];
         SortedDictionary<string, int> missing = new(StringComparer.Ordinal);
         foreach (StaticProp prop in lump.Props)
         {
@@ -391,27 +390,25 @@ public sealed class NavGeometry
             }
 
             string model = lump.ModelNames[prop.PropType];
-            if (modelPieces?.Invoke(model) is { Count: > 0 } pieces)
-            {
-                foreach (NavPiece piece in pieces)
-                {
-                    if (TurnedBox(prop.Origin, prop.Angles, piece.Bounds) is { } turned)
-                    {
-                        boxes.Add(NavBrush.Box(turned.Mins, turned.Maxs, StaticPropContents));
-                    }
-                }
-            }
-            else if (modelBounds?.Invoke(model) is { } hull && TurnedBox(prop.Origin, prop.Angles, hull) is { } box)
-            {
-                boxes.Add(NavBrush.Box(box.Mins, box.Maxs, StaticPropContents));
-            }
-            else
+            IReadOnlyList<NavPiece>? pieces = modelPieces?.Invoke(model) is { Count: > 0 } found ? found
+                : modelBounds?.Invoke(model) is { } hull ? [NavPiece.Box(hull.Mins, hull.Maxs)]
+                : null;
+            if (pieces is null)
             {
                 missing[model] = missing.GetValueOrDefault(model) + 1;
+                continue;
+            }
+
+            foreach (NavPiece piece in pieces)
+            {
+                if (StandingShell(TurnedPoints(prop.Origin, prop.Angles, piece), piece.Triangles, StaticPropContents) is { } shell)
+                {
+                    solids.Add(shell);
+                }
             }
         }
 
-        return (boxes, [.. missing.Select(m => string.Create(CultureInfo.InvariantCulture,
+        return (solids, [.. missing.Select(m => string.Create(CultureInfo.InvariantCulture,
             $"static prop model \"{m.Key}\" has no hull the content gives, so its {m.Value} solid prop{(m.Value == 1 ? string.Empty : "s")} {(m.Value == 1 ? "is" : "are")} left out of the navigation's solids."))]);
     }
 
@@ -705,6 +702,132 @@ public sealed class NavGeometry
         }
 
         return NavBrush.FromPlanes(faces, contents);
+    }
+
+    /// <summary>
+    /// A convex piece as the solid the navigation stands an agent on: its
+    /// upward faces over its footprint, down to its lowest corner.
+    /// </summary>
+    /// <param name="points">The piece's corners, placed.</param>
+    /// <param name="triangles">Its faces, three corner indices each.</param>
+    /// <param name="contents">The brush's contents.</param>
+    /// <returns>The brush, or null when the piece has no volume.</returns>
+    /// <remarks>
+    /// <para>
+    /// <b>Its top is the piece's top.</b> Over any point of the piece's
+    /// footprint (the outline of its corners seen from above), the highest
+    /// solid is where the piece's upward faces are, exactly; a floor the
+    /// navigation finds on it is a floor the game's collision has. A box
+    /// around the piece put its top everywhere over the box: over the low end
+    /// of a slope or a heap, beside a turned bar, and over the air past a
+    /// rounded edge, floors that were not there (on <c>dm_lockdown</c>, 61
+    /// places a player stood with nothing within a step under it).
+    /// </para>
+    /// <para>
+    /// <b>Its sides and underside are over-estimated.</b> The sides are
+    /// the footprint's edges, straight up, and the bottom is flat at the
+    /// lowest corner, so the space under an overhanging face is solid. That
+    /// holds the whole piece (the navigation never blocks less than the
+    /// game), and leaves no downward sloped face, so the file never lists it
+    /// as an overhanging brush (section 5.3 of the format). Only the side
+    /// is over-estimated, which no floor stands on.
+    /// </para>
+    /// <para>
+    /// A normal within a millionth of an axis is snapped to it, so a box
+    /// piece read from a <c>.phy</c>'s float corners, or turned by a quarter
+    /// turn, is an axial box brush; snapping keeps every plane outside the
+    /// corners (<see cref="PlaneBrush"/>), so it never cuts the piece.
+    /// </para>
+    /// </remarks>
+    internal static NavBrush? StandingShell(IReadOnlyList<(double X, double Y, double Z)> points, IReadOnlyList<int> triangles, int contents)
+    {
+        List<(double X, double Y, double Z)> normals = [];
+        void Add(double x, double y, double z)
+        {
+            x = Math.Abs(x) < AxisSnap ? 0 : x;
+            y = Math.Abs(y) < AxisSnap ? 0 : y;
+            z = Math.Abs(z) < AxisSnap ? 0 : z;
+            double length = Math.Sqrt((x * x) + (y * y) + (z * z));
+            (double X, double Y, double Z) n = (x / length, y / length, z / length);
+            if (!normals.Any(m => Math.Abs(m.X - n.X) < 1e-9 && Math.Abs(m.Y - n.Y) < 1e-9 && Math.Abs(m.Z - n.Z) < 1e-9))
+            {
+                normals.Add(n);
+            }
+        }
+
+        foreach ((double x, double y, double z, _) in FacePlanes(points, triangles))
+        {
+            if (z >= AxisSnap)
+            {
+                Add(x, y, z);
+            }
+        }
+
+        List<(double X, double Y)> outline = Outline(points);
+        if (normals.Count == 0 || outline.Count < 3)
+        {
+            return null;
+        }
+
+        for (int i = 0; i < outline.Count; i++)
+        {
+            (double X, double Y) a = outline[i];
+            (double X, double Y) b = outline[(i + 1) % outline.Count];
+            Add(b.Y - a.Y, a.X - b.X, 0);
+        }
+
+        Add(0, 0, -1);
+        if (normals.All(n => (n.X != 0 ? 1 : 0) + (n.Y != 0 ? 1 : 0) + (n.Z != 0 ? 1 : 0) == 1))
+        {
+            double[] lo = [double.MaxValue, double.MaxValue, double.MaxValue];
+            double[] hi = [double.MinValue, double.MinValue, double.MinValue];
+            foreach ((double x, double y, double z) in points)
+            {
+                lo = [Math.Min(lo[0], x), Math.Min(lo[1], y), Math.Min(lo[2], z)];
+                hi = [Math.Max(hi[0], x), Math.Max(hi[1], y), Math.Max(hi[2], z)];
+            }
+
+            Vec3 mins = new((float)lo[0], (float)lo[1], (float)lo[2]);
+            Vec3 maxs = new((float)hi[0], (float)hi[1], (float)hi[2]);
+            return mins.X < maxs.X && mins.Y < maxs.Y && mins.Z < maxs.Z ? NavBrush.Box(mins, maxs, contents) : null;
+        }
+
+        return PlaneBrush(normals, points, contents);
+    }
+
+    /// <summary>How close to an axis a normal is snapped onto it.</summary>
+    private const double AxisSnap = 1e-6;
+
+    /// <summary>The outline of points seen from above: their convex hull in x and y, counter-clockwise, no three in a line.</summary>
+    private static List<(double X, double Y)> Outline(IReadOnlyList<(double X, double Y, double Z)> points)
+    {
+        List<(double X, double Y)> sorted = [.. points.Select(p => (p.X, p.Y)).Distinct().OrderBy(p => p.X).ThenBy(p => p.Y)];
+        if (sorted.Count < 3)
+        {
+            return sorted;
+        }
+
+        static double Cross((double X, double Y) o, (double X, double Y) a, (double X, double Y) b) =>
+            ((a.X - o.X) * (b.Y - o.Y)) - ((a.Y - o.Y) * (b.X - o.X));
+
+        List<(double X, double Y)> hull = [];
+        for (int pass = 0; pass < 2; pass++)
+        {
+            int start = hull.Count;
+            foreach ((double X, double Y) p in pass == 0 ? sorted : Enumerable.Reverse(sorted))
+            {
+                while (hull.Count >= start + 2 && Cross(hull[^2], hull[^1], p) <= 1e-9)
+                {
+                    hull.RemoveAt(hull.Count - 1);
+                }
+
+                hull.Add(p);
+            }
+
+            hull.RemoveAt(hull.Count - 1);
+        }
+
+        return hull;
     }
 
     /// <summary>The rotation of Source angles (pitch, yaw, roll) as a row-major 3 x 3 matrix, exact at quarter turns.</summary>

@@ -974,11 +974,17 @@ holds differs from a linked level's in these ways:
   a cell face (section 8) is only a step across a grid line.
 - **Solid** is the world's brushes, each displacement's surface (every
   triangle extruded one voxel down, or along its normal for a wall or
-  ceiling), and each solid static prop's collision: the box of each convex
-  piece of its model's `.phy`, turned by its angles, or the model's hull box
-  when the content has no `.phy` (each an over-estimate, never an
-  under-estimate; the pieces keep the gaps between them, which one box
-  around a gate frame or a rail does not).
+  ceiling), and each solid static prop's collision: each convex piece of
+  its model's `.phy` (or the model's hull box when the content has no
+  `.phy`), turned by its angles, solid up to the piece's own upward faces
+  over its outline seen from above, and down to its lowest corner. The top
+  is exact, so a floor on a prop is one the game has; the sides and the
+  underside are over-estimates, never under-estimates, and leave no
+  downward sloped face (5.3). The pieces keep the gaps between them, which
+  one box around a gate frame or a rail does not. (A box around each piece
+  put a floor over nothing beside a sloped, turned or rounded piece: on
+  `dm_lockdown`, 61 places a player stood with nothing within a step under
+  it, found by the check below.)
 - **Ladder leaves** are where a climbing player's origin is: a
   `CONTENTS_LADDER` brush and an `info_ladder` box are grown sideways by a
   player's half-width (16), as a `func_useableladder`'s climb already is, so

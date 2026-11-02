@@ -233,6 +233,48 @@ public sealed class NavGeometryTests
     }
 
     /// <summary>
+    /// A static prop's piece is solid up to its own top, not its box's: a
+    /// wedge rising from 0 at x -40 to 48 at x 40 holds the point under its
+    /// slope and not the point over its low end that its box would, and has
+    /// no downward sloped face (so the file lists no brush for it). Turned
+    /// a quarter turn about z, it rises along y instead. A piece that is a
+    /// box keeps the axial box brush.
+    /// </summary>
+    [Fact]
+    public void AStaticPropPieceIsSolidUpToItsOwnTop()
+    {
+        StaticPropLump lump = new();
+        lump.ModelNames.AddRange(["models/wedge.mdl", "models/crate.mdl"]);
+        lump.Props.Add(new StaticProp { PropType = 0, Origin = new Vec3(0, 0, 16), Solid = 6 });
+        lump.Props.Add(new StaticProp { PropType = 0, Origin = new Vec3(500, 0, 16), Angles = new Vec3(0, 90, 0), Solid = 6 });
+        lump.Props.Add(new StaticProp { PropType = 1, Origin = new Vec3(0, 300, 16), Angles = new Vec3(0, 180, 0), Solid = 6 });
+        BspData bsp = new();
+        bsp.GameLumps.Add(lump.Write());
+
+        (IReadOnlyList<NavBrush> solids, _) = NavGeometry.StaticProps(bsp, null, m => m == "models/wedge.mdl" ? [Wedge] : [NavPiece.Box(new Vec3(-8, -4, 0), new Vec3(8, 4, 20))]);
+
+        Assert.Equal(3, solids.Count);
+        NavBrush wedge = solids[0];
+        Assert.False(wedge.IsOverhang);
+        Assert.True(wedge.Overlaps(new NavBox(-1, -1, 16, 1, 1, 39)));
+        Assert.False(wedge.Overlaps(new NavBox(-1, -1, 41, 1, 1, 60)));
+        Assert.False(wedge.Overlaps(new NavBox(-39, -1, 30, -37, 1, 60)));
+        Assert.True(wedge.Overlaps(new NavBox(37, -1, 30, 39, 1, 60)));
+
+        NavBrush turned = solids[1];
+        Assert.False(turned.Overlaps(new NavBox(499, -39, 30, 501, -37, 60)));
+        Assert.True(turned.Overlaps(new NavBox(499, 37, 30, 501, 39, 60)));
+
+        Assert.True(solids[2].IsAxial);
+        Assert.Equal((-8d, 296d, 16d, 8d, 304d, 36d), (solids[2].MinX, solids[2].MinY, solids[2].MinZ, solids[2].MaxX, solids[2].MaxY, solids[2].MaxZ));
+    }
+
+    /// <summary>A wedge 80 long, 64 wide, rising from 0 at x -40 to 48 at x 40.</summary>
+    internal static NavPiece Wedge => new(
+        [new(-40, -32, 0), new(40, -32, 0), new(-40, 32, 0), new(40, 32, 0), new(40, -32, 48), new(40, 32, 48)],
+        [0, 1, 3, 0, 3, 2, 0, 4, 1, 2, 3, 5, 1, 4, 5, 1, 5, 3, 0, 2, 5, 0, 5, 4]);
+
+    /// <summary>
     /// Static props are world solids, each its model's hull turned by its
     /// angles; a prop that is not solid adds nothing, and a model the content
     /// lacks is one warning counting its props.

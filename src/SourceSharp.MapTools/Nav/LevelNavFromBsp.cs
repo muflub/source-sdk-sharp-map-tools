@@ -70,8 +70,8 @@ public sealed record BspNavOptions
 
     /// <summary>
     /// A static prop model's collision pieces by path (<see cref="NavModelBounds.LoadPiecesAsync"/>),
-    /// or null: a prop whose model has them is solid by its pieces' boxes,
-    /// one without by its hull box (<see cref="NavGeometry.StaticProps"/>).
+    /// or null: a prop whose model has them is solid by each piece up to its
+    /// own top, one without by its hull box (<see cref="NavGeometry.StaticProps"/>).
     /// </summary>
     public Func<string, IReadOnlyList<NavPiece>?>? ModelPieces { get; init; }
 
@@ -96,7 +96,8 @@ public sealed record BspNavResult(Nav3dLevel Level, IReadOnlyList<string> Warnin
 /// (<see cref="NavGeometry.FromBsp"/>: player clips are the player class's,
 /// monster clips the NPC class's), each displacement's triangles
 /// (<see cref="NavGeometry.Displacements"/>, one voxel deep) and each solid
-/// static prop's turned hull box (<see cref="NavGeometry.StaticProps"/>).
+/// static prop's collision pieces, each solid up to its own top
+/// (<see cref="NavGeometry.StaticProps"/>).
 /// Doors, movers, breakables and physics props are dynamic obstacles, open
 /// space tagged with their names; ladders come from <c>CONTENTS_LADDER</c>
 /// brushes and the two ladder entities.
