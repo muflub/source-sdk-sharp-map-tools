@@ -571,9 +571,12 @@ Doors (`func_door`, `func_door_rotating`, `prop_door_rotating`), movers
 `func_plat`, `func_platrot`), toggles (`func_brush`, `func_wall_toggle`),
 breakables (`func_breakable`, `func_breakable_surf`), physics
 (`func_physbox*`, `prop_physics*`) and props (`prop_dynamic*`) are **not
-solid** in the grid. A brush entity's own brushes are its solids; a prop's
-model hull (from the game's content), turned by its angles, is its box; a
-prop whose model the content lacks is left out with a warning.
+solid** in the grid. A brush entity's own brushes are its solids, where
+the game places them: the compile stores the brushes of an entity with an
+`origin` (a rotating door's origin brush gives it one) relative to it, so
+they are moved by it; a prop's model hull (from the game's content),
+turned by its angles, is its box; a prop whose model the content lacks is
+left out with a warning.
 
 Each becomes a `DYNO` record, and each voxel it could block carries its
 **dynamic corners** in the record (a corner a static one dominates is

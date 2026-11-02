@@ -46,7 +46,11 @@ public sealed record NavObstacleSource(
 /// away, a trigger's never block. So the brushes a submodel's tree reaches
 /// are set aside; those of an entity of a dynamic class become that
 /// obstacle's solids, the rest (triggers, illusionaries, physics clips) are
-/// dropped as nothing an agent walks into.
+/// dropped as nothing an agent walks into. The compile stores the brushes
+/// of an entity with an <c>origin</c> (a rotating door's origin brush gives
+/// it one) relative to that origin, so they are moved by it, to where the
+/// game places the model; its <c>angles</c> are not applied (a door's
+/// angles name the way it moves, not a turn of its brushes).
 /// </para>
 /// <para>
 /// <b>Props</b> (<c>prop_door_rotating</c>, <c>prop_physics</c>,
@@ -152,11 +156,15 @@ public sealed class NavGeometry
                 if (int.TryParse(model.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out int index) && index > 0
                     && index < modelBrushes.Length)
                 {
+                    // The compile stores the brushes of an entity with an
+                    // origin relative to it, and the game places the model
+                    // at the origin: move them back to where they stand.
+                    Vec3 at = TryVector(entity.Get("origin"), out Vec3 origin) ? origin : default;
                     foreach (int b in modelBrushes[index])
                     {
                         if (byIndex.TryGetValue(b, out NavBrush? brush))
                         {
-                            solids.Add(brush);
+                            solids.Add(at == default ? brush : brush.Translated(at));
                         }
                     }
                 }

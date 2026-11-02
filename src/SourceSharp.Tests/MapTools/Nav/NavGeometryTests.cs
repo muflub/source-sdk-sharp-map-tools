@@ -93,6 +93,33 @@ public sealed class NavGeometryTests
     }
 
     /// <summary>
+    /// A brush entity with an <c>origin</c> (a rotating door's origin brush
+    /// gives it one) is compiled with its brushes relative to that origin,
+    /// as the game places its model there: its obstacle is where the door
+    /// stands in the map, not around the map's origin. One without an origin
+    /// is where its brushes are.
+    /// </summary>
+    [Fact]
+    public async Task ABrushEntityWithAnOriginIsItsObstacleWhereItStands()
+    {
+        RoomDefinition definition = RoomHarness.WalkableRoom("doors", RoomFacing.PositiveX);
+        VmfDocument vmf = RoomHarness.BuildRoomModel(definition);
+        VmfChunk turning = Entity("func_door_rotating", 800011, ("targetname", "turning"), ("origin", "104 128 96"));
+        turning.Children.Add(RoomModel.Slab(RoomHarness.Plain, new Vec3(96, 64, 16), new Vec3(112, 192, 176), 800012));
+        VmfChunk sliding = Entity("func_door", 800013, ("targetname", "sliding"));
+        sliding.Children.Add(RoomModel.Slab(RoomHarness.Plain, new Vec3(160, 64, 16), new Vec3(176, 192, 176), 800014));
+        vmf.Chunks.Add(turning);
+        vmf.Chunks.Add(sliding);
+        RoomObject room = await NavRoomsFixture.CompileAsync(vmf, definition);
+
+        NavGeometry geometry = NavGeometry.FromBsp(room.Bsp);
+
+        Assert.Contains(EntityLump.Parse(room.Bsp[BspLump.Entities]), e => e.ClassName == "func_door_rotating" && e.Get("origin") == "104 128 96");
+        Assert.Equal(new Box(new Vec3(96, 64, 16), new Vec3(112, 192, 176)), geometry.Obstacles.Single(o => o.TargetName == "turning").Bounds);
+        Assert.Equal(new Box(new Vec3(160, 64, 16), new Vec3(176, 192, 176)), geometry.Obstacles.Single(o => o.TargetName == "sliding").Bounds);
+    }
+
+    /// <summary>
     /// A map whose leaf lump is version 0 (each leaf 56 bytes, its ambient
     /// cube inline, as stock BSP version 19 maps store them) splits its
     /// brushes between the world and its entities exactly as the same map
