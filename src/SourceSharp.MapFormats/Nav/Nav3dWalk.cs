@@ -46,7 +46,17 @@ public sealed record Nav3dWalker(float Width, float StandHeight, float CrouchHei
 /// <b>Moves</b>, each both ways:
 /// </para>
 /// <list type="bullet">
-/// <item><description><b>walk</b>: a place to stand and one in a column beside it (east, north, west, south) whose floors are within the step height;</description></item>
+/// <item><description>
+/// <b>walk</b>: a place to stand and one in a column beside it (east, north,
+/// west, south) whose floors are within the step height; or one up to
+/// <c>ceil(width / 2 / voxel) + 1</c> columns along an axis, floors within
+/// the step height, when the agent's box, crouched, fits at the centre of
+/// every column between with its feet at the higher floor. That is a step
+/// over a sheer face: the agent's box stands no nearer the face's foot than
+/// its half-width, so the place in front of the step and the step's top are
+/// columns apart, and the box crosses the foot at the top's height, as the
+/// game's step does;
+/// </description></item>
 /// <item><description><b>jump</b>: the file's jump links of the agent's class between two places to stand;</description></item>
 /// <item><description><b>climb</b>: a place to climb and the places to stand or climb right above or below it in its column;</description></item>
 /// <item><description>
@@ -113,6 +123,8 @@ public static class Nav3dWalk
 
         double s = nav.VoxelSize;
         int reach = (int)Math.Ceiling(((walker.Width * 0.5) + (s * 0.5)) / s);
+        int stride = StepStride(walker, s);
+        bool[] block = blocking.ToArray();
         for (int l = 0; l < leaves; l++)
         {
             if (!stand[l] && !climb[l])
@@ -134,6 +146,23 @@ public static class Nav3dWalk
                         if (stand[o] && Math.Abs(nav.Leaf(o).FloorZ(walker.ClipClass) - floor) <= nav.StepHeight)
                         {
                             Union(l, o);
+                        }
+                    }
+
+                    // Over a sheer step: the place to stand nearest the
+                    // step's foot is columns away from its top, and the box
+                    // crosses the columns between at the higher floor.
+                    for (int k = 2; k <= stride; k++)
+                    {
+                        (first, end) = Column(nav, gx + (k * dx), gy + (k * dy));
+                        for (int o = first; o < end; o++)
+                        {
+                            float other = nav.Leaf(o).FloorZ(walker.ClipClass);
+                            if (stand[o] && Math.Abs(other - floor) <= nav.StepHeight
+                                && Crosses(nav, walker, gx, gy, dx, dy, k, Math.Max(floor, other), block))
+                            {
+                                Union(l, o);
+                            }
                         }
                     }
                 }
@@ -251,6 +280,48 @@ public static class Nav3dWalk
         return walker.Fit == Nav3dFit.Centre
             ? nav.PassableAtCentre(leaf, l.ZLo, walker.Width, walker.CrouchHeight, walker.ClipClass, blocking)
             : nav.Passable(leaf, l.ZLo, walker.Width, walker.CrouchHeight, walker.ClipClass, blocking);
+    }
+
+    /// <summary>
+    /// How many columns along an axis a step can carry an agent: one more
+    /// than the columns its half-width spans, since a sheer step's foot can
+    /// hold its box only that far out.
+    /// </summary>
+    private static int StepStride(Nav3dWalker walker, double voxel) => (int)Math.Ceiling((walker.Width * 0.5) / voxel) + 1;
+
+    /// <summary>
+    /// Whether the agent's box, crouched, fits at the centre of each column
+    /// between a place to stand and one <paramref name="k"/> columns along an
+    /// axis, with its feet at <paramref name="feet"/>: in each, the leaf of
+    /// the first voxel whose bottom is at or above the feet, as a place to
+    /// stand is asked of the voxel above its floor.
+    /// </summary>
+    private static bool Crosses(Nav3dReader nav, Nav3dWalker walker, int gx, int gy, int dx, int dy, int k, double feet, bool[] blocking)
+    {
+        double s = nav.VoxelSize;
+        int z = (int)Math.Ceiling(((feet - nav.Origin.Z) / s) - 1e-6);
+        for (int j = 1; j < k; j++)
+        {
+            (int first, int end) = Column(nav, gx + (j * dx), gy + (j * dy));
+            bool fits = false;
+            for (int o = first; o < end && !fits; o++)
+            {
+                Nav3dLeaf leaf = nav.Leaf(o);
+                if (z >= leaf.ZLo && z <= leaf.ZHi)
+                {
+                    fits = walker.Fit == Nav3dFit.Centre
+                        ? nav.FitsAtCentre(o, z, walker.Width, walker.CrouchHeight, feet, walker.ClipClass, blocking)
+                        : nav.Passable(o, z, walker.Width, walker.CrouchHeight, walker.ClipClass, blocking);
+                }
+            }
+
+            if (!fits)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>A leaf's column in voxel columns across the whole grid.</summary>

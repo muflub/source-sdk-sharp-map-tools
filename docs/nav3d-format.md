@@ -496,7 +496,13 @@ walking agent reaches: places to stand (walkable floors it fits on standing
 or crouched), places to climb (ladder leaves it fits in), and moves between
 them (a step to a column beside within `stepHeight`, the file's jump links,
 up and down a ladder's column, and on and off a ladder to floors its box
-reaches). It is a reference for a game's own graph and what the facts
+reaches). A step also joins two places up to `ceil(width / 2 / voxelSize) + 1`
+columns apart along an axis, floors within `stepHeight`, when the agent fits
+crouched at the centre of every column between with its feet at the higher
+floor: in front of a sheer step the box stands no nearer the face than its
+half-width, so the place before the step and the step's top are two columns
+apart for a 32-wide player at 16-unit voxels, and the box crosses the
+step's foot at the top's height, as the game's step does. It is a reference for a game's own graph and what the facts
 check maps with.
 
 ## 8. What a reader derives at load
