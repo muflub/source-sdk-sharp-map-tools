@@ -258,4 +258,12 @@ public sealed class Nav3dLevel
 
     /// <summary>The id of the room pack the level's rooms came from (<c>ss_pack_id</c>), or <see cref="Guid.Empty"/>.</summary>
     public Guid PackId { get; init; }
+
+    /// <summary>
+    /// The compiled map the navigation was built from, or null: written as
+    /// the optional <see cref="Nav3dFormat.BspBindingTag"/> section when set,
+    /// and not at all when null, so a level without one writes the bytes it
+    /// always did.
+    /// </summary>
+    public Nav3dBspBinding? Bsp { get; init; }
 }

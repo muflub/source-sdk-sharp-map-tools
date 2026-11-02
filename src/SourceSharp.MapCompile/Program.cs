@@ -318,6 +318,19 @@ public static class Program
                     .ConfigureAwait(false);
             }
 
+            case "nav3d":
+            {
+                // The 3D navigation of a compiled map: reads the map, and
+                // mounts its game (|appid_N| through the Steam library) for
+                // the props' model hulls.
+                PhysicalFileSystem disk = new("/");
+                string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                IReadOnlyList<VPath> roots = [.. DefaultSteamRoots(home).Select(VPath.Create)];
+
+                return await Nav3dCommand.RunAsync(disk, roots, args[1..], output, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             case "layout":
             {
                 // A seeded level needs only the library's socket sets, which
@@ -554,6 +567,10 @@ public static class Program
                                                        --record-content <zip>: also write every
                                                        game file the compile read, as a game
                                                        directory with its own gameinfo.txt
+                                                       then <map>.nav3d beside the map, as
+                                                       ssmap nav3d builds it (-no-nav: none;
+                                                       -require-nav: a failed one fails the
+                                                       run; -nav-codec <c>: its codec)
               room <library.vmf> [-out <pack.roompack>] [-nav-turn0] [-nav-codec <c>]
                    [-nolight | -vrad "<vrad options>" [-nodoorlight]]
                    [-incremental [-cache-dir <dir>] | -nocache] [vbsp options]
@@ -624,6 +641,12 @@ public static class Program
               map2d <map.bsp> [-level <level.yaml>] [-out <file.map2d>] [-svg]
                                                       a compiled map's level map overlay,
                                                       cut into the level's cells with -level
+              nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <c>] [-voxel <n>] [-threads <n>] [-check]
+                                                      a compiled map's 3D navigation (.nav3d),
+                                                      bound to the map's bytes; -game for
+                                                      the props' model hulls; -check reads
+                                                      the built file instead and fails on a
+                                                      place to stand with no ground under it
               nav <map.nav3d | level.yaml> [-rooms <pack>] [--obj <out.obj>] [--floor] [--agent N]
                                                       a level navigation's cells, free volume,
                                                       components and door links; OBJ export

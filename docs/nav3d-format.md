@@ -1,6 +1,7 @@
 # The `.nav3d` level navigation file
 
-`ssmap link` writes `<map>.nav3d` beside every linked `<map>.bsp`: a 3D
+`ssmap link` writes `<map>.nav3d` beside every linked `<map>.bsp`, and
+`ssmap nav3d` and `ssmap all` beside any compiled map (section 17.6): a 3D
 navigation of the level's free space for agents that walk, climb, jump,
 swim and fly, of any box size. This document is the file's specification,
 version **2**. It is written so a reader can be built from it alone, in any
@@ -25,7 +26,7 @@ Contents:
 14. [Using the reader from the mod (C#)](#14-using-the-reader-from-the-mod-c)
 15. [A worked example](#15-a-worked-example), byte by byte
 16. [Versioning](#16-versioning)
-17. [Where the data comes from](#17-where-the-data-comes-from): configuration, the room pack, seams, the map-first link
+17. [Where the data comes from](#17-where-the-data-comes-from): configuration, the room pack, seams, the map-first link, a compiled map
 18. [Measurements and the choices they made](#18-measurements-and-the-choices-they-made)
 
 ---
@@ -190,6 +191,7 @@ A reader looks sections up by tag and **ignores tags it does not know**.
 | `BRSP` | 16 bytes | the overhanging brushes' planes: `float32` normal x, y, z, distance |
 | `JUMP` | 16 bytes | `jumpCount` |
 | `CHGT` | `int32` | `columns × rows`, **version 3 only**: each cell's height in voxels, 1 to 255 for a placed cell, 0 for an empty one |
+| `BSPB` | 40 bytes | one, **optional** (versions 2 and 3): the compiled map the navigation was built from (section 12) |
 
 **`CHGT`** (version 3, written after `JUMP`) gives each cell its own
 height in voxels: how far up its columns run from the floor. A room taller
@@ -198,6 +200,19 @@ file has no `CHGT`, and every placed cell is `cellVoxels` tall; the linker
 writes version 2, byte for byte as before heights, for a level whose rooms
 are all cubes. A version 3 reader requires `CHGT` and holds every leaf of a
 cell's columns under its height.
+
+**`BSPB`** (optional, written last) binds a navigation built from a
+compiled map (`ssmap nav3d`, `ssmap all`; section 17.6) to that map's
+exact bytes. A file without it (every linked level, and every file
+written before the section existed) is bound to no map; a reader that
+does not know the tag skips it (section 3.3), which is why it changes no
+version.
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| 0 | `uint32` | the map's checksum: the CRC-32 of every lump but the entities, in lump order, as the engine computes it (`BspMapChecksum`) |
+| 4 | `uint32` | zero |
+| 8 | `byte[32]` | the SHA-256 of the whole `.bsp` file |
 
 **`AGNT`** (per preset)
 
@@ -449,6 +464,47 @@ step from leaf A to B is `floor(B) − floor(A)`; a walker takes it when it
 is at most `stepHeight` (18 by default: exactly 18 walks, 18.001 does not),
 and down any drop. More, and it needs a jump link.
 
+### 7.6 Fit at the voxel's centre
+
+A fit (7.1) holds for an origin **anywhere** in the voxel, so an agent of
+half-width `r` needs `r` clear on every side of the whole voxel: a 32-wide
+player needs 48 units across at 16-unit voxels, and 72 units of head room
+above the voxel's **top**. A passage 40 wide, a ladder close to its wall or
+a 48-high crawlway is closed to it. The same records answer an agent whose
+origin is at the voxel's **horizontal centre** and at a chosen height `z`
+(its feet), with no change to the file:
+
+```
+fits at centre (r, h, z) = not CornersBlock(record, r - voxelSize/2, h, voxelTop := z)
+                           and no listed overhanging brush overlaps
+                           (centre ± r, z .. z + h)
+```
+
+A corner's width is how far the voxel's footprint, grown the same on every
+side, can grow before it meets the solid; a box of half-width `r` centred
+on the voxel is that footprint grown by `r − voxelSize/2`, so the threshold
+is exact for any solid. A solid that reaches into the footprint is stored
+with no width (5.2) and so blocks such an agent whenever it reaches the
+solid's bottom: the answer can be no where the truth is yes, never the
+reverse. The C# reader answers it as `FitsAtCentre` (any height),
+`PassableAtCentre` (feet on the voxel's bottom) and `StandableAtCentre`
+(feet on the leaf's floor). A 32-wide player then needs 32 across and 72
+above its feet.
+
+`Nav3dWalk.Components` derives, from these answers alone, which leaves a
+walking agent reaches: places to stand (walkable floors it fits on standing
+or crouched), places to climb (ladder leaves it fits in), and moves between
+them (a step to a column beside within `stepHeight`, the file's jump links,
+up and down a ladder's column, and on and off a ladder to floors its box
+reaches). A step also joins two places up to `ceil(width / 2 / voxelSize) + 1`
+columns apart along an axis, floors within `stepHeight`, when the agent fits
+crouched at the centre of every column between with its feet at the higher
+floor: in front of a sheer step the box stands no nearer the face than its
+half-width, so the place before the step and the step's top are two columns
+apart for a 32-wide player at 16-unit voxels, and the box crosses the
+step's foot at the top's height, as the game's step does. It is a reference for a game's own graph and what the facts
+check maps with.
+
 ## 8. What a reader derives at load
 
 All of it in a fixed order, so every load of a file gives the same arrays.
@@ -521,9 +577,12 @@ Doors (`func_door`, `func_door_rotating`, `prop_door_rotating`), movers
 `func_plat`, `func_platrot`), toggles (`func_brush`, `func_wall_toggle`),
 breakables (`func_breakable`, `func_breakable_surf`), physics
 (`func_physbox*`, `prop_physics*`) and props (`prop_dynamic*`) are **not
-solid** in the grid. A brush entity's own brushes are its solids; a prop's
-model hull (from the game's content), turned by its angles, is its box; a
-prop whose model the content lacks is left out with a warning.
+solid** in the grid. A brush entity's own brushes are its solids, where
+the game places them: the compile stores the brushes of an entity with an
+`origin` (a rotating door's origin brush gives it one) relative to it, so
+they are moved by it; a prop's model hull (from the game's content),
+turned by its angles, is its box; a prop whose model the content lacks is
+left out with a warning.
 
 Each becomes a `DYNO` record, and each voxel it could block carries its
 **dynamic corners** in the record (a corner a static one dominates is
@@ -575,6 +634,19 @@ inputs (pack: library bytes, room options, navigation settings, tool
 version; level: pack id, level file bytes, link options). The keys are
 written only when the link writes a `.nav3d`: a link without navigation
 writes byte for byte the map a link wrote before navigation existed.
+
+**A map compiled any other way** (a stock map such as `dm_lockdown`, or a
+map from `ssmap all`) has no `ss_level_id`, and its navigation is built
+from the compiled file afterwards (section 17.6). That navigation's
+`levelId` and `packId` are zero, and its `BSPB` section names the map
+instead: the map checksum (the CRC-32 the engine computes, every lump but
+the entities) and the SHA-256 of the whole file. The mod checks the map
+it loaded with `MatchesBsp(bspFileBytes)`, true only when both are equal.
+Both, because the engine's checksum leaves the entities out while the
+navigation reads doors, ladders and props from them: an entity-only edit
+keeps the checksum and changes the hash. `Nav3dBspBinding.Of(bytes)` in
+`SourceSharp.MapFormats` computes the pair, so the tools and the mod
+compute it the same way.
 
 ## 13. How a reader walks it
 
@@ -656,6 +728,10 @@ using SourceSharp.MapFormats.Nav;
 Nav3dReader nav = Nav3dReader.Open(File.ReadAllBytes("maps/level.nav3d"));  // InvalidDataException on a bad file
 if (!nav.MatchesMap(worldspawn["ss_level_id"]))
     throw new InvalidOperationException("level.nav3d belongs to another build of the map");
+
+// A map with no ss_level_id (a stock map, or one from ssmap all): bind by the map's bytes.
+if (!nav.MatchesBsp(File.ReadAllBytes("maps/dm_lockdown.bsp")))
+    throw new InvalidOperationException($"dm_lockdown.nav3d was built for another map ({nav.Bsp?.ToString() ?? "none named"})");
 
 if (nav.TryGetSpawn(out Vec3 spawn, out float yaw))
     SpawnPlayer(spawn, yaw);
@@ -765,6 +841,11 @@ step, so the walk needs the jump.
   changes. It is written only for such a level: a level of cube rooms is
   still version 2, byte for byte, and this build reads both.
 - A **new optional section** gets a new tag and changes no version.
+  **`BSPB`** (the binding to a compiled map, section 12) is the first: an
+  older reader skips it and sees a level bound to no map, and this build
+  reads a file without it the same way, so a version 2 or 3 file written
+  before it is read unchanged and a level without a binding still writes
+  the same bytes.
 - The **header** records its size; a reader finds the directory by
   `headerBytes`, never the constant 160.
 - The room pack's navigation sections carry their own **revision**: **2**
@@ -884,6 +965,96 @@ plan can be built again. The write goes through the file system's replace,
 so a cancelled or failed write leaves the previous file, never half of one.
 When the navigation fails after the map is written, `ssmap link` says `the
 map was written, but its navigation failed: …` and exits with failure.
+
+### 17.6 Built from a compiled map
+
+`ssmap nav3d <map.bsp>` builds the file for any compiled map, and
+`ssmap all` writes it after vrad (`LevelNavFromBsp` in
+`SourceSharp.MapTools`). Nothing in the format changes; what such a file
+holds differs from a linked level's in these ways:
+
+- **The grid** is laid over the world model's bounds: the origin is its
+  low corner rounded down to the voxel, cells are 256 units (16 voxels of
+  16), and every cell is as tall as the map. A map more than 16 voxels tall
+  is a version 3 file whose `CHGT` gives every placed cell the same
+  height; a map taller than 255 voxels is refused.
+- **Cells are not rooms.** `CELL` names no room, there are no doors and no
+  points of interest, and the spawn and arrivals are −1. A neighbour across
+  a cell face (section 8) is only a step across a grid line.
+- **Solid** is the world's brushes, each displacement's surface (every
+  triangle extruded one voxel down, or along its normal for a wall or
+  ceiling), and each solid static prop's collision: each convex piece of
+  its model's `.phy` (or the model's hull box when the content has no
+  `.phy`), turned by its angles, solid up to the piece's own upward faces
+  over its outline seen from above, and down to its lowest corner. The top
+  is exact, so a floor on a prop is one the game has; the sides and the
+  underside are over-estimates, never under-estimates, and leave no
+  downward sloped face (5.3). The pieces keep the gaps between them, which
+  one box around a gate frame or a rail does not. (A box around each piece
+  put a floor over nothing beside a sloped, turned or rounded piece: on
+  `dm_lockdown`, 61 places a player stood with nothing within a step under
+  it, found by the check below.)
+- **Ladder leaves** are where a climbing player's origin is: a
+  `CONTENTS_LADDER` brush and an `info_ladder` box are grown sideways by a
+  player's half-width (16), as a `func_useableladder`'s climb already is, so
+  a ladder close to its wall, or a solid ladder brush, has ladder leaves the
+  player fits in at their centre (7.6). A voxel
+  whose centre lies in a solid leaf of the compiled tree is outside the
+  map's sealed hull and solid too; a cell outside throughout is empty
+  (`ROOT` −1).
+- **Each cell is built from the solids within 128 units of it**, so a
+  record's corners are exact for every agent up to 256 units wide; a wider
+  agent may be told it fits where only a wall farther off would stop it. A
+  fact builds a map with 256-unit and with 512-unit cells and compares the
+  standing and flying answers voxel for voxel.
+- **Ids**: `levelId` and `packId` are zero and `BSPB` names the map
+  (section 12).
+
+The file is the same bytes at any thread count and on every run (cells are
+built independently and stitched in cell order); a fact compares two runs,
+one and four threads, and four builds at once in one process.
+
+**Checked against the map.** `ssmap nav3d <map.bsp> -check` (`NavFloorCheck`)
+reads a built file and checks that every place a player stands (7.6) has
+ground under it in the map's own collision, taken exactly: the world's
+player-solid brushes, each displacement's surface, and each solid static
+prop's `.phy` pieces turned and placed. The player's box, at the voxel's
+centre with its feet on the leaf's floor, is moved down the step height;
+a place where it meets nothing is reported. An over-estimated side
+(above) never fails it; an over-estimated top does, where it puts a floor
+over nothing.
+
+`dm_lockdown` (the stock map, BSP 19, 2,239 brushes, 40 displacements,
+261 static props, three `func_useableladder`s), with the Source SDK Base
+2013 Multiplayer content mounted, Microsoft's .NET 10 runtime, 32 threads
+against one, the same bytes both ways. What a 32-wide player (72 standing,
+36 crouched, `Nav3dWalker.Player`) reaches of its nine deathmatch spawns
+and 77 weapons and items (a spawn's own floor must hold the player; an item
+is reached from a floor within two columns and the player's height):
+
+| build | time | bytes (Brotli 5) | leaves | spawns the player does not fit at | targets in one component |
+| --- | --- | --- | --- | --- | --- |
+| 16-unit voxels, prop hull boxes, fit anywhere (before) | 3.2 s / 23.5 s | 482,383 | 128,117 | 3 | 20 of 86 |
+| 8-unit voxels, prop hull boxes, fit anywhere | 56.9 s / 190.9 s | 1,816,669 | 765,915 | 2 | 41 of 86 |
+| 8-unit voxels, prop pieces, ladders grown, fit at centre | 41.1 s (32 threads) | 2,334,724 | 855,012 | 0 | 68 of 86 |
+| 16-unit voxels, prop hull boxes, fit at centre | 3.2 s | 482,383 | 128,117 | 0 | 50 of 86 |
+| 16-unit voxels, prop pieces' boxes, ladders grown, fit at centre | 3.6 s / 21.9 s | 598,892 | 143,399 | 0 | 86 of 86 |
+| **16-unit voxels, prop pieces to their own tops, brush entities at their origins, sheer steps walked** | **4.5 s / 30.1 s** | **733,923** | **156,159** | **0** | **86 of 86** |
+
+The last row was measured on a 32-core machine under a load average near
+47, so its times are high against the earlier rows'; its file is SHA-256
+`84740bf8…` at 1 and at 32 threads. `ssmap nav3d -check`
+finds, of its 35,054 places a player stands, none without ground within a
+step under the player's box; the row before it had 61 such places (of
+35,152), every one on the box around a sloped, turned or rounded prop
+piece.
+
+Three things close the gap, and a finer voxel is none of them: the fit at
+the voxel's centre (7.6, a reader query on the same records), the static
+props' collision pieces in place of one box each (a hull box closes the
+openings between a prop's pieces), and the grown ladder volumes. Without
+the game's content (no props at all) the same map gives 86 of 86 at the
+centre and 44 of 86 anywhere; a fact checks both on the repo's copy.
 
 ## 18. Measurements and the choices they made
 

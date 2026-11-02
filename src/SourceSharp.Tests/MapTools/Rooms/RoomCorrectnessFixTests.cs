@@ -659,14 +659,19 @@ public sealed class RoomCorrectnessFixTests
         Assert.Equal(["0", "1"], entities.Where(e => e.ClassName == "func_occluder").Select(e => e.Get("occludernumber")));
         Assert.Equal(["184.00", "316.00"], entities.Where(e => e.ClassName == "info_ladder").Select(e => e.Get("mins.x")));
 
-        // An ENT section of revision 1 (entities turned before these fixes) is absent.
+        // An ENT section of revision 1 (entities turned before these fixes),
+        // or of revision 2 (a useable ladder's points carried as written), is absent.
         RoomPackSectionData ent1 = sections.Single(s => s.Tag == "ENT1");
-        byte[] old = ent1.Bytes.ToArray();
-        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(old.AsSpan(9), 1);
-        RoomLinkData? stale = Read(compiled, [.. sections.Select(s => s.Tag == "ENT1" ? s with { Bytes = old } : s)]);
-        Assert.Null(stale!.Rotation(1)!.Entities);
-        Assert.NotNull(stale.Rotation(1)!.Geometry);
-        Assert.Equal(2, RoomLinkSections.RevisionFor("ENT3"));
+        for (int revision = 1; revision <= 2; revision++)
+        {
+            byte[] old = ent1.Bytes.ToArray();
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(old.AsSpan(9), revision);
+            RoomLinkData? stale = Read(compiled, [.. sections.Select(s => s.Tag == "ENT1" ? s with { Bytes = old } : s)]);
+            Assert.Null(stale!.Rotation(1)!.Entities);
+            Assert.NotNull(stale.Rotation(1)!.Geometry);
+        }
+
+        Assert.Equal(3, RoomLinkSections.RevisionFor("ENT3"));
         Assert.Equal(RoomLinkSections.Revision, RoomLinkSections.RevisionFor("GEO3"));
 
         static RoomLinkData? Read(RoomObject room, IReadOnlyList<RoomPackSectionData> sections) =>
@@ -727,6 +732,79 @@ public sealed class RoomCorrectnessFixTests
         }
 
         Assert.Equal(RoomBrushHarness.Observed(whole), RoomBrushHarness.Observed(linked));
+    }
+
+    // ---- 10. useable ladder points ----------------------------------------------
+
+    /// <summary>
+    /// A room with a <c>func_useableladder</c>, linked at each rotation beside
+    /// a second, unturned placement: its <c>point0</c> and <c>point1</c> are
+    /// points in the map, as an origin is, so each linked ladder's are the
+    /// room's turned and moved to its cell, and the flattened compile's are
+    /// the same. Before the fix the split, the flatten and the link all
+    /// carried them as written, so a linked map's ladders stood at their
+    /// room-local coordinates.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Rotations))]
+    public async Task ALinkedUseableLaddersPointsMoveWithItsRoom(int rotation)
+    {
+        VmfDocument library = RoomHarness.LibraryVmf(Hub);
+        library.Chunks.Add(Entity("func_useableladder", 700010, ("origin", "40 200 20"), ("point0", "40 200 20"), ("point1", "40 200 180")));
+
+        (BspData linked, BspData whole) = await LinkAndCompileFlatAsync(library, $"hub@{rotation}, hub");
+
+        string Moved(int cellX, int turns, Vec3 local) =>
+            VmfPlacement.Format(QuarterTurn.Of(new RoomTransform(new RoomPlacement("hub", cellX, 0, turns), 256)).Apply(local));
+        List<string> expected = [.. new[] { (0, rotation / 90), (1, 0) }
+            .Select(p => $"{Moved(p.Item1, p.Item2, new Vec3(40, 200, 20))} / {Moved(p.Item1, p.Item2, new Vec3(40, 200, 180))}")
+            .Order(StringComparer.Ordinal)];
+        List<string> Points(BspData bsp) =>
+            [.. EntityLump.Parse(bsp[BspLump.Entities]).Where(e => e.ClassName == "func_useableladder")
+                .Select(e => $"{e.Get("point0")} / {e.Get("point1")}")
+                .Order(StringComparer.Ordinal)];
+
+        Assert.Equal(expected, Points(linked));
+        Assert.Equal(expected, Points(whole));
+        if (rotation == 90)
+        {
+            Assert.Equal(["296 200 20 / 296 200 180", "56 40 20 / 56 40 180"], expected);
+        }
+    }
+
+    /// <summary>
+    /// The split and the flatten move a useable ladder's points as they move
+    /// its origin (turned, then the offset added); another class's keys of
+    /// the same names are carried as written, and a ladder point that is not
+    /// three numbers is refused naming the key.
+    /// </summary>
+    [Fact]
+    public void TheSplitAndTheFlattenMoveAUseableLaddersPoints()
+    {
+        VmfChunk ladder = Entity("func_useableladder", 700011, ("point0", "40 200 20"), ("point1", "40 200 180"), ("origin", "40 200 20"));
+        VmfChunk moved = VmfPlacement.MoveEntity(ladder, new QuarterTurn(1, new Vec3(512, 0, 0)));
+        Assert.Equal(("312 40 20", "312 40 180", "312 40 20"), (moved.GetValue("point0"), moved.GetValue("point1"), moved.GetValue("origin")));
+        VmfChunk other = Entity("info_target", 700012, ("point0", "40 200 20"));
+        Assert.Equal("40 200 20", VmfPlacement.MoveEntity(other, new QuarterTurn(1, new Vec3(512, 0, 0))).GetValue("point0"));
+
+        ladder.Children[2] = new VmfKey("point0", "up");
+        Assert.Contains("point0", Assert.Throws<RoomLibraryException>(() => VmfPlacement.MoveEntity(ladder, new QuarterTurn(1, Vec3.Zero))).Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The link's two steps move the points the same way: the turn the room
+    /// compile stores (a point, kind 1), then the cell.
+    /// </summary>
+    [Fact]
+    public void TheLinkMovesAUseableLaddersPoints()
+    {
+        BspEntity ladder = new();
+        ladder.Pairs.Add(new BspKeyValue("classname", "func_useableladder"));
+        ladder.Pairs.Add(new BspKeyValue("point0", "40 200 20"));
+        ladder.Pairs.Add(new BspKeyValue("point1", "40 200 180"));
+        BspEntity moved = LevelLinker.MoveEntity(ladder, new RoomTransform(new RoomPlacement("r", 1, 0, 1), 256), "r");
+        Assert.Equal(("312 40 20", "312 40 180"), (moved.Get("point0"), moved.Get("point1")));
+        Assert.All(LevelLinker.TurnEntity(ladder, 1, "r").Where(p => p.Key.StartsWith("point", StringComparison.Ordinal)), p => Assert.Null(p.Value));
     }
 
     // ---- helpers ---------------------------------------------------------------

@@ -3,7 +3,32 @@
     <!-- Windings, lump arrays and the pak writer all want spans over pooled
          memory rather than managed arrays copied twice. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <IsPackable>false</IsPackable>
+
+    <!--
+      The one library packed as a NuGet package: the game mod reads .nav3d
+      and .map2d files with this assembly's readers, and takes it as a package
+      of a pinned version from a local feed (tools/pack-mapformats.sh writes
+      bin/nupkg/SourceSharp.MapFormats.<Version>.nupkg), never as a project
+      reference across repositories: a fresh checkout or CI of the game has
+      no sibling tree, and a pinned version is what lets the game check that
+      the navigation it built matches the reader it runs.
+
+      The version rule: every drop handed to another repository gets a new
+      version, even when only a fix changed. A package already handed over is
+      never repacked under its old version, because a consumer's NuGet cache
+      keeps the first copy it saw and goes on reading it.
+
+      The package carries this assembly and its XML documentation and nothing
+      else: the project has no PackageReference and no ProjectReference
+      (below), so the package has no dependencies. A fact packs the built
+      assembly and checks exactly that (MapFormatsPackageTests).
+    -->
+    <IsPackable>true</IsPackable>
+    <PackageId>SourceSharp.MapFormats</PackageId>
+    <Version>1.0.2</Version>
+    <Authors>SourceSharp</Authors>
+    <Description>The Source map formats as SourceSharp's map tools read and write them: BSP lumps, the .nav3d level navigation reader and writer, the .map2d level map overlay, and the map checksum both bind to. No dependencies.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
 
     <!--
       A deliberate, documented public surface.

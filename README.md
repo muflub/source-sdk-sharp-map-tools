@@ -145,6 +145,14 @@ Readers and writers for every file the chain touches, and nothing else.
   ([`docs/map2d-format.md`](docs/map2d-format.md)) and draws its SVG
   preview; `Bsp/BspMapChecksum` is the map checksum the file binds to.
 
+It is the one library shipped as a NuGet package, for the game mod:
+`tools/pack-mapformats.sh` packs it into the local feed `bin/nupkg`
+(`SourceSharp.MapFormats.<version>.nupkg`), and the game restores it from
+there at a pinned version. The version is the `<Version>` in
+`SourceSharp.MapFormats.csproj`; every drop handed over gets a new one. The
+package holds the assembly and its documentation and has no dependencies
+(`MapFormatsPackageTests` packs the built assembly and checks both).
+
 ### `SourceSharp.MapTools`
 
 The compile passes, grouped by stage and by concern.
@@ -399,6 +407,16 @@ Chain options apply to every stage: `-game`, `-threads`, `-compliance`, `-v`,
 
 A `--vvis` section also takes `-fastflow[=N]` and `-separator auto|256|512`.
 
+After vrad, when the map was written, the chain builds the finished map's
+navigation and writes `<map>.nav3d` beside it by the same path as
+[`ssmap nav3d`](#nav3d), with the chain's game and `-threads`. Not after
+vbsp alone: vvis and vrad rewrite lumps the navigation's binding covers, so
+only the final map can be named. `-no-nav` writes none; `-nav-codec <codec>`
+chooses its storage (Brotli 5 by default). A navigation that cannot be
+written leaves the map as written and warns; `-require-nav` makes that a
+failure. A `.nav3d` left from an earlier compile names the old map's bytes,
+so the game's `MatchesBsp` refuses it.
+
 `--record-content <zip>` records every game file the compile looked up and
 writes the ones it found to a zip, whether the compile succeeds or fails part
 way. The zip is a game directory:
@@ -419,6 +437,69 @@ way. The zip is a game directory:
 
 Unzip it anywhere and compile against it with no Steam install:
 `ssmap all <map> -game <unzipped dir>`.
+
+### `nav3d`
+
+```sh
+ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>] [-check]
+```
+
+Builds the 3D navigation (`.nav3d`, the format `link` writes for a level
+of rooms) of any compiled map, from the `.bsp` alone: a stock map such as
+`dm_lockdown`, or one from `ssmap all`. The file goes beside the map
+(`<map>.nav3d`) unless `-out` names it, Brotli 5 unless `-nav-codec` says
+otherwise (`none`, `deflate[:0-9]`, `brotli[:0-11]`).
+
+- **The grid** is 256-unit cells of 16-unit voxels laid over the world
+  model's bounds, every cell as tall as the map (at most 255 voxels), with
+  the room defaults: step 18, jump 56 up and 100 across, the presets
+  `standing 32 72 player; flyer 32 32 npc`. Each cell is built from the
+  solids within 128 units of it, so a clearance is exact for any agent up to
+  256 units wide; cells are built on `-threads` threads (all cores by
+  default), and the file is the same bytes at any count.
+- **Solid**: the world's brushes (player clips for the player class, monster
+  clips for the NPC class), each displacement's triangles (the compile keeps
+  no brush for them), and each solid static prop's collision: each convex
+  piece of its model's `.phy` (the model's hull box when the content has
+  no `.phy`), turned by its angles, solid up to the piece's own top over
+  its outline, so the gaps between a gate's or a rail's pieces stay open
+  and a floor on a prop is one the game has. **Outside** the map's sealed hull is solid too,
+  read from the compiled tree, so a cell outside throughout holds nothing.
+- **Dynamic obstacles** are the doors, movers, toggles, breakables and
+  physics and dynamic props, by their `targetname`; **ladders** are
+  `CONTENTS_LADDER` brushes, `info_ladder` boxes and `func_useableladder`
+  climbs, each grown by a player's half-width so the voxels a climbing
+  player's origin is in are ladder leaves even beside a wall.
+- **A player's exact width**: the reader's `FitsAtCentre`,
+  `StandableAtCentre` and `Nav3dWalk.Components` answer a 32-wide player
+  standing in the middle of a 16-unit voxel (32 units across, not the 48 a
+  fit anywhere in the voxel needs), and which floors it reaches walking,
+  crouching, jumping and climbing (format section 7.6). `-voxel 8` halves
+  the voxel (it must divide 256) at about 13 times the time and 4 times the
+  file on `dm_lockdown`, and does not reach more.
+- **Props need the game**: their hulls come from the models in the game's
+  content, `-game <dir>` (the folder with `gameinfo.txt`), or the map's
+  folder's parent when the map is in `<game>/maps/`. A model the content
+  lacks is one warning and its props are left out; with no game at all the
+  navigation is built without props and says so.
+- **Bound to the map**: the file's optional `BSPB` section records the
+  map's checksum and SHA-256, and the reader's `MatchesBsp(bspBytes)` says
+  whether a loaded map is the one it was built from (format section 12). It
+  carries no level id: that binding is for linked levels.
+
+One line reports the file: its size, the cells holding navigation, the
+leaves, walkable floors, jump links, obstacles and ladder leaves, and the
+time. `ssmap nav` inspects it.
+
+**`-check`** builds nothing: it reads the built file (beside the map, or
+`-out`), refuses one bound to other bytes, and checks that every place a
+player stands (`Nav3dWalk.IsStand`, fitted at the voxel's centre) has
+ground under it in the map's own collision, taken exactly: the world's
+player-solid brushes, the displacements' surfaces and the solid static
+props' `.phy` pieces from `-game`. A place has ground when the player's box,
+moved down a step (18 units) from its feet, meets a solid. It lists the
+first 20 places that have none, the count, and fails when there is any
+(`NavFloorCheck` in the library).
 
 ### Per-machine defaults
 
@@ -494,6 +575,7 @@ ssmap layout <key>=<library.vmf> [<key>=<library.vmf> ...] -rows R -columns C -s
 ssmap layout <library.vmf> ... -sequence K -name <base> [-out <folder>]
 ssmap nav <map.nav3d | level.yaml> [-rooms <pack.roompack>] [--obj <out.obj>] [--floor] [--agent <index|name>]
 ssmap map2d <map.bsp> [-level <level.yaml>] [-out <file.map2d>] [-svg]
+ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>] [-check]
 ```
 
 `ssmap rooms` lists a library without compiling it: each room's name, its

@@ -118,6 +118,13 @@ public static class Nav3dWriter
             sections.Add((Nav3dFormat.CellHeightsTag, Int32s([.. heights])));
         }
 
+        // The optional binding to a compiled map, last of all: a level
+        // without one keeps every section, and every byte, where it was.
+        if (level.Bsp is { } binding)
+        {
+            sections.Add((Nav3dFormat.BspBindingTag, binding.ToBytes()));
+        }
+
         long offset = Nav3dFormat.HeaderBytes + ((long)sections.Count * Nav3dFormat.DirectoryEntryBytes);
         long[] offsets = new long[sections.Count];
         for (int i = 0; i < sections.Count; i++)
