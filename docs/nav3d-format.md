@@ -1038,7 +1038,16 @@ is reached from a floor within two columns and the player's height):
 | 8-unit voxels, prop hull boxes, fit anywhere | 56.9 s / 190.9 s | 1,816,669 | 765,915 | 2 | 41 of 86 |
 | 8-unit voxels, prop pieces, ladders grown, fit at centre | 41.1 s (32 threads) | 2,334,724 | 855,012 | 0 | 68 of 86 |
 | 16-unit voxels, prop hull boxes, fit at centre | 3.2 s | 482,383 | 128,117 | 0 | 50 of 86 |
-| **16-unit voxels, prop pieces, ladders grown, fit at centre** | **3.6 s / 21.9 s** | **598,892** | **143,399** | **0** | **86 of 86** |
+| 16-unit voxels, prop pieces' boxes, ladders grown, fit at centre | 3.6 s / 21.9 s | 598,892 | 143,399 | 0 | 86 of 86 |
+| **16-unit voxels, prop pieces to their own tops, brush entities at their origins, sheer steps walked** | **4.5 s / 30.1 s** | **733,923** | **156,159** | **0** | **86 of 86** |
+
+The last row was measured on a 32-core machine under a load average near
+47, so its times are high against the earlier rows'; its file is SHA-256
+`84740bf8…` at 1 and at 32 threads. `ssmap nav3d -check`
+finds, of its 35,054 places a player stands, none without ground within a
+step under the player's box; the row before it had 61 such places (of
+35,152), every one on the box around a sloped, turned or rounded prop
+piece.
 
 Three things close the gap, and a finer voxel is none of them: the fit at
 the voxel's centre (7.6, a reader query on the same records), the static
