@@ -425,6 +425,7 @@ resolution, drops, folding, singletons, style renumbering.
 | `angles`, `angle` (not -1 / -2), `movedir`, `gibdir` | yaw + 90 × turns |
 | `pitch` (lights) | unchanged |
 | `mins.x` ... `maxs.z` (`info_ladder`) | the box through `MoveBox` |
+| `point0`, `point1` (`func_useableladder`) | `Apply`, by the split, the flatten and the link (the turn stored as a point, entities section revision 3) |
 | `BasisOrigin` (`info_overlay`) | `Apply` |
 | `BasisU`, `BasisV`, `BasisNormal` | `ApplyNormal` |
 | `lightingorigin` and every other name key | a name, not a position |

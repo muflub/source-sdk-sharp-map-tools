@@ -166,12 +166,14 @@ internal static class RoomLinkSections
     /// <summary>
     /// The revision of the <c>ENT</c><i>r</i> sections this build writes and
     /// reads: 2 since the turn keeps the sun's angles and turns an
-    /// <c>info_ladder</c>'s bounds (key kind 2). A revision-1 section holds
-    /// entities turned the old way, so it reads as absent and the link turns
-    /// them afresh, rather than linking a turned sun or room-local ladder.
-    /// The other sections' bytes did not change and keep <see cref="Revision"/>.
+    /// <c>info_ladder</c>'s bounds (key kind 2), 3 since it turns a
+    /// <c>func_useableladder</c>'s <c>point0</c> and <c>point1</c> as points
+    /// (key kind 1). An older section holds entities turned the old way, so
+    /// it reads as absent and the link turns them afresh, rather than linking
+    /// a turned sun or a room-local ladder. The other sections' bytes did not
+    /// change and keep <see cref="Revision"/>.
     /// </summary>
-    public const int EntitiesRevision = 2;
+    public const int EntitiesRevision = 3;
 
     /// <summary>The revision a section of this tag is written with, and must carry to be read.</summary>
     /// <param name="tag">The section's tag.</param>

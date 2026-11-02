@@ -213,12 +213,29 @@ internal static class VmfPlacement
     /// <summary>The key an <c>info_overlay</c> is placed by: the point its basis stands on.</summary>
     private const string OverlayOriginKey = "BasisOrigin";
 
+    /// <summary>
+    /// Whether a key of an entity is one of a <c>func_useableladder</c>'s
+    /// two points (<c>point0</c>, <c>point1</c>): where its climb starts and
+    /// ends in the map, so a point that moves with the room as an origin does.
+    /// </summary>
+    /// <param name="classname">The entity's classname.</param>
+    /// <param name="key">The key.</param>
+    /// <returns>True for those two keys of that class.</returns>
+    internal static bool IsLadderPoint(string? classname, string key) =>
+        string.Equals(classname, "func_useableladder", StringComparison.OrdinalIgnoreCase)
+        && (IsKey(key, "point0") || IsKey(key, "point1"));
+
     /// <summary>An entity moved: its origin, its yaw, its overlay basis and its brushes.</summary>
     /// <param name="entity">The <c>entity</c> chunk.</param>
     /// <param name="turn">The move.</param>
     /// <returns>The moved copy.</returns>
     /// <exception cref="RoomLibraryException">A placement key or a brush is malformed.</exception>
     /// <remarks>
+    /// <para>
+    /// <b>A <c>func_useableladder</c>'s <c>point0</c> and <c>point1</c></b>
+    /// are where its climb runs in the map, and move as points, as its origin
+    /// does (<see cref="IsLadderPoint"/>).
+    /// </para>
     /// <para>
     /// <b>Overlays are placed by their basis, not their origin.</b> vbsp
     /// builds an <c>info_overlay</c> at <c>BasisOrigin</c>, oriented by
@@ -259,7 +276,7 @@ internal static class VmfPlacement
 
             VmfKey key = (VmfKey)node;
             string value = key.Value;
-            if (IsKey(key.Name, "origin") || IsKey(key.Name, OverlayOriginKey))
+            if (IsKey(key.Name, "origin") || IsKey(key.Name, OverlayOriginKey) || IsLadderPoint(className, key.Name))
             {
                 value = Format(turn.Apply(Vector(value, key.Name, entity)));
             }

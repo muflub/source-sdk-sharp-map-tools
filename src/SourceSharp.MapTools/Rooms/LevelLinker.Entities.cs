@@ -553,7 +553,7 @@ public static partial class LevelLinker
                 continue;
             }
 
-            pairs.Add(overlay && TurnOverlayPair(pair, turns, room) is { } basis ? basis : TurnPair(pair, turns, yawTurns, room, brushClass));
+            pairs.Add(overlay && TurnOverlayPair(pair, turns, room) is { } basis ? basis : TurnPair(pair, turns, yawTurns, room, brushClass, entity.ClassName));
         }
 
         return pairs;

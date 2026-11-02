@@ -282,8 +282,9 @@ public static partial class LevelLinker
     }
 
     /// <summary>
-    /// One key of a moved entity with its turn applied: the origin turned
-    /// (and moved at link), a yaw turned by <paramref name="yawTurns"/> (the
+    /// One key of a moved entity with its turn applied: the origin and a
+    /// <c>func_useableladder</c>'s two points turned (and moved at link), a
+    /// yaw turned by <paramref name="yawTurns"/> (the
     /// room's turn, or 0 for the sun; <see cref="TurnEntity"/> decides),
     /// anything else as written.
     /// </summary>
@@ -294,9 +295,9 @@ public static partial class LevelLinker
     /// keys (<c>movedir</c>, <c>pushdir</c>, <c>gibdir</c>) always turn, each
     /// as a yaw.
     /// </remarks>
-    private static RoomLinkPair TurnPair(BspKeyValue pair, int turns, int yawTurns, string room, string? brushClass = null)
+    private static RoomLinkPair TurnPair(BspKeyValue pair, int turns, int yawTurns, string room, string? brushClass = null, string? className = null)
     {
-        if (IsKey(pair.Key, "origin"))
+        if (IsKey(pair.Key, "origin") || VmfPlacement.IsLadderPoint(className, pair.Key))
         {
             return new RoomLinkPair(pair.Key, null, RoomTransform.Rotate(ParseVec(pair.Value, "origin", room), turns));
         }
