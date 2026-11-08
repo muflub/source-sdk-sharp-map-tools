@@ -74,8 +74,8 @@ public sealed record MapModelUse(string Model, string Kind, int Count);
 /// </summary>
 /// <remarks>
 /// <para>
-/// Only the lumps that name content are read, through <see cref="BspLumps"/>
-/// so maps shipped with LZMA-compressed lumps read too: faces through texinfo and
+/// Only the lumps that name content are used (the loader unpacks maps
+/// shipped with LZMA-compressed lumps): faces through texinfo and
 /// texdata to the material string table (with each face's area), the static
 /// prop dictionary and instances, and the entity lump for model keys,
 /// overlays, decals and the sky name. Lighting, visibility and the pak are
@@ -129,7 +129,7 @@ public static partial class MapUsageScanner
                     else
                     {
                         ContentSource? source = await content.ResolveAsync(path, token).ConfigureAwait(false);
-                        MapUsage usage = Read(MapName(path.Value), bytes);
+                        MapUsage usage = await ReadAsync(MapName(path.Value), bytes, token).ConfigureAwait(false);
                         maps.Add(usage with { Source = source?.Mount ?? string.Empty });
                         if (usage.StaticPropsIssue is { } partial)
                         {
@@ -153,26 +153,28 @@ public static partial class MapUsageScanner
     /// <summary>Reads one map's usage.</summary>
     /// <param name="name">The map's name, for undoing the compiler's per-map renames.</param>
     /// <param name="bytes">The whole <c>.bsp</c>.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The usage, with an empty <see cref="MapUsage.Source"/>.</returns>
-    /// <exception cref="InvalidBspException">The file is not a BSP this port reads.</exception>
-    /// <exception cref="InvalidDataException">A compressed lump does not unpack.</exception>
-    public static MapUsage Read(string name, byte[] bytes)
+    /// <exception cref="InvalidBspException">The file is not a BSP this port reads, or a compressed lump does not unpack.</exception>
+    public static async Task<MapUsage> ReadAsync(string name, byte[] bytes, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         ArgumentNullException.ThrowIfNull(bytes);
 
-        BspLumps bsp = BspLumps.Read(bytes);
-        ReadOnlyMemory<byte> faceLump = bsp.Lump(BspLump.Faces);
-        if (faceLump.IsEmpty)
+        // The loader unpacks LZMA-compressed lumps and game lump entries, as
+        // the engine does; shipped maps (all of Team Fortress 2's) are.
+        BspData bsp;
+        using (MemoryStream stream = new(bytes, writable: false))
         {
-            faceLump = bsp.Lump(BspLump.FacesHdr);
+            bsp = await BspFile.LoadAsync(stream, cancellationToken).ConfigureAwait(false);
         }
 
-        ReadOnlyMemory<byte> texInfoLump = bsp.Lump(BspLump.TexInfo);
-        ReadOnlyMemory<byte> texDataLump = bsp.Lump(BspLump.TexData);
-        ReadOnlyMemory<byte> stringTableLump = bsp.Lump(BspLump.TexDataStringTable);
-        ReadOnlyMemory<byte> stringDataLump = bsp.Lump(BspLump.TexDataStringData);
-        ReadOnlyMemory<byte> entityLump = bsp.Lump(BspLump.Entities);
+        ReadOnlyMemory<byte> faceLump = bsp[BspLump.Faces].IsEmpty ? bsp[BspLump.FacesHdr].Data : bsp[BspLump.Faces].Data;
+        ReadOnlyMemory<byte> texInfoLump = bsp[BspLump.TexInfo].Data;
+        ReadOnlyMemory<byte> texDataLump = bsp[BspLump.TexData].Data;
+        ReadOnlyMemory<byte> stringTableLump = bsp[BspLump.TexDataStringTable].Data;
+        ReadOnlyMemory<byte> stringDataLump = bsp[BspLump.TexDataStringData].Data;
+        BspLumpData entityLump = bsp[BspLump.Entities];
 
         ReadOnlySpan<DFace> faces = BspStructView.As<DFace>(faceLump.Span);
         ReadOnlySpan<TexInfo> texInfos = BspStructView.As<TexInfo>(texInfoLump.Span);
@@ -204,7 +206,7 @@ public static partial class MapUsageScanner
             Add(materials, (material, "face"), face.Area);
         }
 
-        List<BspEntity> entities = EntityLump.Parse(new BspLumpData(entityLump, 0, 0));
+        List<BspEntity> entities = EntityLump.Parse(entityLump);
         Dictionary<(string, string), int> models = [];
         string? skyName = null;
         foreach (BspEntity entity in entities)
@@ -231,7 +233,7 @@ public static partial class MapUsageScanner
 
         int staticProps = 0;
         string? staticPropsIssue = null;
-        foreach (GameLumpEntry entry in bsp.GameLumps())
+        foreach (GameLumpEntry entry in bsp.GameLumps)
         {
             if (entry.Id != GameLumpId.MakeId(GameLumpId.StaticProps))
             {
