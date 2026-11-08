@@ -85,7 +85,7 @@ public class DeterministicMathRuleTests
     /// prop lit near it, came out different on Apple Silicon.
     /// </remarks>
     public static TheoryData<string> LibraryAssemblies =>
-        ["SourceSharp.MapFormats", "SourceSharp.MapTools", "SourceSharp.RoomContracts", "SourceSharp.MapGen"];
+        ["SourceSharp.MapFormats", "SourceSharp.MapTools", "SourceSharp.RoomContracts", "SourceSharp.MapGen", "SourceSharp.MapPreview"];
 
     [Theory]
     [MemberData(nameof(LibraryAssemblies))]
@@ -163,6 +163,7 @@ public class DeterministicMathRuleTests
         "SourceSharp.MapFormats" => typeof(BspData).Assembly,
         "SourceSharp.RoomContracts" => typeof(SourceSharp.RoomContracts.LogicRoom).Assembly,
         "SourceSharp.MapGen" => typeof(SourceSharp.MapGen.Content.SyntheticContent).Assembly,
+        "SourceSharp.MapPreview" => typeof(SourceSharp.MapPreview.PreviewSession).Assembly,
         _ => typeof(VPath).Assembly,
     };
 

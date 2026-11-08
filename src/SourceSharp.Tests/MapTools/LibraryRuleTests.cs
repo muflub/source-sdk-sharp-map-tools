@@ -37,7 +37,7 @@ public class LibraryRuleTests
     /// </summary>
     private static Assembly RoomContracts => typeof(SourceSharp.RoomContracts.LogicRoom).Assembly;
 
-    public static TheoryData<string> LibraryAssemblies => ["SourceSharp.MapFormats", "SourceSharp.MapTools", "SourceSharp.RoomContracts"];
+    public static TheoryData<string> LibraryAssemblies => ["SourceSharp.MapFormats", "SourceSharp.MapTools", "SourceSharp.RoomContracts", "SourceSharp.MapPreview"];
 
     /// <summary>
     /// The contract assembly references the framework and nothing else, not
@@ -311,6 +311,7 @@ public class LibraryRuleTests
         "SourceSharp.MapFormats" => MapFormats,
         "SourceSharp.MapTools" => MapTools,
         "SourceSharp.RoomContracts" => RoomContracts,
+        "SourceSharp.MapPreview" => typeof(SourceSharp.MapPreview.PreviewSession).Assembly,
         _ => throw new ArgumentOutOfRangeException(nameof(name), name, "not a map-tools library"),
     };
 }

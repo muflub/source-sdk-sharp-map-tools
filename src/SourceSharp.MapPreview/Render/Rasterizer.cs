@@ -100,10 +100,14 @@ public interface IPixelSink
 /// result is the same however many threads run.
 /// </para>
 /// <para>
-/// Edges are inclusive (a pixel centre exactly on an edge belongs to both
-/// triangles that share it, so a seam can never open), and the depth test is
+/// A pixel centre exactly on an edge belongs to exactly one of the two
+/// triangles sharing it: once both are wound the same way they walk the
+/// shared edge in opposite directions, and the edge is owned by the triangle
+/// that walks it downward (or rightward when it is level). No seam can open
+/// and no pixel is drawn twice, which matters for blending: a translucent
+/// quad's diagonal would otherwise be blended twice. The depth test is
 /// strictly less, so of two triangles at the same depth the earlier one in
-/// scene order wins. That pairing makes every image a pure function of the
+/// scene order wins. Together these make every image a pure function of the
 /// scene and the camera.
 /// </para>
 /// <para>
@@ -397,7 +401,7 @@ public static class Rasterizer
                     float e0 = Edge(b.X, b.Y, c.X, c.Y, px, py);
                     float e1 = Edge(c.X, c.Y, a.X, a.Y, px, py);
                     float e2 = Edge(a.X, a.Y, b.X, b.Y, px, py);
-                    if (e0 < 0 || e1 < 0 || e2 < 0)
+                    if (!Inside(e0, c.X - b.X, c.Y - b.Y) || !Inside(e1, a.X - c.X, a.Y - c.Y) || !Inside(e2, b.X - a.X, b.Y - a.Y))
                     {
                         continue;
                     }
@@ -429,6 +433,14 @@ public static class Rasterizer
                 }
             }
         }
+
+        /// <summary>
+        /// Whether a pixel is inside one edge: strictly inside, or exactly on
+        /// an edge this triangle owns (one walked downward, or rightward when
+        /// level), so a shared edge has exactly one owner.
+        /// </summary>
+        internal static bool Inside(float edge, float dx, float dy) =>
+            edge > 0 || (edge == 0 && (dy > 0 || (dy == 0 && dx > 0)));
 
         private static float Edge(float ax, float ay, float bx, float by, float px, float py) =>
             ((bx - ax) * (py - ay)) - ((by - ay) * (px - ax));

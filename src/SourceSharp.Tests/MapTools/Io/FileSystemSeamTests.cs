@@ -90,6 +90,18 @@ public class FileSystemSeamTests
             + string.Join(Environment.NewLine, offenders));
     }
 
+    /// <summary>
+    /// The map preview library is hosted the same way MapTools is, so it
+    /// reaches files only through <see cref="IFileSystem"/> and
+    /// <see cref="IContentFileSystem"/>, with no exemptions at all.
+    /// </summary>
+    [Fact]
+    public void ThePreviewLibraryCallsNoFileApiDirectly()
+    {
+        IReadOnlyList<string> offenders = Scan(typeof(SourceSharp.MapPreview.PreviewSession).Assembly, ImmutableHashSet<string>.Empty);
+        Assert.True(offenders.Count == 0, string.Join(Environment.NewLine, offenders));
+    }
+
     [Fact]
     public void TheScanCanActuallyFindAViolation()
     {

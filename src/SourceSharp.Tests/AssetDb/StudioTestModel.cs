@@ -50,11 +50,12 @@ internal static class StudioTestModel
         int version = StudioIdents.MdlVersion,
         Vec3[]? normals = null,
         bool leadingEmptyModel = false,
-        bool triStrip = false)
+        bool triStrip = false,
+        StudioBone? bone = null)
     {
         int models = leadingEmptyModel ? 2 : 1;
         return (
-            Mdl(name, textureNames ?? [textureName], searchPath, skinFamilies, skinRefs, flags, keyValues, version, models),
+            Mdl(name, textureNames ?? [textureName], searchPath, skinFamilies, skinRefs, flags, keyValues, version, models, bone),
             Vvd(vertices, uvs, normals),
             Vtx(vertices.Length, indices, models, triStrip));
     }
@@ -68,7 +69,8 @@ internal static class StudioTestModel
         int flags,
         string? keyValues,
         int version,
-        int models)
+        int models,
+        StudioBone? bone)
     {
         int headerSize = Unsafe.SizeOf<StudioHeader>();
         int partSize = Unsafe.SizeOf<StudioBodyParts>();
@@ -130,8 +132,16 @@ internal static class StudioTestModel
             Mass = 25f,
 
             // Everything after the strings block, so the length is honest.
-            Length = stringsAt + strings.Count,
+            Length = stringsAt + strings.Count + (bone is null ? 0 : Unsafe.SizeOf<StudioBone>()),
         };
+
+        // With an explicit bone it follows the strings; without one the header
+        // keeps NumBones = 1 over offset 0, which no reader that ignores bones
+        // notices and which keeps existing models' bytes unchanged.
+        if (bone is not null)
+        {
+            header.BoneIndex = stringsAt + strings.Count;
+        }
         Encoding.Latin1.GetBytes(name).CopyTo((Span<byte>)header.Name);
 
         // With a leading empty model, the part's first option is the usual "off"
@@ -167,6 +177,13 @@ internal static class StudioTestModel
         }
 
         bytes.AddRange(strings);
+        if (bone is { } b)
+        {
+            StudioBone copy = b;
+            copy.Parent = -1;
+            Put(bytes, in copy);
+        }
+
         return [.. bytes];
     }
 

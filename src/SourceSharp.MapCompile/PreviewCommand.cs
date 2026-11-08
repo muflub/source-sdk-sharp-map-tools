@@ -306,10 +306,12 @@ public static class PreviewCommand
         float[] numbers = new float[6];
         numbers[5] = 90f;
         int count = 0;
+        // Parse into a temporary: a failed parse writes zero, which would wipe
+        // the default field of view when the sixth word starts the label.
         while (count < parts.Length && count < 6
-            && float.TryParse(parts[count], NumberStyles.Float, CultureInfo.InvariantCulture, out numbers[count]))
+            && float.TryParse(parts[count], NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
         {
-            count++;
+            numbers[count++] = value;
         }
 
         if (count < 5 || (count == 6 && numbers[5] is < 10f or > 170f))
