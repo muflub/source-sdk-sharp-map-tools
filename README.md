@@ -298,11 +298,21 @@ unless `--name` says otherwise. The output directory holds:
 - `README.md`, written for an agent: the schema, query recipes, and how to
   read the model pictures;
 - `textures/<name>.png`, the largest stored mip up to `--texture-size`
-  (default 512) of every decodable texture;
+  (default 512) of every decodable colour texture. Bump maps (normal and
+  self-shadowing) get a row and no picture;
+- `previews/<material>.png`, each bump-mapped brush material's base texture
+  lit through its bump map, which shows the relief a flat picture hides;
 - `models/<path>/{front,back,left,right,top,iso}.png` and `sheet.png`, a
   textured render of each prop's level-of-detail-zero mesh. The axis views
   share one scale over a labelled grid in world units, with the model's
   origin drawn darker, so size and placement can be read off the image.
+
+The import also reads every map the game ships (`maps/*.bsp`, including
+Team Fortress 2's LZMA-compressed ones) and records which materials, overlays,
+decals, skyboxes and models each uses: `maps_used`, `area_used` and
+`placements` in the views, per-map rows in `material_usage` and
+`model_usage`. That is what the game's own designers chose, and which
+choices go together; `--no-maps` skips it.
 
 Textures and models are stored once per distinct content (path plus SHA-256)
 and linked to every game that sees them, so a second game that mounts the

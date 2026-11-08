@@ -165,6 +165,7 @@ public static class MaterialReader
             Keywords = Blank(root.GetString("%keywords")),
             Translucent = Flag(root, "$translucent"),
             AlphaTest = Flag(root, "$alphatest"),
+            SsBump = Flag(root, "$ssbump"),
             SelfIllum = Flag(root, "$selfillum"),
             Include = include is null ? null : MaterialName(include),
             Parameters = ParametersJson(root),

@@ -111,7 +111,7 @@ public sealed class ProgramTests
             "import", "--game", game, "--out", db, "--view-size", "64", "--threads", "2");
 
         Assert.Equal(Program.ExitSuccess, importExit);
-        Assert.Contains("testgame: 1 textures, 1 materials, 1 models, 0 issues", imported, StringComparison.Ordinal);
+        Assert.Contains("testgame: 1 textures, 1 materials, 0 previews, 1 models, 0 maps, 0 issues", imported, StringComparison.Ordinal);
         Assert.Contains("mounting testgame", progress, StringComparison.Ordinal);
         Assert.Contains("textures 1/1", progress, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(db, "assets.db")));
@@ -156,7 +156,7 @@ public sealed class ProgramTests
             "import", "--game", game, "--out", db, "--name", "mine", "--models", "none", "--no-textures");
 
         Assert.Equal(Program.ExitSuccess, exit);
-        Assert.Contains("mine: 0 textures, 1 materials, 0 models", output, StringComparison.Ordinal);
+        Assert.Contains("mine: 0 textures, 1 materials, 0 previews, 0 models, 0 maps", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public sealed class ProgramTests
         CommandLine command = CommandLine.Parse(
         [
             "import", "--game", "a", "--game", "b", "--out", "o", "--steam", "s1", "--steam", "s2",
-            "--models", "all", "--no-textures", "--texture-size", "0", "--view-size", "256", "--threads", "3", "--force",
+            "--models", "all", "--no-textures", "--no-maps", "--texture-size", "0", "--view-size", "256", "--threads", "3", "--force",
         ]);
 
         Assert.Equal("import", command.Verb);
@@ -174,6 +174,7 @@ public sealed class ProgramTests
         Assert.Equal(["s1", "s2"], command.Steam);
         Assert.Equal(ModelSelection.All, command.Options.Models);
         Assert.False(command.Options.Textures);
+        Assert.False(command.Options.Maps);
         Assert.Equal(0, command.Options.MaxTextureSize);
         Assert.Equal(256, command.Options.ViewSize);
         Assert.Equal(3, command.Options.MaxParallelism);
