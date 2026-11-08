@@ -169,7 +169,16 @@ public static class Reachability
             edges[n] = [.. to];
         });
 
-        int[] spawnNodes = [.. spawns.Select(s => Nearest(grid, columns, nodes, sim.Spawn(s.Origin).Origin, profile.StandHeight * 0.5f) ?? -1)];
+        // A spawn inside a solid stands nowhere, however close a floor node
+        // is: the player would start stuck. One a little above the floor is
+        // fine; players drop onto the floor when they spawn.
+        int[] spawnNodes = [.. spawns.Select(s =>
+        {
+            PlayerState placed = sim.Spawn(s.Origin);
+            return world.IsStuck(placed.Origin, profile.Mins(false), profile.Maxs(false))
+                ? -1
+                : Nearest(grid, columns, nodes, placed.Origin, profile.StandHeight * 0.5f) ?? -1;
+        })];
         Dictionary<int, bool[]> reachedBy = [];
         foreach (IGrouping<int, (ReachSpawn Spawn, int Node)> team in spawns.Zip(spawnNodes).GroupBy(p => p.First.Team, p => (p.First, p.Second)))
         {
@@ -238,9 +247,19 @@ public static class Reachability
         return found;
     }
 
-    /// <summary>Simulates one walk or jump from a node toward a neighbouring column.</summary>
-    /// <returns>Where the player ended on the ground, or null when still airborne at the end.</returns>
-    internal static Vec3? Move(PlayerMoveSim sim, Vec3 from, float yaw, bool jump, float spacing, int maxTicks)
+    /// <summary>
+    /// Simulates one move from a floor position: a walk of one spacing, or a
+    /// running jump (a run-up to near full speed, then a jump, crouching from
+    /// the top of it) carried on for up to six.
+    /// </summary>
+    /// <param name="sim">The simulator.</param>
+    /// <param name="from">The feet.</param>
+    /// <param name="yaw">The direction, degrees.</param>
+    /// <param name="jump">Whether to jump.</param>
+    /// <param name="spacing">The floor grid's spacing: how far a walk goes.</param>
+    /// <param name="maxTicks">The most ticks simulated.</param>
+    /// <returns>Where the player ended on the ground, or null when still airborne at the end or not standing at the start.</returns>
+    public static Vec3? Move(PlayerMoveSim sim, Vec3 from, float yaw, bool jump, float spacing, int maxTicks)
     {
         PlayerState state = sim.Spawn(from);
         if (!state.OnGround)
@@ -251,14 +270,24 @@ public static class Reachability
         float speed = sim.Profile.MaxSpeed;
         Vec3 start = state.Origin;
         float reach = jump ? spacing * 6f : spacing;
-        bool left = false;
+        bool jumped = false, left = false;
+        float c = SourceSharp.MapFormats.Numerics.DetMathF.Cos(yaw * (MathF.PI / 180f));
+        float sn = SourceSharp.MapFormats.Numerics.DetMathF.Sin(yaw * (MathF.PI / 180f));
         for (int t = 0; t < maxTicks; t++)
         {
             float travelled = MathF.Sqrt(((state.Origin.X - start.X) * (state.Origin.X - start.X)) + ((state.Origin.Y - start.Y) * (state.Origin.Y - start.Y)));
-            bool push = travelled < reach;
-            bool duck = jump && !state.OnGround && state.Velocity.Z < 120f;
-            state = sim.Tick(state, new MoveInput(yaw, push ? speed : 0, 0, jump && t == 0, duck));
-            left |= !state.OnGround;
+            bool push = travelled < reach || (jump && !jumped);
+
+            // A jump is a running jump: run until near full speed (or for
+            // twenty ticks when something holds the run back), then jump.
+            // A standing jump barely moves sideways, because air control
+            // only steers toward a small capped speed.
+            float along = (state.Velocity.X * c) + (state.Velocity.Y * sn);
+            bool press = jump && !jumped && state.OnGround && (along >= speed * 0.9f || t >= 20);
+            jumped |= press;
+            bool duck = jumped && !state.OnGround && state.Velocity.Z < 120f;
+            state = sim.Tick(state, new MoveInput(yaw, push ? speed : 0, 0, press, duck));
+            left |= jumped && !state.OnGround;
             if (state.OnGround && ((jump && left) || (!jump && !push)))
             {
                 // A jump ends when it lands; a walk once it has covered the

@@ -18,6 +18,7 @@ using SourceSharp.MapPreview.Render;
 using SourceSharp.MapPreview.Report;
 using SourceSharp.MapPreview.Scene;
 using SourceSharp.MapTools.Io;
+using SourceSharp.MapTools.Movement;
 using SourceSharp.MapTools.Materials;
 
 namespace SourceSharp.MapPreview;
@@ -63,6 +64,16 @@ public sealed record PreviewOptions
 
     /// <summary>Gets the longest texture edge decoded.</summary>
     public int MaxTextureEdge { get; init; } = PreviewMaterialLibrary.DefaultMaxTextureEdge;
+
+    /// <summary>
+    /// Gets the movement profile to analyse reachability with, or null to
+    /// skip it. When set, the preview adds a reach overview tile, markers for
+    /// traps and stuck spawns, and a movement section in the report.
+    /// </summary>
+    public MovementProfile? Movement { get; init; }
+
+    /// <summary>Gets how reachability is sampled.</summary>
+    public ReachabilityOptions Reachability { get; init; } = ReachabilityOptions.Default;
 }
 
 /// <summary>An image a preview produced.</summary>
@@ -160,6 +171,8 @@ public sealed class PreviewSession
 
         (List<PreviewMarker> markers, List<MissingMaterialReport> missingMaterials, List<MissingModelReport> missingModels) =
             Findings(scene, materials, modelIssues);
+        (ReachabilityResult? reach, MovementReport? movement) =
+            await MovementAsync(bsp, scene, o, content, markers, cancellationToken).ConfigureAwait(false);
 
         (int width, int height) = o.Sheet && !o.Individual ? o.TileSize : o.ViewSize;
         IReadOnlyList<PlannedView> planned = CameraPlanner.Plan(scene, o.Cameras with { Width = width, Height = height });
@@ -177,6 +190,16 @@ public sealed class PreviewSession
             PlannedView planned1 = views[n];
             RenderedView rendered = renderer.Render(planned1.Camera, planned1.Filter, o.Render, cancellationToken);
             CameraView view = planned1.Camera.View();
+            RgbaImage? reachTile = null;
+            if (reach is not null && planned1.Camera.Kind == CameraKind.Overview)
+            {
+                reachTile = new RgbaImage(rendered.Image.Width, rendered.Image.Height, (byte[])rendered.Image.Pixels.Clone());
+                ReachOverlay.Draw(reachTile, view, rendered.Buffer, reach, Math.Max(2, scale * 2), planned1.Filter.CutAboveZ);
+                Annotator.ScaleBar(reachTile, view, scale);
+                Annotator.Markers(reachTile, view, rendered.Buffer, markers, scale);
+                Annotator.Label(reachTile, $"{n + 1} reach {movement!.Profile}", scale);
+                BitmapFont.Draw(reachTile, ReachOverlay.Legend, 2 * scale, 12 * scale, scale, Annotator.LabelInk, Annotator.LabelBacking);
+            }
             if (planned1.Camera.IsOrthographic)
             {
                 Annotator.ScaleBar(rendered.Image, view, scale);
@@ -211,6 +234,15 @@ public sealed class PreviewSession
 
             tiles.Add(rendered.Image);
             cameras.Add(CameraEntry(planned1.Camera, rendered, scene, drawn));
+            if (reachTile is not null)
+            {
+                if (o.Individual || !o.Sheet)
+                {
+                    images.Add(new PreviewImage($"views/{n + 1:00}-reach.png", reachTile.ToPng()));
+                }
+
+                tiles.Add(reachTile);
+            }
         }
 
         if (o.Sheet && tiles.Count > 0)
@@ -241,8 +273,54 @@ public sealed class PreviewSession
                 Lighting(scene, materials, o.Scene.Hdr),
                 new SkyboxReport(scene.SkyName, sky.Faces.Count(f => f is not null)),
                 [.. scene.Spawns.Select(s => new SpawnReport(s.ClassName, s.Team, V(s.Origin), s.Yaw))],
-                EntityClasses(scene.Entities)));
+                EntityClasses(scene.Entities),
+                movement));
         return new PreviewResult(report, images);
+    }
+
+    /// <summary>
+    /// Runs the movement analysis when asked: the map's player collision with
+    /// its props' models, walks and jumps from every floor, and markers for
+    /// the stuck spawns and traps it finds.
+    /// </summary>
+    private static async Task<(ReachabilityResult? Result, MovementReport? Report)> MovementAsync(
+        BspData bsp, PreviewScene scene, PreviewOptions o, IContentFileSystem content, List<PreviewMarker> markers, CancellationToken cancellationToken)
+    {
+        if (o.Movement is not { } profile)
+        {
+            return (null, null);
+        }
+
+        (HullTraceWorld world, _) = await HullTraceWorld.FromBspAsync(bsp, content, cancellationToken).ConfigureAwait(false);
+        (Vec3 min, Vec3 max) = CameraPlanner.ContentBounds(scene);
+        ReachSpawn[] spawns = [.. scene.Spawns.Select(s => new ReachSpawn(s.Team, s.Origin))];
+        ReachabilityResult result = Reachability.Analyze(
+            world, profile, spawns, min - new Vec3(0, 0, 64), max + new Vec3(0, 0, 64), o.Reachability, cancellationToken);
+
+        List<RegionReport> stuck = [];
+        for (int i = 0; i < spawns.Length; i++)
+        {
+            if (result.SpawnNodes[i] < 0)
+            {
+                int number = markers.Count + 1;
+                markers.Add(new PreviewMarker(number, "stuck_spawn", $"spawn team {spawns[i].Team} stands on no floor", spawns[i].Origin));
+                stuck.Add(new RegionReport(0, V(spawns[i].Origin), V(spawns[i].Origin), V(spawns[i].Origin), number));
+            }
+        }
+
+        List<RegionReport> traps = [];
+        foreach (NodeGroup trap in result.Traps.OrderByDescending(t => t.Nodes.Count).ThenBy(t => t.Nodes[0]))
+        {
+            int number = markers.Count + 1;
+            markers.Add(new PreviewMarker(number, "trap", $"a player who gets here cannot get out ({trap.Nodes.Count} positions)", trap.Sample));
+            traps.Add(new RegionReport(trap.Nodes.Count, V(trap.Sample), V(trap.Min), V(trap.Max), number));
+        }
+
+        List<RegionReport> islands = [.. result.Islands
+            .OrderByDescending(g => g.Nodes.Count).ThenBy(g => g.Nodes[0]).Take(10)
+            .Select(g => new RegionReport(g.Nodes.Count, V(g.Sample), V(g.Min), V(g.Max), 0))];
+        Dictionary<int, int> reached = result.ReachedBy.ToDictionary(r => r.Key, r => r.Value.Count(b => b));
+        return (result, new MovementReport(profile.Name, result.Nodes.Count, reached, stuck, traps, islands, result.Islands.Count));
     }
 
     /// <summary>Markers and report entries for every missing material and model, numbered in scene order.</summary>

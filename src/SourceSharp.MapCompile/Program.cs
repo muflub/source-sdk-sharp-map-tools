@@ -660,7 +660,7 @@ public static class Program
                                                       the props' model hulls; -check reads
                                                       the built file instead and fails on a
                                                       place to stand with no ground under it
-              preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>]
+              preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-movement [class]]
                                                       renders a compiled map with its textures,
                                                       models and baked lighting: a labelled
                                                       contact sheet (overview, isometric,

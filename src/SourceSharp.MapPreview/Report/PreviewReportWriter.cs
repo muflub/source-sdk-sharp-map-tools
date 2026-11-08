@@ -213,7 +213,55 @@ public static class PreviewReportWriter
         }
 
         w.WriteEndObject();
+        if (checks.Movement is { } movement)
+        {
+            Movement(w, movement);
+        }
+
         w.WriteEndObject();
+    }
+
+    private static void Movement(Utf8JsonWriter w, MovementReport m)
+    {
+        w.WriteStartObject("movement");
+        w.WriteString("profile", m.Profile);
+        w.WriteNumber("nodes", m.Nodes);
+        w.WriteStartObject("reached_by_team");
+        foreach (KeyValuePair<int, int> pair in m.ReachedByTeam.OrderBy(p => p.Key))
+        {
+            w.WriteNumber(pair.Key.ToString(System.Globalization.CultureInfo.InvariantCulture), pair.Value);
+        }
+
+        w.WriteEndObject();
+        Regions(w, "stuck_spawns", m.StuckSpawns);
+        Regions(w, "traps", m.Traps);
+        Regions(w, "islands", m.Islands);
+        w.WriteNumber("island_count", m.IslandCount);
+        w.WriteEndObject();
+    }
+
+    private static void Regions(Utf8JsonWriter w, string name, IReadOnlyList<RegionReport> regions)
+    {
+        w.WriteStartArray(name);
+        foreach (RegionReport r in regions)
+        {
+            w.WriteStartObject();
+            w.WriteNumber("nodes", r.Nodes);
+            w.WritePropertyName("sample");
+            Vector(w, r.Sample);
+            w.WritePropertyName("min");
+            Vector(w, r.Min);
+            w.WritePropertyName("max");
+            Vector(w, r.Max);
+            if (r.Marker > 0)
+            {
+                w.WriteNumber("marker", r.Marker);
+            }
+
+            w.WriteEndObject();
+        }
+
+        w.WriteEndArray();
     }
 
     private static void ModelCounts(Utf8JsonWriter w, string name, IReadOnlyList<ModelCount> models)
