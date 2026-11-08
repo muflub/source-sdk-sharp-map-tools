@@ -148,13 +148,13 @@ public sealed class AssetImporterTests
         string empty = AgentReadme.Build([]);
         string two = AgentReadme.Build(
         [
-            new GameSummary("hl2", "Half-Life 2", "/a", "2026-01-01T00:00:00Z", 1, 2, 3, 4),
-            new GameSummary("tf", null, "/b", "2026-01-02T00:00:00Z", 5, 6, 7, 8),
+            new GameSummary("hl2", "Half-Life 2", "/a", "2026-01-01T00:00:00Z", 1, 2, 3, 4, 0),
+            new GameSummary("tf", null, "/b", "2026-01-02T00:00:00Z", 5, 6, 7, 8, 9),
         ]);
 
         Assert.Contains("None yet", empty, StringComparison.Ordinal);
-        Assert.Contains("| `hl2` | Half-Life 2 | 1 | 2 | 3 | 4 | 2026-01-01T00:00:00Z |", two, StringComparison.Ordinal);
-        Assert.Contains("| `tf` |  | 5 | 6 | 7 | 8 |", two, StringComparison.Ordinal);
+        Assert.Contains("| `hl2` | Half-Life 2 | 1 | 2 | 3 | 0 | 4 | 2026-01-01T00:00:00Z |", two, StringComparison.Ordinal);
+        Assert.Contains("| `tf` |  | 5 | 6 | 7 | 9 | 8 |", two, StringComparison.Ordinal);
         Assert.Contains("material_view", two, StringComparison.Ordinal);
         Assert.EndsWith("\n", two, StringComparison.Ordinal);
     }
@@ -165,8 +165,8 @@ public sealed class AssetImporterTests
         string empty = AgentReadme.BuildClaude([]);
         string two = AgentReadme.BuildClaude(
         [
-            new GameSummary("hl2", "Half-Life 2", "/a", "2026-01-01T00:00:00Z", 1, 2, 3, 4),
-            new GameSummary("tf", null, "/b", "2026-01-02T00:00:00Z", 5, 6, 7, 8),
+            new GameSummary("hl2", "Half-Life 2", "/a", "2026-01-01T00:00:00Z", 1, 2, 3, 4, 0),
+            new GameSummary("tf", null, "/b", "2026-01-02T00:00:00Z", 5, 6, 7, 8, 9),
         ]);
 
         Assert.Contains("Games here: none yet.", empty, StringComparison.Ordinal);

@@ -16,9 +16,9 @@ using SourceSharp.MapTools.Io;
 namespace SourceSharp.AssetDb.Textures;
 
 /// <summary>
-/// Exports every texture a game can see as a PNG under
-/// <c>textures/&lt;name&gt;.png</c> and describes each in a
-/// <see cref="TextureRecord"/>.
+/// Describes every texture a game can see in a <see cref="TextureRecord"/>,
+/// and exports each colour texture as a PNG under
+/// <c>textures/&lt;name&gt;.png</c>. Bump maps get a record and no image.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -41,6 +41,7 @@ public static class TextureExporter
     /// <param name="content">The mounted game.</param>
     /// <param name="output">The database root, where the images are written.</param>
     /// <param name="known">What the database already holds.</param>
+    /// <param name="bumpMaps">The game's bump maps by name, from <see cref="BumpMapKinds"/>.</param>
     /// <param name="options">Sizes, parallelism, progress.</param>
     /// <param name="cancellationToken">Cancels the export; images already written stay.</param>
     /// <returns>A record per exported or reused texture, and the issues, each sorted by path.</returns>
@@ -48,12 +49,14 @@ public static class TextureExporter
         IContentFileSystem content,
         IFileSystem output,
         AssetIndex<TextureRecord> known,
+        IReadOnlyDictionary<string, string> bumpMaps,
         AssetExportOptions options,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(known);
+        ArgumentNullException.ThrowIfNull(bumpMaps);
         ArgumentNullException.ThrowIfNull(options);
 
         List<VPath> paths = await ContentWalk.ListAsync(content, "materials", "*.vtf", cancellationToken)
@@ -74,7 +77,7 @@ public static class TextureExporter
             {
                 try
                 {
-                    TextureRecord? record = await ExportOneAsync(content, output, known, options, path, issues, token)
+                    TextureRecord? record = await ExportOneAsync(content, output, known, bumpMaps, options, path, issues, token)
                         .ConfigureAwait(false);
                     if (record is not null)
                     {
@@ -102,7 +105,7 @@ public static class TextureExporter
     /// <param name="textures">The stored textures.</param>
     /// <returns>The index.</returns>
     public static AssetIndex<TextureRecord> Index(IEnumerable<TextureRecord> textures) =>
-        new(textures, t => t.Path, t => t.Sha256, t => WithoutPng(t.Image));
+        new(textures, t => t.Path, t => t.Sha256, t => t.Image is null ? string.Empty : WithoutPng(t.Image));
 
     private static string WithoutPng(string image) =>
         image.EndsWith(".png", StringComparison.Ordinal) ? image[..^4] : image;
@@ -172,10 +175,61 @@ public static class TextureExporter
         return null;
     }
 
+    /// <summary>
+    /// What kind of texture a file is: its header flags first, which the
+    /// texture tool sets for normal and self-shadowing bump maps, then how
+    /// the game's materials use it, which catches bump maps compiled without
+    /// the flag.
+    /// </summary>
+    /// <param name="flags">The VTF header flags.</param>
+    /// <param name="usedAs">The kind materials use the texture as, or null when none names it as a bump map.</param>
+    /// <returns>One of the <see cref="TextureKind"/> values.</returns>
+    public static string Classify(uint flags, string? usedAs)
+    {
+        if ((flags & (uint)VtfFlags.SsBump) != 0)
+        {
+            return TextureKind.SsBump;
+        }
+
+        if ((flags & (uint)VtfFlags.Normal) != 0)
+        {
+            return TextureKind.Normal;
+        }
+
+        return usedAs ?? TextureKind.Color;
+    }
+
+    /// <summary>
+    /// The textures a game's materials use as bump maps, with the kind each
+    /// use implies: <c>$ssbump</c> makes it self-shadowing, otherwise a
+    /// normal map.
+    /// </summary>
+    /// <param name="materials">The game's materials.</param>
+    /// <returns>Texture name to kind; a texture used both ways is a normal map.</returns>
+    public static IReadOnlyDictionary<string, string> BumpMapKinds(IEnumerable<MaterialRecord> materials)
+    {
+        ArgumentNullException.ThrowIfNull(materials);
+
+        Dictionary<string, string> kinds = new(StringComparer.Ordinal);
+        foreach (MaterialRecord material in materials)
+        {
+            if (material.BumpMap is not { } bump)
+            {
+                continue;
+            }
+
+            string kind = material.SsBump ? TextureKind.SsBump : TextureKind.Normal;
+            kinds[bump] = kinds.TryGetValue(bump, out string? seen) && seen != kind ? TextureKind.Normal : kind;
+        }
+
+        return kinds;
+    }
+
     private static async Task<TextureRecord?> ExportOneAsync(
         IContentFileSystem content,
         IFileSystem output,
         AssetIndex<TextureRecord> known,
+        IReadOnlyDictionary<string, string> bumpMaps,
         AssetExportOptions options,
         VPath path,
         ConcurrentBag<ImportIssue> issues,
@@ -193,13 +247,6 @@ public static class TextureExporter
         string name = TextureName(path.Value);
         string sha = ContentWalk.Sha256(bytes);
 
-        TextureRecord? existing = known.Find(name, sha);
-        if (existing is not null && !options.Force &&
-            await output.ExistsAsync(VPath.Create(existing.Image), cancellationToken).ConfigureAwait(false))
-        {
-            return existing with { Source = mount };
-        }
-
         VtfFile texture;
         try
         {
@@ -209,6 +256,41 @@ public static class TextureExporter
         {
             issues.Add(new ImportIssue("texture", path.Value, $"not a readable VTF: {e.Message}"));
             return null;
+        }
+
+        string kind = Classify(texture.Header.Flags, bumpMaps.GetValueOrDefault(name));
+        TextureRecord? existing = known.Find(name, sha);
+        if (existing is not null && !options.Force && existing.Kind == kind &&
+            (existing.Image is null ||
+             await output.ExistsAsync(VPath.Create(existing.Image), cancellationToken).ConfigureAwait(false)))
+        {
+            return existing with { Source = mount };
+        }
+
+        TextureRecord header = new()
+        {
+            Path = name,
+            Sha256 = sha,
+            Width = texture.Width,
+            Height = texture.Height,
+            Format = texture.Format.ToString(),
+            Mips = texture.MipCount,
+            Frames = texture.FrameCount,
+            Flags = FlagNames(texture.Header.Flags),
+            Reflectivity = (texture.Reflectivity.X, texture.Reflectivity.Y, texture.Reflectivity.Z),
+            Kind = kind,
+            HasAlpha = false,
+            ImageWidth = 0,
+            ImageHeight = 0,
+            Source = mount,
+        };
+
+        // A bump map's pixels are directions, not colours: as a picture it is
+        // purple noise that tells a reader nothing. Its row stays (a material
+        // still names it), and the material's lit preview shows what it does.
+        if (kind != TextureKind.Color)
+        {
+            return header;
         }
 
         if (!ImageDecoder.CanDecode(texture.Format))
@@ -233,23 +315,13 @@ public static class TextureExporter
             async (stream, token) => await stream.WriteAsync(png, token).ConfigureAwait(false),
             cancellationToken).ConfigureAwait(false);
 
-        return new TextureRecord
+        return header with
         {
-            Path = name,
-            Sha256 = sha,
-            Width = texture.Width,
-            Height = texture.Height,
-            Format = texture.Format.ToString(),
-            Mips = texture.MipCount,
-            Frames = texture.FrameCount,
-            Flags = FlagNames(texture.Header.Flags),
-            Reflectivity = (texture.Reflectivity.X, texture.Reflectivity.Y, texture.Reflectivity.Z),
             AverageColour = stats.Hex,
             HasAlpha = stats.HasAlpha,
             Image = location,
             ImageWidth = image.Width,
             ImageHeight = image.Height,
-            Source = mount,
         };
     }
 }

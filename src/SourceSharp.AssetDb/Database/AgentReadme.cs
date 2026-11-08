@@ -41,12 +41,12 @@ public static class AgentReadme
         }
         else
         {
-            text.AppendLine("| game | title | textures | materials | models | issues | imported (UTC) |");
-            text.AppendLine("| --- | --- | ---: | ---: | ---: | ---: | --- |");
+            text.AppendLine("| game | title | textures | materials | models | maps read | issues | imported (UTC) |");
+            text.AppendLine("| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |");
             foreach (GameSummary game in games)
             {
                 text.Append(CultureInfo.InvariantCulture, $"| `{game.Name}` | {game.Title ?? string.Empty} ")
-                    .Append(CultureInfo.InvariantCulture, $"| {game.Textures} | {game.Materials} | {game.Models} ")
+                    .Append(CultureInfo.InvariantCulture, $"| {game.Textures} | {game.Materials} | {game.Models} | {game.Maps} ")
                     .Append(CultureInfo.InvariantCulture, $"| {game.Issues} | {game.ImportedUtc} |")
                     .AppendLine();
             }
@@ -109,11 +109,18 @@ public static class AgentReadme
            `category`, `surface_prop`, `keywords`, `average_colour` and, for
            props, `size_x/y/z` and `static_prop`, down to a short list; then
            open the shortlisted images (paths are relative to this directory)
-           with the Read tool. Do not open hundreds of images.
-        3. **For a prop, open `image_sheet` first**: one image with all six
+           with the Read tool. Do not open hundreds of images. For a
+           material, open `preview` when it has one (lit, shows relief),
+           otherwise `image`.
+        3. **Lean on what the game's designers used.** `maps_used` ranks
+           materials and props by how many shipped maps use them; the
+           `material_usage` / `model_usage` views (README has co-occurrence
+           queries) show what goes together. A set of materials and props
+           that appears together in shipped maps is a set that looks right.
+        4. **For a prop, open `image_sheet` first**: one image with all six
            labelled views over a unit grid. Open a single view only when a
            detail matters.
-        4. **Write what the map needs, verbatim:**
+        5. **Write what the map needs, verbatim:**
            - a brush face's material is `material_view.material`
              (e.g. `brick/brickwall001a`);
            - a prop's `model` key is `model_view.model`
@@ -153,14 +160,23 @@ public static class AgentReadme
         - **Brush faces** take a *material* name: `material_view.material`,
           written into a VMF side's `material` key in upper or lower case, e.g.
           `BRICK/BRICKWALL001A`. Filter on `usage = 'brush'` for walls, floors
-          and ceilings; `image` is a picture of its base texture.
+          and ceilings. `image` is its flat base texture (true colour);
+          `preview`, when present, is the same texture lit through its bump
+          map from the upper left, which shows the relief you see in game.
         - **Props** take a *model* path: `model_view.model`, written verbatim
           into a `prop_static` / `prop_physics` / `prop_dynamic` `model` key,
           e.g. `models/props_c17/oildrum001.mdl`. Use `static_prop = 1` models
           for `prop_static`. `prop_data` non-null means the model can be a
           physics prop.
-        - **Textures** are the raw `.vtf` images behind materials (bump maps,
-          detail textures, base textures). Maps never name them directly.
+        - **Textures** are the raw `.vtf` images behind materials. Maps never
+          name them directly. `kind` is `color`, `normal` or `ssbump`; bump
+          maps (`normal`, `ssbump`) have a row but no image, since their
+          pixels are directions, not colours.
+        - **What the game's own designers used**: every shipped map was read.
+          `maps_used` and `area_used` (square units of faces) in
+          `material_view`, `maps_used` and `placements` in `model_view`, and
+          per map in `material_usage` / `model_usage`. Prefer well-used
+          content and copy combinations that appear together.
 
         ## Queries
 
@@ -185,6 +201,25 @@ public static class AgentReadme
         SELECT model, size_x, size_y, size_z, image_sheet FROM model_view
         WHERE game = 'hl2' AND static_prop = 1 AND size_z <= 64
           AND (model LIKE '%crate%' OR model LIKE '%barrel%');
+
+        -- the most used brush materials, a safe palette
+        SELECT material, maps_used, area_used, preview, image FROM material_view
+        WHERE game = 'tf' AND usage = 'brush' ORDER BY maps_used DESC LIMIT 40;
+
+        -- what Valve's maps pair with a material (co-occurrence)
+        SELECT b.material, count(*) AS maps_together FROM material_usage a
+        JOIN material_usage b ON b.game = a.game AND b.map = a.map AND b.material <> a.material
+        WHERE a.game = 'tf' AND a.material = 'brick/brickwall001a' AND b.kind = 'face'
+        GROUP BY b.material ORDER BY maps_together DESC LIMIT 25;
+
+        -- props that appear with a material, by how many maps share them
+        SELECT p.model, count(DISTINCT p.map) AS maps FROM material_usage m
+        JOIN model_usage p ON p.game = m.game AND p.map = m.map
+        WHERE m.game = 'tf' AND m.material = 'wood/wood_bridge001'
+        GROUP BY p.model ORDER BY maps DESC LIMIT 25;
+
+        -- which skybox a style of map uses
+        SELECT name, sky_name FROM maps WHERE game_id = (SELECT id FROM games WHERE name = 'tf') AND name LIKE 'cp_%';
 
         -- every skin of a model
         SELECT skin, slot, material FROM model_materials mm JOIN models m ON m.id = mm.model_id
@@ -236,11 +271,19 @@ public static class AgentReadme
         | `games` | imported game |
         | `textures` | distinct texture (path + content hash), shared between games |
         | `game_textures` | texture a game can see, with the archive it came from |
-        | `materials` | material per game; `texture_id` is its preview texture |
+        | `materials` | material per game; `texture_id` is its base (or tool) texture, `preview_id` its lit preview |
+        | `previews` | distinct lit preview (material + hash of its textures), shared between games |
         | `models` | distinct model, shared between games; image paths per view |
         | `game_models` | model a game can see |
         | `model_materials` | material slot per skin per model per game |
+        | `maps` | shipped map read for usage: faces, static props, entities, `sky_name` |
+        | `map_materials` | material per map: `kind` `face` (with `count` and `area`), `overlay` or `decal` |
+        | `map_models` | model per map: `kind` `static` (prop_static) or `entity` (any entity's model key) |
         | `issues` | file an import passed over, with why |
+
+        `map_materials` also names materials packed inside a map (community
+        maps carry their own); those have no row in `materials`, so the views
+        that join on `materials` leave them out.
 
         `materials.parameters` is a JSON object of the material's top-level
         values (`json_extract(parameters, '$."$basetexture"')`); `materials.vmt`

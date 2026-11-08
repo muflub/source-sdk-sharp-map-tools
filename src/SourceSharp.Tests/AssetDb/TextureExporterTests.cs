@@ -6,6 +6,7 @@
 //=============================================================================//
 
 using SourceSharp.AssetDb;
+using SourceSharp.AssetDb.Materials;
 using SourceSharp.MapFormats.Imaging;
 using SourceSharp.AssetDb.Textures;
 using SourceSharp.MapFormats.Assets;
@@ -27,13 +28,15 @@ public sealed class TextureExporterTests
         AssetTestGame game,
         AssetIndex<TextureRecord>? known = null,
         AssetExportOptions? options = null,
-        InMemoryFileSystem? output = null)
+        InMemoryFileSystem? output = null,
+        IReadOnlyDictionary<string, string>? bumpMaps = null)
     {
         output ??= new InMemoryFileSystem();
         (IReadOnlyList<TextureRecord> textures, IReadOnlyList<ImportIssue> issues) = await TextureExporter.ExportAsync(
             game.Mount(),
             output,
             known ?? AssetIndex<TextureRecord>.Empty(),
+            bumpMaps ?? new Dictionary<string, string>(),
             options ?? AssetTestGame.Options(),
             CancellationToken.None);
         return (textures, issues, output);
@@ -58,6 +61,7 @@ public sealed class TextureExporterTests
         Assert.Equal(16, record.Height);
         Assert.Equal(nameof(ImageFormat.Bgra8888), record.Format);
         Assert.Equal("ClampS", record.Flags);
+        Assert.Equal(TextureKind.Color, record.Kind);
         Assert.Equal(64, record.Sha256.Length);
         Assert.True(await output.ExistsAsync(VPath.Create("textures/metal/wall.png")));
     }
@@ -177,7 +181,7 @@ public sealed class TextureExporterTests
 
         TextureRecord record = Assert.Single(textures);
         Assert.Equal($"textures/a/one~{record.Sha256[..8]}.png", record.Image);
-        Assert.True(await output.ExistsAsync(VPath.Create(record.Image)));
+        Assert.True(await output.ExistsAsync(VPath.Create(record.Image!)));
     }
 
     [Fact]
@@ -214,7 +218,8 @@ public sealed class TextureExporterTests
         await cancelled.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => TextureExporter.ExportAsync(
-            game.Mount(), new InMemoryFileSystem(), AssetIndex<TextureRecord>.Empty(), AssetTestGame.Options(), cancelled.Token));
+            game.Mount(), new InMemoryFileSystem(), AssetIndex<TextureRecord>.Empty(), new Dictionary<string, string>(),
+            AssetTestGame.Options(), cancelled.Token));
     }
 
     [Fact]
@@ -271,6 +276,70 @@ public sealed class TextureExporterTests
 
         Assert.Null(TextureExporter.DecodeLargestPresent(texture, 0, out string? failure));
         Assert.NotNull(failure);
+    }
+
+    [Fact]
+    public async Task ANormalMapIsRecordedWithoutAnImage()
+    {
+        AssetTestGame game = new AssetTestGame().AddTexture("brick/wall_normal", 8, 8, flags: 0x80);
+
+        (IReadOnlyList<TextureRecord> textures, IReadOnlyList<ImportIssue> issues, InMemoryFileSystem output) = await ExportAsync(game);
+
+        Assert.Empty(issues);
+        TextureRecord record = Assert.Single(textures);
+        Assert.Equal(TextureKind.Normal, record.Kind);
+        Assert.Null(record.Image);
+        Assert.Null(record.AverageColour);
+        Assert.Equal((8, 8, 0, 0), (record.Width, record.Height, record.ImageWidth, record.ImageHeight));
+        Assert.False(await output.ExistsAsync(VPath.Create("textures/brick/wall_normal.png")));
+    }
+
+    [Fact]
+    public async Task ABumpMapCompiledWithoutTheFlagIsCaughtThroughTheMaterialsThatUseIt()
+    {
+        AssetTestGame game = new AssetTestGame().AddTexture("brick/wall_bump", 8, 8);
+
+        (IReadOnlyList<TextureRecord> textures, _, _) = await ExportAsync(
+            game, bumpMaps: new Dictionary<string, string> { ["brick/wall_bump"] = TextureKind.SsBump });
+
+        Assert.Equal(TextureKind.SsBump, textures[0].Kind);
+        Assert.Null(textures[0].Image);
+    }
+
+    [Fact]
+    public async Task AKnownImagelessTextureIsReusedWithoutTouchingTheDisk()
+    {
+        AssetTestGame game = new AssetTestGame().AddTexture("a/n", 8, 8, flags: 0x80);
+        (IReadOnlyList<TextureRecord> first, _, _) = await ExportAsync(game);
+
+        (IReadOnlyList<TextureRecord> second, _, _) = await ExportAsync(game, Index(first[0] with { Source = "old" }));
+
+        Assert.Equal(first[0], second[0]);
+    }
+
+    [Theory]
+    [InlineData(0u, null, TextureKind.Color)]
+    [InlineData(0x80u, null, TextureKind.Normal)]
+    [InlineData(0x08000000u, null, TextureKind.SsBump)]
+    [InlineData(0x08000080u, null, TextureKind.SsBump)]
+    [InlineData(0u, TextureKind.Normal, TextureKind.Normal)]
+    [InlineData(0x80u, TextureKind.SsBump, TextureKind.Normal)]
+    public void TheHeaderFlagsDecideFirstThenTheMaterials(uint flags, string? usedAs, string expected) =>
+        Assert.Equal(expected, TextureExporter.Classify(flags, usedAs));
+
+    [Fact]
+    public void BumpMapKindsComeFromTheMaterialsAndANormalUseWins()
+    {
+        MaterialRecord plain = AssetDatabaseTests.Material("a/plain", "a/plain");
+        MaterialRecord normal = plain with { Path = "a/n", BumpMap = "a/shared" };
+        MaterialRecord ss = plain with { Path = "a/s", BumpMap = "a/ss", SsBump = true };
+        MaterialRecord ssShared = plain with { Path = "a/s2", BumpMap = "a/shared", SsBump = true };
+
+        IReadOnlyDictionary<string, string> kinds = TextureExporter.BumpMapKinds([plain, normal, ss, ssShared]);
+
+        Assert.Equal(2, kinds.Count);
+        Assert.Equal(TextureKind.Normal, kinds["a/shared"]);
+        Assert.Equal(TextureKind.SsBump, kinds["a/ss"]);
     }
 
     /// <summary>A synchronous progress sink: <see cref="Progress{T}"/> posts to the thread pool.</summary>

@@ -71,6 +71,9 @@ public sealed record MaterialRecord
     /// <summary>Gets whether <c>$alphatest</c> is set.</summary>
     public bool AlphaTest { get; init; }
 
+    /// <summary>Gets whether <c>$ssbump</c> is set: the bump map is a self-shadowing one, not a normal map.</summary>
+    public bool SsBump { get; init; }
+
     /// <summary>Gets whether <c>$selfillum</c> is set.</summary>
     public bool SelfIllum { get; init; }
 
