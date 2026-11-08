@@ -273,6 +273,7 @@ updated to match.
 | collision cooking | `src/SourceSharp.MapTools/Phys/` |
 | incremental cache | `src/SourceSharp.MapTools/Compile/Cache/` and `src/SourceSharp.MapTools.Cache.Sqlite/` |
 | loader validation (`ssmap check`) | `src/SourceSharp.MapTools/Validation/` |
+| map preview rendering (`ssmap preview`) | `src/SourceSharp.MapPreview/` (plan: `docs/map-preview-plan.md`) |
 | the asset database (`ssassets`) | `src/SourceSharp.AssetDb/` (exporters, renderer, SQLite schema in `Database/AssetDatabase.cs`) |
 
 ## CI and releases
