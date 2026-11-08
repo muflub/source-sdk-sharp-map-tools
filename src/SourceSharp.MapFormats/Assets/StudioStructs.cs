@@ -50,6 +50,19 @@ public static class StudioIdents
     /// <summary>The MDL version this branch reads.</summary>
     public const int MdlVersion = 48;
 
+    /// <summary>
+    /// The oldest MDL version the engine's model loader accepts, converting it
+    /// to <see cref="MdlVersion"/> in place as it loads.
+    /// </summary>
+    /// <remarks>
+    /// Versions 44 to 47 differ from 48 only inside animation data (zero-frame
+    /// caches and their indexes); the header, bones, body parts, models,
+    /// meshes, textures, skin table and keyvalues are laid out identically,
+    /// which is why the engine's conversion is a version bump plus some
+    /// animation fix-ups. Half-Life 2's shipped models are version 44.
+    /// </remarks>
+    public const int OldestEngineMdlVersion = 44;
+
     /// <summary>The VVD version.</summary>
     public const int VvdVersion = 4;
 

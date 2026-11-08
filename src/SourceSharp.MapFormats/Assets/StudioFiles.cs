@@ -182,11 +182,22 @@ public sealed class MdlFile
         return Parse(buffer.ToArray());
     }
 
-    /// <summary>Parses an MDL already in memory.</summary>
+    /// <summary>Parses an MDL already in memory, accepting only <see cref="StudioIdents.MdlVersion"/>.</summary>
     /// <param name="bytes">The whole file.</param>
     /// <returns>The parsed file.</returns>
     /// <exception cref="InvalidStudioException">The bytes are not an MDL this port can read.</exception>
-    public static MdlFile Parse(ReadOnlyMemory<byte> bytes)
+    public static MdlFile Parse(ReadOnlyMemory<byte> bytes) => Parse(bytes, MdlVersionPolicy.Exact);
+
+    /// <summary>Parses an MDL already in memory.</summary>
+    /// <param name="bytes">The whole file.</param>
+    /// <param name="policy">
+    /// Which versions to accept. The compilers keep <see cref="MdlVersionPolicy.Exact"/>,
+    /// the reference compile tools' rule; a reader that only wants the
+    /// geometry, skins and bounds can take what the engine draws.
+    /// </param>
+    /// <returns>The parsed file. Its <see cref="Header"/> keeps the version the file declares.</returns>
+    /// <exception cref="InvalidStudioException">The bytes are not an MDL this port can read under <paramref name="policy"/>.</exception>
+    public static MdlFile Parse(ReadOnlyMemory<byte> bytes, MdlVersionPolicy policy)
     {
         StudioHeader header = StudioReader.At<StudioHeader>(bytes.Span, 0, "the MDL header");
 
@@ -197,11 +208,16 @@ public sealed class MdlFile
                 + "the reference loader compares exactly those two literals");
         }
 
-        if (header.Version != StudioIdents.MdlVersion)
+        bool accepted = policy == MdlVersionPolicy.EngineCompatible
+            ? header.Version is >= StudioIdents.OldestEngineMdlVersion and <= StudioIdents.MdlVersion
+            : header.Version == StudioIdents.MdlVersion;
+        if (!accepted)
         {
-            throw new InvalidStudioException(
-                $"MDL version {header.Version} is not {StudioIdents.MdlVersion}; "
-                + "the reference loader refuses anything else");
+            throw new InvalidStudioException(policy == MdlVersionPolicy.EngineCompatible
+                ? $"MDL version {header.Version} is outside {StudioIdents.OldestEngineMdlVersion}.."
+                  + $"{StudioIdents.MdlVersion}, the versions the engine converts on load"
+                : $"MDL version {header.Version} is not {StudioIdents.MdlVersion}; "
+                  + "the reference loader refuses anything else");
         }
 
         return new MdlFile(bytes, header);
@@ -289,6 +305,27 @@ public sealed class MdlFile
         int at = Header.TextureIndex + (index * Unsafe.SizeOf<StudioTexture>());
         return StudioReader.StringAt(_bytes.Span, at + Textures()[index].NameIndex);
     }
+
+    /// <summary>
+    /// The model's skin table: the texture index each mesh shows, per skin.
+    /// </summary>
+    /// <returns>
+    /// <see cref="StudioHeader.NumSkinFamilies"/> families of
+    /// <see cref="StudioHeader.NumSkinRef"/> <see cref="short"/> indexes each,
+    /// flattened in file order: family <c>f</c>'s row is
+    /// <c>[f * NumSkinRef .. (f + 1) * NumSkinRef)</c>.
+    /// </returns>
+    /// <remarks>
+    /// A skin is a permutation of the texture list, not of the meshes: entry
+    /// <c>i</c> of a row is the texture that MESH <c>i</c> of the model displays
+    /// when that skin is active. The default skin is family 0.
+    /// </remarks>
+    public ReadOnlySpan<short> SkinTable() =>
+        StudioReader.Run<short>(
+            _bytes.Span,
+            Header.SkinIndex,
+            Header.NumSkinFamilies * Header.NumSkinRef,
+            "the skin table");
 
     /// <summary>The model's material search paths.</summary>
     /// <returns>The paths, in the order the file lists them.</returns>
@@ -692,4 +729,23 @@ public sealed class VtxFile
 
         return triangles;
     }
+}
+
+/// <summary>Which MDL versions <see cref="MdlFile.Parse(ReadOnlyMemory{byte}, MdlVersionPolicy)"/> accepts.</summary>
+public enum MdlVersionPolicy
+{
+    /// <summary>
+    /// Only <see cref="StudioIdents.MdlVersion"/>, as the reference compile
+    /// tools load static props. The default, because this library's first
+    /// job is reproducing compiles.
+    /// </summary>
+    Exact = 0,
+
+    /// <summary>
+    /// <see cref="StudioIdents.OldestEngineMdlVersion"/> through
+    /// <see cref="StudioIdents.MdlVersion"/>, as the engine draws models. The
+    /// structures this reader exposes have one layout across that range; only
+    /// animation data, which it does not read, differs.
+    /// </summary>
+    EngineCompatible,
 }

@@ -14,6 +14,7 @@
     <!-- The map compilers. MapCompile is referenced as well as the libraries
          because the CLI's own logic — stock argument parsing, report rendering,
          exit codes — is under the same testing rule as everything else. -->
+    <ProjectReference Include="..\SourceSharp.AssetDb\SourceSharp.AssetDb.csproj" />
     <ProjectReference Include="..\SourceSharp.MapFormats\SourceSharp.MapFormats.csproj" />
     <ProjectReference Include="..\SourceSharp.MapTools\SourceSharp.MapTools.csproj" />
     <ProjectReference Include="..\SourceSharp.RoomContracts\SourceSharp.RoomContracts.csproj" />

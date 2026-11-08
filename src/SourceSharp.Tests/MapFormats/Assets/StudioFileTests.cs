@@ -51,7 +51,9 @@ public class StudioFileTests
     /// A minimal MDL: one bone, one body part with one model with one mesh,
     /// one texture, and a strings block.
     /// </summary>
-    private static byte[] BuildMdl(out int boneNameAt)
+    /// <param name="skinFamilies">Skin families to append; 0 keeps the layout the older facts pin.</param>
+    /// <param name="skinRefs">Texture indexes per family.</param>
+    private static byte[] BuildMdl(out int boneNameAt, int skinFamilies = 0, int skinRefs = 0)
     {
         int headerSize = Unsafe.SizeOf<StudioHeader>();
         int boneSize = Unsafe.SizeOf<StudioBone>();
@@ -66,7 +68,9 @@ public class StudioFileTests
         int meshAt = modelAt + modelSize;
         int textureAt = meshAt + meshSize;
         int cdTableAt = textureAt + textureSize;
-        int stringsAt = cdTableAt + 4;
+        int skinAt = cdTableAt + 4;
+        int skinBytes = skinFamilies * skinRefs * sizeof(short);
+        int stringsAt = skinAt + skinBytes;
 
         List<byte> strings = [];
         int boneName = stringsAt + strings.Count;
@@ -101,6 +105,9 @@ public class StudioFileTests
             TextureIndex = textureAt,
             NumCdTextures = 1,
             CdTextureIndex = cdTableAt,
+            NumSkinFamilies = skinFamilies,
+            NumSkinRef = skinRefs,
+            SkinIndex = skinFamilies > 0 ? skinAt : 0,
             SurfacePropIndex = surfaceProp,
             KeyValueIndex = keyValues,
             KeyValueSize = kv.Length,
@@ -156,6 +163,15 @@ public class StudioFileTests
         Put(bytes, in mesh);
         Put(bytes, in texture);
         bytes.AddRange(BitConverter.GetBytes(cdName));
+        for (int family = 0; family < skinFamilies; family++)
+        {
+            for (int reference = 0; reference < skinRefs; reference++)
+            {
+                // A permutation, so every family names each texture once in a
+                // different order: family f rotates by f.
+                bytes.AddRange(BitConverter.GetBytes((short)((family + reference) % skinRefs)));
+            }
+        }
         bytes.AddRange(strings);
         return [.. bytes];
     }
@@ -573,6 +589,83 @@ public class StudioFileTests
 
         Assert.Equal(mdl.Checksum, vvd.Checksum);
         Assert.Equal(mdl.Checksum, vtx.Checksum);
+    }
+
+    [Fact]
+    public void TheSkinTableIsFamiliesOfRefsInFileOrder()
+    {
+        MdlFile mdl = MdlFile.Parse(BuildMdl(out _, skinFamilies: 3, skinRefs: 4));
+
+        ReadOnlySpan<short> skins = mdl.SkinTable();
+        Assert.Equal(12, skins.Length);
+        // Family 0 in order, family 1 rotated by one, family 2 by two.
+        Assert.Equal<short>([0, 1, 2, 3], skins[..4].ToArray());
+        Assert.Equal<short>([1, 2, 3, 0], skins[4..8].ToArray());
+        Assert.Equal<short>([2, 3, 0, 1], skins[8..12].ToArray());
+    }
+
+    [Fact]
+    public void AnMdlWithoutSkinsHasAnEmptySkinTable()
+    {
+        // NumSkinFamilies and NumSkinRef are both zero, and SkinIndex is
+        // unset: the accessor must answer empty, not read the header as
+        // a zero-length skin table at offset 0.
+        MdlFile mdl = MdlFile.Parse(BuildMdl(out _));
+
+        Assert.Equal(0, mdl.SkinTable().Length);
+    }
+
+    [Fact]
+    public void TheDefaultSkinIsFamilyZero()
+    {
+        // Family 0 is the identity: mesh i shows texture i.
+        MdlFile mdl = MdlFile.Parse(BuildMdl(out _, skinFamilies: 2, skinRefs: 3));
+
+        Assert.Equal<short>([0, 1, 2], mdl.SkinTable()[..3].ToArray());
+    }
+
+    /// <summary>The MDL with its version field (the int after the ident) rewritten.</summary>
+    private static byte[] WithVersion(int version)
+    {
+        byte[] bytes = BuildMdl(out _);
+        BitConverter.GetBytes(version).CopyTo(bytes, 4);
+        return bytes;
+    }
+
+    [Theory]
+    [InlineData(44)]
+    [InlineData(47)]
+    public void AnOlderVersionIsRefusedByDefaultAndReadWhenEngineCompatible(int version)
+    {
+        byte[] bytes = WithVersion(version);
+
+        Assert.Throws<InvalidStudioException>(() => MdlFile.Parse(bytes));
+        Assert.Throws<InvalidStudioException>(() => MdlFile.Parse(bytes, MdlVersionPolicy.Exact));
+        MdlFile mdl = MdlFile.Parse(bytes, MdlVersionPolicy.EngineCompatible);
+
+        // The header keeps the version the file declares; nothing is converted.
+        Assert.Equal(version, mdl.Header.Version);
+        Assert.Equal("metal", mdl.SurfaceProp);
+    }
+
+    [Theory]
+    [InlineData(43)]
+    [InlineData(49)]
+    public void VersionsTheEngineDoesNotConvertAreRefusedEitherWay(int version)
+    {
+        InvalidStudioException error = Assert.Throws<InvalidStudioException>(
+            () => MdlFile.Parse(WithVersion(version), MdlVersionPolicy.EngineCompatible));
+
+        Assert.Contains("44..48", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheCurrentVersionIsReadUnderEitherPolicy()
+    {
+        byte[] bytes = BuildMdl(out _);
+
+        Assert.Equal(StudioIdents.MdlVersion, MdlFile.Parse(bytes, MdlVersionPolicy.Exact).Header.Version);
+        Assert.Equal(StudioIdents.MdlVersion, MdlFile.Parse(bytes, MdlVersionPolicy.EngineCompatible).Header.Version);
     }
 
     [Fact]
