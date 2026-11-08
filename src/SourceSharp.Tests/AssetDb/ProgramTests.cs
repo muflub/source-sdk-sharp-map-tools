@@ -228,7 +228,8 @@ public sealed class ProgramTests
         IReadOnlyList<string> roots = Program.DefaultSteamRoots("/home/someone");
 
         Assert.Equal(4, roots.Count);
-        Assert.All(roots, r => Assert.StartsWith("/home/someone/", r, StringComparison.Ordinal));
+        // Joined with the platform's separator: a backslash after the home on Windows.
+        Assert.All(roots, r => Assert.StartsWith("/home/someone" + Path.DirectorySeparatorChar, r, StringComparison.Ordinal));
         Assert.All(roots, r => Assert.EndsWith(Path.Combine("steamapps", "common"), r, StringComparison.Ordinal));
     }
 }
