@@ -5,7 +5,7 @@
 //
 //=============================================================================//
 
-namespace SourceSharp.AssetDb.Imaging;
+namespace SourceSharp.MapFormats.Imaging;
 
 /// <summary>
 /// An 8-bit RGBA image: row-major from the top-left, four bytes per pixel.

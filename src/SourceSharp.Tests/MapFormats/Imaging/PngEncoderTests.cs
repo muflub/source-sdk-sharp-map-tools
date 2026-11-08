@@ -12,11 +12,11 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text;
 
-using SourceSharp.AssetDb.Imaging;
+using SourceSharp.MapFormats.Imaging;
 
 using Xunit;
 
-namespace SourceSharp.Tests.AssetDb;
+namespace SourceSharp.Tests.MapFormats.Imaging;
 
 /// <summary>
 /// Facts for <see cref="PngEncoder"/>, including a deliberately independent

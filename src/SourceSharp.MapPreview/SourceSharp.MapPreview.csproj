@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+
+    <!-- The preview is a library a long-lived service hosts, like MapTools, so
+         it carries the same posture: every public member documented, tokens
+         last and forwarded. LibraryRuleTests, DeterministicMathRuleTests and
+         FileSystemSeamTests scan it with MapTools' rules (no mutable statics,
+         no packages, no platform math, file IO only through IFileSystem). -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
+
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <WarningsAsErrors>$(WarningsAsErrors);CA1068;CA2016</WarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Formats for the BSP, materials, textures and models it draws; MapTools
+         for game mounting, the compile, nav3d, lighting readers and the checks
+         it gathers. No packages: rendering, PNG encoding and the JSON report
+         are all framework or this repository. -->
+    <ProjectReference Include="..\SourceSharp.MapFormats\SourceSharp.MapFormats.csproj" />
+    <ProjectReference Include="..\SourceSharp.MapTools\SourceSharp.MapTools.csproj" />
+  </ItemGroup>
+</Project>

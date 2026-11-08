@@ -17,6 +17,7 @@
     <ProjectReference Include="..\SourceSharp.AssetDb\SourceSharp.AssetDb.csproj" />
     <ProjectReference Include="..\SourceSharp.MapFormats\SourceSharp.MapFormats.csproj" />
     <ProjectReference Include="..\SourceSharp.MapTools\SourceSharp.MapTools.csproj" />
+    <ProjectReference Include="..\SourceSharp.MapPreview\SourceSharp.MapPreview.csproj" />
     <ProjectReference Include="..\SourceSharp.RoomContracts\SourceSharp.RoomContracts.csproj" />
     <ProjectReference Include="..\SourceSharp.MapCompile\SourceSharp.MapCompile.csproj" />
     <ProjectReference Include="..\SourceSharp.MapGen\SourceSharp.MapGen.csproj" />

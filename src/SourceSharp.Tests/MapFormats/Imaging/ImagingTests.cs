@@ -5,13 +5,13 @@
 //
 //=============================================================================//
 
-using SourceSharp.AssetDb.Imaging;
+using SourceSharp.MapFormats.Imaging;
 using SourceSharp.MapFormats.Assets;
 using SourceSharp.MapGen.Content;
 
 using Xunit;
 
-namespace SourceSharp.Tests.AssetDb;
+namespace SourceSharp.Tests.MapFormats.Imaging;
 
 /// <summary>The small imaging pieces: the image buffer, its statistics, the mip choice and the label font.</summary>
 public sealed class ImagingTests
@@ -197,6 +197,25 @@ public sealed class ImagingTests
             Assert.True(rows.Length == BitmapFont.GlyphWidth * BitmapFont.GlyphHeight, $"'{c}' has {rows.Length} cells");
             Assert.True(rows.All(cell => cell is '#' or '.'), $"'{c}' has a cell that is neither ink nor blank");
             Assert.Contains('#', rows);
+        }
+    }
+
+    [Fact]
+    public void TheCharacterListAndTheGlyphTableNameTheSameCharacters()
+    {
+        // The glyphs are a switch and the list a string beside it; this is what
+        // keeps a glyph added to one from being missed by the other.
+        HashSet<char> listed = [.. BitmapFont.Characters];
+        Assert.Equal(listed.Count, BitmapFont.Characters.Count());
+        for (int c = 0; c < 128; c++)
+        {
+            char ch = (char)c;
+            if (char.IsLower(ch))
+            {
+                continue;
+            }
+
+            Assert.True(BitmapFont.HasGlyph(ch) == listed.Contains(ch), $"'{ch}' (0x{c:x2}) disagrees");
         }
     }
 
