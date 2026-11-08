@@ -9,6 +9,7 @@ using System.Globalization;
 using System.Text;
 
 using SourceSharp.AssetDb.Database;
+using SourceSharp.AssetDb.Maps;
 using SourceSharp.AssetDb.Materials;
 using SourceSharp.AssetDb.Models;
 using SourceSharp.AssetDb.Textures;
@@ -23,12 +24,23 @@ namespace SourceSharp.AssetDb;
 /// <param name="Models">How many models were exported.</param>
 /// <param name="Issues">How many inputs were passed over.</param>
 /// <param name="PrunedImages">How many images of assets no game uses any more were deleted.</param>
-public sealed record ImportSummary(string Game, int Textures, int Materials, int Models, int Issues, int PrunedImages);
+/// <param name="Previews">How many lit material previews the game has.</param>
+/// <param name="Maps">How many of the game's own maps were read for usage.</param>
+public sealed record ImportSummary(
+    string Game,
+    int Textures,
+    int Materials,
+    int Models,
+    int Issues,
+    int PrunedImages,
+    int Previews = 0,
+    int Maps = 0);
 
 /// <summary>
 /// Imports one mounted game into an asset database: materials, then textures,
-/// then models, then one transaction to store them, then a sweep of what no
-/// game uses any more, then the README.
+/// then lit previews of bump-mapped materials, then the game's own maps for
+/// usage, then models, then one transaction to store them, then a sweep of
+/// what no game uses any more, then the README and CLAUDE.md.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -93,12 +105,27 @@ public static class AssetImporter
         options.Progress?.Report(new ImportProgress("materials", materials.Count, materials.Count));
 
         IReadOnlyList<TextureRecord> textures = [];
+        IReadOnlyList<PreviewRecord> previews = [];
         if (options.Textures)
         {
             AssetIndex<TextureRecord> knownTextures = TextureExporter.Index(database.LoadTextures());
             (textures, IReadOnlyList<ImportIssue> textureIssues) = await TextureExporter.ExportAsync(
-                content, output, knownTextures, options, cancellationToken).ConfigureAwait(false);
+                content, output, knownTextures, TextureExporter.BumpMapKinds(materials), options, cancellationToken)
+                .ConfigureAwait(false);
             issues.AddRange(textureIssues);
+
+            (previews, IReadOnlyList<ImportIssue> previewIssues) = await MaterialPreview.RenderAsync(
+                content, output, materials, MaterialPreview.Index(database.LoadPreviews()), options, cancellationToken)
+                .ConfigureAwait(false);
+            issues.AddRange(previewIssues);
+        }
+
+        IReadOnlyList<MapUsage> maps = [];
+        if (options.Maps)
+        {
+            (maps, IReadOnlyList<ImportIssue> mapIssues) = await MapUsageScanner.ScanAsync(content, options, cancellationToken)
+                .ConfigureAwait(false);
+            issues.AddRange(mapIssues);
         }
 
         Dictionary<string, MaterialRecord> byName = new(StringComparer.Ordinal);
@@ -124,12 +151,14 @@ public static class AssetImporter
                 Materials = materials,
                 Models = models,
                 Issues = issues,
+                Previews = previews,
+                Maps = maps,
             },
             cancellationToken);
 
         int pruned = await PruneAsync(database, output, cancellationToken).ConfigureAwait(false);
         await WriteReadmeAsync(database, output, cancellationToken).ConfigureAwait(false);
-        return new ImportSummary(name, textures.Count, materials.Count, models.Count, issues.Count, pruned);
+        return new ImportSummary(name, textures.Count, materials.Count, models.Count, issues.Count, pruned, previews.Count, maps.Count);
     }
 
     /// <summary>

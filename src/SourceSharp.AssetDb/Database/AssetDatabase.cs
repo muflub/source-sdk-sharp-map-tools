@@ -9,6 +9,7 @@ using System.Globalization;
 
 using Microsoft.Data.Sqlite;
 
+using SourceSharp.AssetDb.Maps;
 using SourceSharp.AssetDb.Materials;
 using SourceSharp.AssetDb.Models;
 using SourceSharp.AssetDb.Textures;
@@ -25,6 +26,7 @@ namespace SourceSharp.AssetDb.Database;
 /// <param name="Materials">How many materials.</param>
 /// <param name="Models">How many models were exported.</param>
 /// <param name="Issues">How many inputs were passed over.</param>
+/// <param name="Maps">How many of the game's own maps were scanned for usage.</param>
 public sealed record GameSummary(
     string Name,
     string? Title,
@@ -33,7 +35,8 @@ public sealed record GameSummary(
     int Textures,
     int Materials,
     int Models,
-    int Issues);
+    int Issues,
+    int Maps);
 
 /// <summary>Everything one game's import found, ready to store.</summary>
 public sealed record GameImport
@@ -61,6 +64,12 @@ public sealed record GameImport
 
     /// <summary>Gets what was passed over, and why.</summary>
     public required IReadOnlyList<ImportIssue> Issues { get; init; }
+
+    /// <summary>Gets the lit previews of the game's bump-mapped materials.</summary>
+    public IReadOnlyList<PreviewRecord> Previews { get; init; } = [];
+
+    /// <summary>Gets what the game's own maps use.</summary>
+    public IReadOnlyList<MapUsage> Maps { get; init; } = [];
 }
 
 /// <summary>
@@ -91,12 +100,16 @@ public sealed record GameImport
 public sealed class AssetDatabase : IDisposable
 {
     /// <summary>The schema version this code writes, stored in <c>PRAGMA user_version</c>.</summary>
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     /// <summary>The database's file name inside the output directory.</summary>
     public const string FileName = "assets.db";
 
     private readonly SqliteConnection _connection;
+
+    /// <summary>The tables holding one game's rows, cleared when the game is re-imported or removed.</summary>
+    private static IEnumerable<string> PerGameTables =>
+        ["game_textures", "materials", "game_models", "model_materials", "issues", "map_materials", "map_models", "maps"];
 
     private AssetDatabase(SqliteConnection connection) => _connection = connection;
 
@@ -181,7 +194,7 @@ public sealed class AssetDatabase : IDisposable
         command.CommandText = """
             SELECT path, sha256, width, height, format, mips, frames, flags,
                    reflectivity_r, reflectivity_g, reflectivity_b, average_colour, has_alpha,
-                   image, image_width, image_height
+                   image, image_width, image_height, kind
             FROM textures ORDER BY path, sha256
             """;
         List<TextureRecord> records = [];
@@ -199,11 +212,12 @@ public sealed class AssetDatabase : IDisposable
                 Frames = reader.GetInt32(6),
                 Flags = reader.GetString(7),
                 Reflectivity = (reader.GetFloat(8), reader.GetFloat(9), reader.GetFloat(10)),
-                AverageColour = reader.GetString(11),
+                AverageColour = reader.IsDBNull(11) ? null : reader.GetString(11),
                 HasAlpha = reader.GetInt32(12) != 0,
-                Image = reader.GetString(13),
+                Image = reader.IsDBNull(13) ? null : reader.GetString(13),
                 ImageWidth = reader.GetInt32(14),
                 ImageHeight = reader.GetInt32(15),
+                Kind = reader.GetString(16),
                 Source = string.Empty,
             });
         }
@@ -227,6 +241,23 @@ public sealed class AssetDatabase : IDisposable
         return records;
     }
 
+    /// <summary>Every lit preview the database holds, for reuse by the next import.</summary>
+    /// <returns>The previews.</returns>
+    public IReadOnlyList<PreviewRecord> LoadPreviews()
+    {
+        using SqliteCommand command = _connection.CreateCommand();
+        command.CommandText = "SELECT material, sha256, image, width, height FROM previews ORDER BY material, sha256";
+        List<PreviewRecord> records = [];
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            records.Add(new PreviewRecord(
+                reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3), reader.GetInt32(4)));
+        }
+
+        return records;
+    }
+
     /// <summary>
     /// Stores one game's import, replacing whatever an earlier import of the
     /// same name stored, in one transaction.
@@ -239,14 +270,16 @@ public sealed class AssetDatabase : IDisposable
 
         using SqliteTransaction transaction = _connection.BeginTransaction();
         long game = UpsertGame(import, transaction);
-        foreach (string table in (string[])["game_textures", "materials", "game_models", "model_materials", "issues"])
+        foreach (string table in PerGameTables)
         {
             Execute(transaction, $"DELETE FROM {table} WHERE game_id = $game", ("$game", game));
         }
 
         InsertTextures(transaction, game, import.Textures, cancellationToken);
         InsertMaterials(transaction, game, import.Materials, cancellationToken);
+        InsertPreviews(transaction, game, import.Previews, cancellationToken);
         InsertModels(transaction, game, import.Models, cancellationToken);
+        InsertMaps(transaction, game, import.Maps, cancellationToken);
 
         using (SqliteCommand issue = Command(transaction, """
             INSERT INTO issues(game_id, kind, path, reason) VALUES ($game, $kind, $path, $reason)
@@ -274,7 +307,8 @@ public sealed class AssetDatabase : IDisposable
                 textures = (SELECT count(*) FROM game_textures WHERE game_id = $game),
                 materials = (SELECT count(*) FROM materials WHERE game_id = $game),
                 models = (SELECT count(*) FROM game_models WHERE game_id = $game),
-                issues = (SELECT count(*) FROM issues WHERE game_id = $game)
+                issues = (SELECT count(*) FROM issues WHERE game_id = $game),
+                maps = (SELECT count(*) FROM maps WHERE game_id = $game)
             WHERE id = $game
             """, ("$game", game));
 
@@ -298,7 +332,7 @@ public sealed class AssetDatabase : IDisposable
             return false;
         }
 
-        foreach (string table in (string[])["game_textures", "materials", "game_models", "model_materials", "issues"])
+        foreach (string table in PerGameTables)
         {
             Execute(transaction, $"DELETE FROM {table} WHERE game_id = $game", ("$game", game));
         }
@@ -323,7 +357,7 @@ public sealed class AssetDatabase : IDisposable
         using SqliteTransaction transaction = _connection.BeginTransaction();
 
         using (SqliteCommand textures = Command(transaction, """
-            SELECT image FROM textures WHERE id NOT IN (SELECT texture_id FROM game_textures)
+            SELECT image FROM textures WHERE image IS NOT NULL AND id NOT IN (SELECT texture_id FROM game_textures)
             """))
         using (SqliteDataReader reader = textures.ExecuteReader())
         {
@@ -351,6 +385,18 @@ public sealed class AssetDatabase : IDisposable
         }
 
         Execute(transaction, "UPDATE materials SET texture_id = NULL WHERE texture_id NOT IN (SELECT texture_id FROM game_textures)");
+        using (SqliteCommand previews = Command(transaction, """
+            SELECT image FROM previews WHERE id NOT IN (SELECT preview_id FROM materials WHERE preview_id IS NOT NULL)
+            """))
+        using (SqliteDataReader reader = previews.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                images.Add(reader.GetString(0));
+            }
+        }
+
+        Execute(transaction, "DELETE FROM previews WHERE id NOT IN (SELECT preview_id FROM materials WHERE preview_id IS NOT NULL)");
         Execute(transaction, "DELETE FROM textures WHERE id NOT IN (SELECT texture_id FROM game_textures)");
         Execute(transaction, "DELETE FROM models WHERE id NOT IN (SELECT model_id FROM game_models)");
         transaction.Commit();
@@ -365,7 +411,7 @@ public sealed class AssetDatabase : IDisposable
     {
         using SqliteCommand command = _connection.CreateCommand();
         command.CommandText = """
-            SELECT name, title, directory, imported_utc, textures, materials, models, issues
+            SELECT name, title, directory, imported_utc, textures, materials, models, issues, maps
             FROM games ORDER BY name
             """;
         List<GameSummary> games = [];
@@ -380,7 +426,8 @@ public sealed class AssetDatabase : IDisposable
                 reader.GetInt32(4),
                 reader.GetInt32(5),
                 reader.GetInt32(6),
-                reader.GetInt32(7)));
+                reader.GetInt32(7),
+                reader.GetInt32(8)));
         }
 
         return games;
@@ -476,10 +523,11 @@ public sealed class AssetDatabase : IDisposable
         using SqliteCommand upsert = Command(transaction, """
             INSERT INTO textures(path, sha256, width, height, format, mips, frames, flags,
                 reflectivity_r, reflectivity_g, reflectivity_b, average_colour, has_alpha,
-                image, image_width, image_height)
+                image, image_width, image_height, kind)
             VALUES ($path, $sha, $width, $height, $format, $mips, $frames, $flags,
-                $rr, $rg, $rb, $colour, $alpha, $image, $iw, $ih)
+                $rr, $rg, $rb, $colour, $alpha, $image, $iw, $ih, $kind)
             ON CONFLICT(path, sha256) DO UPDATE SET
+                kind = excluded.kind,
                 width = excluded.width, height = excluded.height, format = excluded.format,
                 mips = excluded.mips, frames = excluded.frames, flags = excluded.flags,
                 reflectivity_r = excluded.reflectivity_r, reflectivity_g = excluded.reflectivity_g,
@@ -501,7 +549,7 @@ public sealed class AssetDatabase : IDisposable
                 ("$format", t.Format), ("$mips", t.Mips), ("$frames", t.Frames), ("$flags", t.Flags),
                 ("$rr", t.Reflectivity.R), ("$rg", t.Reflectivity.G), ("$rb", t.Reflectivity.B),
                 ("$colour", t.AverageColour), ("$alpha", t.HasAlpha), ("$image", t.Image),
-                ("$iw", t.ImageWidth), ("$ih", t.ImageHeight));
+                ("$iw", t.ImageWidth), ("$ih", t.ImageHeight), ("$kind", t.Kind));
             long id = (long)upsert.ExecuteScalar()!;
             Bind(link, ("$game", game), ("$texture", id), ("$source", t.Source));
             link.ExecuteNonQuery();
@@ -517,11 +565,11 @@ public sealed class AssetDatabase : IDisposable
         using SqliteCommand insert = Command(transaction, """
             INSERT OR REPLACE INTO materials(game_id, path, shader, usage, category,
                 base_texture, base_texture2, bump_map, detail, env_map, tool_texture,
-                surface_prop, surface_prop2, keywords, translucent, alpha_test, self_illum,
+                surface_prop, surface_prop2, keywords, translucent, alpha_test, self_illum, ss_bump,
                 include, parameters, vmt, source)
             VALUES ($game, $path, $shader, $usage, $category,
                 $base, $base2, $bump, $detail, $envmap, $tool,
-                $surface, $surface2, $keywords, $translucent, $alphatest, $selfillum,
+                $surface, $surface2, $keywords, $translucent, $alphatest, $selfillum, $ssbump,
                 $include, $parameters, $vmt, $source)
             """);
 
@@ -534,9 +582,79 @@ public sealed class AssetDatabase : IDisposable
                 ("$category", m.Category), ("$base", m.BaseTexture), ("$base2", m.BaseTexture2),
                 ("$bump", m.BumpMap), ("$detail", m.Detail), ("$envmap", m.EnvMap), ("$tool", m.ToolTexture),
                 ("$surface", m.SurfaceProp), ("$surface2", m.SurfaceProp2), ("$keywords", m.Keywords),
-                ("$translucent", m.Translucent), ("$alphatest", m.AlphaTest), ("$selfillum", m.SelfIllum),
+                ("$translucent", m.Translucent), ("$alphatest", m.AlphaTest), ("$selfillum", m.SelfIllum), ("$ssbump", m.SsBump),
                 ("$include", m.Include), ("$parameters", m.Parameters), ("$vmt", m.Vmt), ("$source", m.Source));
             insert.ExecuteNonQuery();
+        }
+    }
+
+    private static void InsertPreviews(
+        SqliteTransaction transaction,
+        long game,
+        IReadOnlyList<PreviewRecord> previews,
+        CancellationToken cancellationToken)
+    {
+        using SqliteCommand upsert = Command(transaction, """
+            INSERT INTO previews(material, sha256, image, width, height) VALUES ($material, $sha, $image, $w, $h)
+            ON CONFLICT(material, sha256) DO UPDATE SET image = excluded.image, width = excluded.width, height = excluded.height
+            RETURNING id
+            """);
+        using SqliteCommand link = Command(transaction, """
+            UPDATE materials SET preview_id = $preview WHERE game_id = $game AND path = $material
+            """);
+
+        foreach (PreviewRecord p in previews)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Bind(upsert, ("$material", p.Material), ("$sha", p.Sha256), ("$image", p.Image), ("$w", p.Width), ("$h", p.Height));
+            long id = (long)upsert.ExecuteScalar()!;
+            Bind(link, ("$preview", id), ("$game", game), ("$material", p.Material));
+            link.ExecuteNonQuery();
+        }
+    }
+
+    private static void InsertMaps(
+        SqliteTransaction transaction,
+        long game,
+        IReadOnlyList<MapUsage> maps,
+        CancellationToken cancellationToken)
+    {
+        using SqliteCommand map = Command(transaction, """
+            INSERT INTO maps(game_id, name, sha256, source, sky_name, faces, static_props, entities)
+            VALUES ($game, $name, $sha, $source, $sky, $faces, $props, $entities)
+            RETURNING id
+            """);
+        using SqliteCommand material = Command(transaction, """
+            INSERT INTO map_materials(game_id, map_id, material, kind, count, area)
+            VALUES ($game, $map, $material, $kind, $count, $area)
+            """);
+        using SqliteCommand model = Command(transaction, """
+            INSERT INTO map_models(game_id, map_id, model, kind, count) VALUES ($game, $map, $model, $kind, $count)
+            """);
+
+        foreach (MapUsage m in maps)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Bind(
+                map,
+                ("$game", game), ("$name", m.Name), ("$sha", m.Sha256), ("$source", m.Source), ("$sky", m.SkyName),
+                ("$faces", m.Faces), ("$props", m.StaticProps), ("$entities", m.Entities));
+            long id = (long)map.ExecuteScalar()!;
+
+            foreach (MapMaterialUse use in m.Materials)
+            {
+                Bind(
+                    material,
+                    ("$game", game), ("$map", id), ("$material", use.Material), ("$kind", use.Kind),
+                    ("$count", use.Count), ("$area", use.Area));
+                material.ExecuteNonQuery();
+            }
+
+            foreach (MapModelUse use in m.Models)
+            {
+                Bind(model, ("$game", game), ("$map", id), ("$model", use.Model), ("$kind", use.Kind), ("$count", use.Count));
+                model.ExecuteNonQuery();
+            }
         }
     }
 
@@ -671,7 +789,8 @@ public sealed class AssetDatabase : IDisposable
             textures INTEGER NOT NULL DEFAULT 0,
             materials INTEGER NOT NULL DEFAULT 0,
             models INTEGER NOT NULL DEFAULT 0,
-            issues INTEGER NOT NULL DEFAULT 0);
+            issues INTEGER NOT NULL DEFAULT 0,
+            maps INTEGER NOT NULL DEFAULT 0);
 
         CREATE TABLE textures(
             id INTEGER PRIMARY KEY,
@@ -686,9 +805,10 @@ public sealed class AssetDatabase : IDisposable
             reflectivity_r REAL NOT NULL,
             reflectivity_g REAL NOT NULL,
             reflectivity_b REAL NOT NULL,
-            average_colour TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            average_colour TEXT,
             has_alpha INTEGER NOT NULL,
-            image TEXT NOT NULL,
+            image TEXT,
             image_width INTEGER NOT NULL,
             image_height INTEGER NOT NULL,
             UNIQUE(path, sha256));
@@ -720,11 +840,13 @@ public sealed class AssetDatabase : IDisposable
             translucent INTEGER NOT NULL,
             alpha_test INTEGER NOT NULL,
             self_illum INTEGER NOT NULL,
+            ss_bump INTEGER NOT NULL,
             include TEXT,
             parameters TEXT NOT NULL,
             vmt TEXT NOT NULL,
             source TEXT NOT NULL,
             texture_id INTEGER,
+            preview_id INTEGER,
             UNIQUE(game_id, path));
         CREATE INDEX materials_path ON materials(path);
         CREATE INDEX materials_usage ON materials(game_id, usage);
@@ -783,6 +905,46 @@ public sealed class AssetDatabase : IDisposable
             material TEXT,
             PRIMARY KEY(game_id, model_id, skin, slot)) WITHOUT ROWID;
 
+        CREATE TABLE previews(
+            id INTEGER PRIMARY KEY,
+            material TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            image TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            UNIQUE(material, sha256));
+
+        CREATE TABLE maps(
+            id INTEGER PRIMARY KEY,
+            game_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            source TEXT NOT NULL,
+            sky_name TEXT,
+            faces INTEGER NOT NULL,
+            static_props INTEGER NOT NULL,
+            entities INTEGER NOT NULL,
+            UNIQUE(game_id, name));
+
+        CREATE TABLE map_materials(
+            game_id INTEGER NOT NULL,
+            map_id INTEGER NOT NULL,
+            material TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            count INTEGER NOT NULL,
+            area REAL NOT NULL,
+            PRIMARY KEY(map_id, material, kind)) WITHOUT ROWID;
+        CREATE INDEX map_materials_material ON map_materials(game_id, material);
+
+        CREATE TABLE map_models(
+            game_id INTEGER NOT NULL,
+            map_id INTEGER NOT NULL,
+            model TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            count INTEGER NOT NULL,
+            PRIMARY KEY(map_id, model, kind)) WITHOUT ROWID;
+        CREATE INDEX map_models_model ON map_models(game_id, model);
+
         CREATE TABLE issues(
             game_id INTEGER NOT NULL,
             kind TEXT NOT NULL,
@@ -793,17 +955,26 @@ public sealed class AssetDatabase : IDisposable
         CREATE VIEW material_view AS
             SELECT g.name AS game, m.path AS material, m.usage, m.category, m.shader,
                    m.surface_prop, m.keywords, m.translucent, m.alpha_test,
-                   t.width, t.height, t.average_colour, t.has_alpha, t.image,
-                   m.base_texture, m.base_texture2, m.bump_map, m.tool_texture, m.include
+                   t.width, t.height, t.average_colour, t.has_alpha, t.image, p.image AS preview,
+                   (SELECT count(DISTINCT u.map_id) FROM map_materials u
+                    WHERE u.game_id = m.game_id AND u.material = m.path) AS maps_used,
+                   (SELECT coalesce(round(sum(u.area)), 0) FROM map_materials u
+                    WHERE u.game_id = m.game_id AND u.material = m.path) AS area_used,
+                   m.base_texture, m.base_texture2, m.bump_map, m.ss_bump, m.tool_texture, m.include
             FROM materials m
             JOIN games g ON g.id = m.game_id
-            LEFT JOIN textures t ON t.id = m.texture_id;
+            LEFT JOIN textures t ON t.id = m.texture_id
+            LEFT JOIN previews p ON p.id = m.preview_id;
 
         CREATE VIEW model_view AS
             SELECT g.name AS game, mo.path AS model, mo.static_prop, mo.prop_data, mo.surface_prop,
                    mo.size_x, mo.size_y, mo.size_z,
                    mo.mesh_min_x, mo.mesh_min_y, mo.mesh_min_z, mo.mesh_max_x, mo.mesh_max_y, mo.mesh_max_z,
                    mo.triangles, mo.skins, mo.sequences, mo.has_collision, mo.mass, mo.grid_step,
+                   (SELECT count(DISTINCT u.map_id) FROM map_models u
+                    WHERE u.game_id = gm.game_id AND u.model = mo.path) AS maps_used,
+                   (SELECT coalesce(sum(u.count), 0) FROM map_models u
+                    WHERE u.game_id = gm.game_id AND u.model = mo.path) AS placements,
                    mo.image_sheet, mo.image_front, mo.image_back, mo.image_left, mo.image_right,
                    mo.image_top, mo.image_iso
             FROM game_models gm
@@ -811,10 +982,22 @@ public sealed class AssetDatabase : IDisposable
             JOIN models mo ON mo.id = gm.model_id;
 
         CREATE VIEW texture_view AS
-            SELECT g.name AS game, t.path AS texture, t.width, t.height, t.format, t.flags,
+            SELECT g.name AS game, t.path AS texture, t.kind, t.width, t.height, t.format, t.flags,
                    t.average_colour, t.has_alpha, t.image
             FROM game_textures gt
             JOIN games g ON g.id = gt.game_id
             JOIN textures t ON t.id = gt.texture_id;
+
+        CREATE VIEW material_usage AS
+            SELECT g.name AS game, mp.name AS map, u.material, u.kind, u.count, u.area
+            FROM map_materials u
+            JOIN maps mp ON mp.id = u.map_id
+            JOIN games g ON g.id = u.game_id;
+
+        CREATE VIEW model_usage AS
+            SELECT g.name AS game, mp.name AS map, u.model, u.kind, u.count
+            FROM map_models u
+            JOIN maps mp ON mp.id = u.map_id
+            JOIN games g ON g.id = u.game_id;
         """;
 }

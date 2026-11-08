@@ -236,6 +236,9 @@ dotnet bin/Release/ssassets.dll query --out ~/assetdb \
     "SELECT material, image FROM material_view WHERE game = 'tf' AND usage = 'brush' AND material LIKE '%brick%'"
 ```
 
+It also writes lit previews of bump-mapped materials and reads the game's
+own maps (LZMA-compressed lumps included, via
+`SourceSharp.AssetDb/Compression/LzmaDecoder.cs`; the core library deliberately has no decoder) for usage statistics.
 `--game` is the directory holding `gameinfo.txt`. On a machine without
 Half-Life 2 installed, its content is in `Source SDK Base 2013
 Multiplayer/hl2`. Re-importing reuses every unchanged image (keyed by

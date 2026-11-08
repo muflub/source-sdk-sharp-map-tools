@@ -45,8 +45,15 @@ public sealed record AssetExportOptions
     /// </remarks>
     public int MaxTextureSize { get; init; } = 512;
 
-    /// <summary>Gets whether textures are exported at all.</summary>
+    /// <summary>Gets whether textures are exported at all (and with them, the lit material previews).</summary>
     public bool Textures { get; init; } = true;
+
+    /// <summary>
+    /// Gets whether the game's own compiled maps are read for usage
+    /// statistics: which materials and models its designers used, how much,
+    /// and together with what.
+    /// </summary>
+    public bool Maps { get; init; } = true;
 
     /// <summary>Gets which models are exported.</summary>
     public ModelSelection Models { get; init; } = ModelSelection.Props;
