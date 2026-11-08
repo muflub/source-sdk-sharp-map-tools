@@ -46,21 +46,44 @@ public sealed record TextureRecord
     /// <summary>Gets the header's reflectivity, the colour the light compiler bounces.</summary>
     public required (float R, float G, float B) Reflectivity { get; init; }
 
-    /// <summary>Gets the exported image's average colour as <c>#rrggbb</c>.</summary>
-    public required string AverageColour { get; init; }
+    /// <summary>
+    /// Gets what the texture holds: <see cref="TextureKind.Color"/>,
+    /// <see cref="TextureKind.Normal"/> or <see cref="TextureKind.SsBump"/>.
+    /// </summary>
+    public required string Kind { get; init; }
+
+    /// <summary>Gets the exported image's average colour as <c>#rrggbb</c>, or null when no image was written.</summary>
+    public string? AverageColour { get; init; }
 
     /// <summary>Gets whether any exported pixel is less than fully opaque.</summary>
     public required bool HasAlpha { get; init; }
 
-    /// <summary>Gets the PNG, relative to the database's directory.</summary>
-    public required string Image { get; init; }
+    /// <summary>
+    /// Gets the PNG, relative to the database's directory, or null for a
+    /// bump map: its pixels are directions, not colours, and it is shown
+    /// through the lit preview of the material that uses it instead.
+    /// </summary>
+    public string? Image { get; init; }
 
-    /// <summary>Gets the PNG's width (the exported mip's).</summary>
+    /// <summary>Gets the PNG's width (the exported mip's), or 0 with no image.</summary>
     public required int ImageWidth { get; init; }
 
-    /// <summary>Gets the PNG's height.</summary>
+    /// <summary>Gets the PNG's height, or 0 with no image.</summary>
     public required int ImageHeight { get; init; }
 
     /// <summary>Gets the mount this game read the file from.</summary>
     public required string Source { get; init; }
+}
+
+/// <summary>The values <see cref="TextureRecord.Kind"/> takes.</summary>
+public static class TextureKind
+{
+    /// <summary>A picture: base colour, detail, decal, sky, mask.</summary>
+    public const string Color = "color";
+
+    /// <summary>A tangent-space normal map.</summary>
+    public const string Normal = "normal";
+
+    /// <summary>A self-shadowing bump map: per-pixel light from three fixed directions.</summary>
+    public const string SsBump = "ssbump";
 }

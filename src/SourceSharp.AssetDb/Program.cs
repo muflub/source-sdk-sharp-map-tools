@@ -51,7 +51,8 @@ public static class Program
           --steam <dir>        a steamapps/common directory for |appid_N| paths
                                (repeatable; default: the usual Steam locations)
           --models <which>     props (default), all or none
-          --no-textures        skip texture images (materials are still read)
+          --no-textures        skip texture images and lit previews (materials are still read)
+          --no-maps            skip reading the game's own maps for usage statistics
           --texture-size <n>   longest texture image edge, 0 for full size (default 512)
           --view-size <n>      model view edge in pixels (default 384)
           --threads <n>        files processed at once (default: one per core)
@@ -212,7 +213,8 @@ public static class Program
             await output.WriteLineAsync(string.Create(
                 CultureInfo.InvariantCulture,
                 $"{summary.Game}: {summary.Textures} textures, {summary.Materials} materials, "
-                + $"{summary.Models} models, {summary.Issues} issues, {summary.PrunedImages} stale images removed"))
+                + $"{summary.Previews} previews, {summary.Models} models, {summary.Maps} maps, "
+                + $"{summary.Issues} issues, {summary.PrunedImages} stale images removed"))
                 .ConfigureAwait(false);
         }
 
@@ -228,7 +230,7 @@ public static class Program
             output.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
                 $"{game.Name}\t{game.Title}\t{game.Textures} textures\t{game.Materials} materials\t"
-                + $"{game.Models} models\t{game.Issues} issues\t{game.ImportedUtc}"));
+                + $"{game.Models} models\t{game.Maps} maps\t{game.Issues} issues\t{game.ImportedUtc}"));
         }
 
         return ExitSuccess;
@@ -434,6 +436,9 @@ public sealed record CommandLine
                     break;
                 case "--threads":
                     options = options with { MaxParallelism = Number(args, ref i, arg, minimum: 1) };
+                    break;
+                case "--no-maps":
+                    options = options with { Maps = false };
                     break;
                 case "--force":
                     options = options with { Force = true };
