@@ -137,7 +137,11 @@ Readers and writers for every file the chain touches, and nothing else.
   elementary functions every output-affecting computation uses in place of
   `Math` and `MathF` (see [Elementary functions](#elementary-functions)).
 - `Assets/` reads studio models, `.phy` files and VTF textures.
-- `Zip/` reads and writes the pakfile zip, including LZMA entries.
+- `Zip/` reads and writes the pakfile zip, and reads LZMA (method 14) entries.
+- `Compression/` is the LZMA decoder behind both: compressed lumps, game lump
+  entries and pak entries are unpacked on load, as the engine does, so shipped
+  maps (Team Fortress 2's are compressed lump by lump) load, check and diff.
+  Read side only: the compilers never write compressed output.
 - `Nav/` reads and writes the `.nav3d` level navigation file
   ([`docs/nav3d-format.md`](docs/nav3d-format.md)); the game mod references
   this assembly for `Nav3dReader`, which answers from the file's bytes

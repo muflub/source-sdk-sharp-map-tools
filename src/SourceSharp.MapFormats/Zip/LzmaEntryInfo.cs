@@ -110,15 +110,15 @@ public sealed record LzmaEntryInfo(
     /// <param name="name">The entry's name.</param>
     /// <returns>The message.</returns>
     /// <remarks>
-    /// Deliberately a message and not a decode. A hand-written LZMA decoder is
-    /// a large, fiddly, correctness-critical piece of code that this port does
-    /// not need: the map compilers never WRITE a compressed entry -- without
+    /// For reporting what an entry is without unpacking it. The contents
+    /// themselves come from <see cref="ZipEntry.ReadContents"/>. The map
+    /// compilers never WRITE a compressed entry (without
     /// <c>ZIP_SUPPORT_LZMA_ENCODE</c>, the zip writer's buffer adder
-    /// <c>Error()</c>s for anything but method 0 -- so reading one is needed
-    /// only for a pak some other tool produced.
+    /// <c>Error()</c>s for anything but method 0), so the port decodes and
+    /// never encodes.
     /// </remarks>
     public string Describe(string name) =>
         IsWellFormed
-            ? $"entry '{name}' is LZMA-compressed (ZIP spec 5.8.8 framing, SDK {SdkVersionMajor}.{SdkVersionMinor}, {UncompressedSize} bytes uncompressed); this reader stores only, so its contents are not available"
+            ? $"entry '{name}' is LZMA-compressed (ZIP spec 5.8.8 framing, SDK {SdkVersionMajor}.{SdkVersionMinor}, {UncompressedSize} bytes uncompressed); ZipEntry.ReadContents unpacks it"
             : $"entry '{name}' claims LZMA with a properties size of {PropertiesSize}, but the engine's own decoder accepts only {ExpectedPropertiesSize}, so this entry would not load in the game either";
 }

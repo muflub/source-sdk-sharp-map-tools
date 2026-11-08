@@ -108,11 +108,30 @@ public sealed class ZipEntry
     public uint UncompressedSize { get; }
 
     /// <summary>
-    /// Whether this entry's bytes can be handed back as the file's contents.
+    /// Whether this entry's stored bytes are the file's contents as they are.
     /// </summary>
     /// <remarks>
-    /// False only for LZMA. See <see cref="ZipArchiveReader"/> for why that is
-    /// surfaced rather than decoded.
+    /// False only for LZMA, whose contents <see cref="ReadContents"/> unpacks.
     /// </remarks>
     public bool IsStored => CompressionMethod == ZipCompressionMethod.Store;
+
+    /// <summary>The file the entry holds: its bytes as stored, or unpacked from LZMA.</summary>
+    /// <returns>The file's bytes; a stored entry returns <see cref="Data"/> itself.</returns>
+    /// <exception cref="InvalidZipException">An LZMA entry does not unpack.</exception>
+    public byte[] ReadContents()
+    {
+        if (IsStored)
+        {
+            return Data;
+        }
+
+        try
+        {
+            return Compression.ZipLzma.Decompress(Data, checked((int)UncompressedSize));
+        }
+        catch (Exception e) when (e is InvalidDataException or OverflowException)
+        {
+            throw new InvalidZipException($"entry '{Name}' is LZMA but does not unpack: {e.Message}", e);
+        }
+    }
 }

@@ -5,11 +5,11 @@
 //
 //=============================================================================//
 
-using SourceSharp.AssetDb.Compression;
+using SourceSharp.MapFormats.Compression;
 
 using Xunit;
 
-namespace SourceSharp.Tests.AssetDb;
+namespace SourceSharp.Tests.MapFormats.Compression;
 
 /// <summary>
 /// The LZMA decoder against streams from an independent encoder (liblzma, via
@@ -115,6 +115,23 @@ public sealed class LzmaDecoderTests
         Assert.Throws<InvalidDataException>(() => ValveLzma.Decompress(good.AsSpan(0, 10)));
         Assert.Throws<InvalidDataException>(() => ValveLzma.Decompress(lying));
     }
+
+    [Fact]
+    public void AZipEntryUnpacksThroughItsFramingAndOnlyFivePropertiesBytesAreAccepted()
+    {
+        byte[] expected = Sample();
+        byte[] payload = ZipPayload(Convert.FromBase64String(Stream0));
+        byte[] sevenProps = (byte[])payload.Clone();
+        sevenProps[2] = 7;
+
+        Assert.Equal(expected, ZipLzma.Decompress(payload, expected.Length));
+        Assert.Throws<InvalidDataException>(() => ZipLzma.Decompress(sevenProps, expected.Length));
+        Assert.Throws<InvalidDataException>(() => ZipLzma.Decompress(payload.AsSpan(0, 6), expected.Length));
+    }
+
+    /// <summary>Frames a raw stream as a method-14 zip entry: SDK version, properties size, properties, stream.</summary>
+    internal static byte[] ZipPayload(byte[] raw) =>
+        [9, 20, 5, 0, .. Convert.FromHexString("5d00000100"), .. raw];
 
     /// <summary>Wraps a raw stream in the engine's lump container.</summary>
     internal static byte[] Container(byte[] raw, int unpacked)

@@ -7,6 +7,8 @@
 
 using System.Buffers.Binary;
 
+using SourceSharp.MapFormats.Compression;
+
 namespace SourceSharp.MapFormats.Bsp;
 
 /// <summary>
@@ -119,7 +121,7 @@ public static class BspFile
 
             if (filelen == 0)
             {
-                bsp[i] = new BspLumpData(ReadOnlyMemory<byte>.Empty, lumpVersion, uncompressedSize);
+                bsp[i] = new BspLumpData(ReadOnlyMemory<byte>.Empty, lumpVersion, 0);
                 continue;
             }
 
@@ -134,7 +136,15 @@ public static class BspFile
             stream.Seek(fileofs, SeekOrigin.Begin);
             await stream.ReadExactlyAsync(data, cancellationToken).ConfigureAwait(false);
 
-            bsp[i] = new BspLumpData(data, lumpVersion, uncompressedSize);
+            // A compressed lump is unpacked here, as the engine and the
+            // reference tools unpack it on load, so everything downstream sees
+            // plain lump bytes and a save writes them plain.
+            if (uncompressedSize != 0)
+            {
+                data = Unpack(data, uncompressedSize, $"lump {i}");
+            }
+
+            bsp[i] = new BspLumpData(data, lumpVersion, 0);
         }
 
         bsp.SourceLayout = layout;
@@ -523,6 +533,34 @@ public static class BspFile
         return position + count;
     }
 
+    /// <summary>
+    /// Unpacks one engine LZMA container and checks it against the size the
+    /// file declares for it.
+    /// </summary>
+    private static byte[] Unpack(ReadOnlySpan<byte> packed, int declared, string what)
+    {
+        byte[] bytes;
+        try
+        {
+            bytes = ValveLzma.Decompress(packed);
+        }
+        catch (InvalidDataException e)
+        {
+            throw new InvalidBspException($"{what} is compressed but does not unpack: {e.Message}", e);
+        }
+
+        if (bytes.Length != declared)
+        {
+            throw new InvalidBspException(
+                $"{what} unpacked to {bytes.Length} bytes, not the {declared} its header declares");
+        }
+
+        return bytes;
+    }
+
+    /// <summary>The game lump directory's flag for an LZMA-compressed entry.</summary>
+    private const ushort GameLumpCompressed = 1;
+
     private static void ParseGameLumps(BspData bsp)
     {
         ReadOnlyMemory<byte> raw = bsp[BspLump.GameLump].Data;
@@ -557,6 +595,19 @@ public static class BspFile
             }
         }
 
+        // A compressed entry (flag bit 0) records its UNPACKED size as its
+        // length, so its packed bytes run to the next entry's offset. Shipped
+        // maps end such a directory with an all-zero entry, whose offset is
+        // no help for the last real one: that entry runs to the end of the
+        // lump instead, which is safe because the LZMA container records its
+        // own packed size. The terminator is bookkeeping, not content, and is
+        // dropped.
+        bool anyCompressed = false;
+        for (int i = 0; i < count; i++)
+        {
+            anyCompressed |= (BinaryPrimitives.ReadUInt16LittleEndian(span[(4 + (i * 16) + 4)..]) & GameLumpCompressed) != 0;
+        }
+
         for (int i = 0; i < count; i++)
         {
             ReadOnlySpan<byte> entry = span.Slice(4 + (i * 16), 16);
@@ -565,6 +616,33 @@ public static class BspFile
             ushort version = BinaryPrimitives.ReadUInt16LittleEndian(entry[6..]);
             int fileofs = BinaryPrimitives.ReadInt32LittleEndian(entry[8..]);
             int filelen = BinaryPrimitives.ReadInt32LittleEndian(entry[12..]);
+
+            if (anyCompressed && id == 0 && filelen == 0)
+            {
+                continue;
+            }
+
+            if ((flags & GameLumpCompressed) != 0)
+            {
+                int packedStart = fileofs - lumpBase;
+                int nextOffset = i + 1 < count
+                    ? BinaryPrimitives.ReadInt32LittleEndian(span[(4 + ((i + 1) * 16) + 8)..])
+                    : 0;
+                int packedEnd = nextOffset > fileofs ? nextOffset - lumpBase : raw.Length;
+                if (packedStart < 0 || packedEnd < packedStart || packedEnd > raw.Length)
+                {
+                    throw new InvalidBspException(
+                        $"compressed game lump {i} (\"{new GameLumpEntry(id, flags, version, default).IdString()}\") " +
+                        $"spans {packedStart}..{packedEnd} of a {raw.Length}-byte lump");
+                }
+
+                byte[] unpacked = Unpack(
+                    raw.Span[packedStart..packedEnd],
+                    filelen,
+                    $"game lump {i} (\"{new GameLumpEntry(id, flags, version, default).IdString()}\")");
+                bsp.GameLumps.Add(new GameLumpEntry(id, (ushort)(flags & ~GameLumpCompressed), version, unpacked));
+                continue;
+            }
 
             int start = fileofs - lumpBase;
             if (start < 0 || filelen < 0 || start + filelen > raw.Length)
