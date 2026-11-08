@@ -108,6 +108,7 @@ src/
   SourceSharp.RoomContracts/              the Source Sharp mod entity contract (logic_room, cxry_ names); no references
   SourceSharp.MapTools/                   the compile passes (core library)
   SourceSharp.MapCompile/                 the ssmap CLI (assembly name: ssmap)
+  SourceSharp.AssetDb/                    ssassets: texture/material/model database for map design
   SourceSharp.MapTools.Cache.Sqlite/      optional SQLite store for the incremental cache
   SourceSharp.MapTools.Gpu/               optional Vulkan radiosity backend
   SourceSharp.MapGen/                     generated feature catalogue and sandbox map
@@ -181,6 +182,14 @@ A thin host over the libraries. It parses stock-spelled arguments, draws the
 progress output and the cache report, maps failures to exit codes and wires
 Ctrl-C to cancellation. It references the libraries with no
 `InternalsVisibleTo`, so anything `ssmap` can do, another host can do too.
+
+### `SourceSharp.AssetDb`
+
+`ssassets`, a second host. It mounts a game the way the compilers do and
+builds an offline database an agent (or a person) can search when choosing
+content for a map: a PNG of every texture, six rendered views and a sheet of
+every prop model, and one SQLite file with the metadata. See
+[Asset database](#asset-database).
 
 ## Requirements
 
@@ -261,6 +270,52 @@ compile scripts work by swapping the executable name.
 Exit codes: `0` success, `1` a compile failure the program understood (a map
 error or running out of memory), `2` a command line it could not act on or a
 cancelled run, `70` an internal error.
+
+## Asset database
+
+`ssassets` builds a searchable picture-and-metadata database of a game's
+content, for designing maps (by hand or with an agent) without opening
+Hammer:
+
+```sh
+ssassets import --game "<steamapps>/common/Team Fortress 2/tf" \
+                --game "<steamapps>/common/Source SDK Base 2013 Multiplayer/hl2" \
+                --out ~/assetdb
+ssassets list   --out ~/assetdb
+ssassets query  --out ~/assetdb "SELECT material, image FROM material_view WHERE usage = 'brush' AND material LIKE '%brick%'"
+ssassets remove --out ~/assetdb --name hl2
+```
+
+`--game` takes the directory holding `gameinfo.txt` (`.../tf`, not
+`.../Team Fortress 2`); its search paths, VPKs included, are mounted exactly
+as the compilers mount them, and `|appid_N|` paths resolve through the Steam
+library list. Each game is stored under its directory's name (`tf`, `hl2`)
+unless `--name` says otherwise. The output directory holds:
+
+- `assets.db`, SQLite: `material_view`, `model_view` and `texture_view` join
+  everything into one row per asset per game; the tables under them are
+  documented in the generated README;
+- `README.md`, written for an agent: the schema, query recipes, and how to
+  read the model pictures;
+- `textures/<name>.png`, the largest stored mip up to `--texture-size`
+  (default 512) of every decodable texture;
+- `models/<path>/{front,back,left,right,top,iso}.png` and `sheet.png`, a
+  textured render of each prop's level-of-detail-zero mesh. The axis views
+  share one scale over a labelled grid in world units, with the model's
+  origin drawn darker, so size and placement can be read off the image.
+
+Textures and models are stored once per distinct content (path plus SHA-256)
+and linked to every game that sees them, so a second game that mounts the
+first one's archives costs little, and re-importing an unchanged game decodes
+and renders nothing. `--force` redoes it all. By default only props are
+rendered (static props and anything under a `props*` directory);
+`--models all` renders everything, `--models none` nothing. Inputs that
+cannot be read (float HDR textures, stripped models) are recorded in the
+`issues` table, never fatal.
+
+With 8 threads (a Ryzen 9 9950X limited to 8 CPUs), Team Fortress 2 (34,489 textures, 31,035 materials,
+4,571 props) imports in about 6.5 minutes at 1.5 GB peak memory, and HL2
+(4,992 / 5,107 / 1,882) in under two; together the output is about 5 GB.
 
 ## Commands
 

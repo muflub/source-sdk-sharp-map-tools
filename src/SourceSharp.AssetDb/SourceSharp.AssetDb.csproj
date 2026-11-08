@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- `ssassets`, the offline texture/model database builder. -->
+    <AssemblyName>ssassets</AssemblyName>
+    <RootNamespace>SourceSharp.AssetDb</RootNamespace>
+    <IsPackable>false</IsPackable>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
+
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <WarningsAsErrors>$(WarningsAsErrors);CA1068;CA2016</WarningsAsErrors>
+
+    <!--
+      Same posture as ssmap: a batch export saturates the machine and prefers
+      the cores the background collector would spend, so concurrent GC is off
+      and the server collector owns the process. The libraries themselves
+      never touch these knobs; the exe is the only place that may.
+    -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      An ordinary consumer of the core libraries, same rule as ssmap: no
+      InternalsVisibleTo, so anything an export needs from MapTools/MapFormats
+      must already be public (or become public, documented).
+    -->
+    <ProjectReference Include="..\SourceSharp.MapFormats\SourceSharp.MapFormats.csproj" />
+    <ProjectReference Include="..\SourceSharp.MapTools\SourceSharp.MapTools.csproj" />
+
+    <!--
+      The database is SQLite, read by agents with the sqlite3 CLI or any SQLite
+      binding. The same pinned version as Cache.Sqlite, so the process loads
+      one native e_sqlite3. The package belongs to this host, never to the
+      core libraries (LibraryRuleTests).
+    -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+  </ItemGroup>
+
+</Project>

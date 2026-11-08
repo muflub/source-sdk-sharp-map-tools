@@ -221,6 +221,40 @@ any existing file.
 - The `game/` directories and `maps/` are test corpus, not scratch space.
   Do not write compile output into them in a commit.
 
+## The asset database (`ssassets`)
+
+`src/SourceSharp.AssetDb` builds `ssassets`, an offline catalogue of a
+game's textures, materials and prop models (PNG images plus one SQLite
+file) for choosing content when designing maps. Build it with the
+solution, then:
+
+```sh
+dotnet bin/Release/ssassets.dll import --out ~/assetdb \
+    --game "<steamapps>/common/Team Fortress 2/tf" \
+    --game "<steamapps>/common/Source SDK Base 2013 Multiplayer/hl2"
+dotnet bin/Release/ssassets.dll query --out ~/assetdb \
+    "SELECT material, image FROM material_view WHERE game = 'tf' AND usage = 'brush' AND material LIKE '%brick%'"
+```
+
+`--game` is the directory holding `gameinfo.txt`. On a machine without
+Half-Life 2 installed, its content is in `Source SDK Base 2013
+Multiplayer/hl2`. Re-importing reuses every unchanged image (keyed by
+content hash), so it is cheap; `--force` re-renders.
+
+**When designing a map with it**, work from the output directory: it holds
+its own `CLAUDE.md` (the workflow and rules: query with SQL, shortlist by
+text, then open `image`/`image_sheet` PNGs; brush faces take
+`usage = 'brush'` materials, props take `model_view.model` verbatim) and a
+`README.md` with the schema and how to read the model views. Do not
+write compile output or the database into `game/` or `maps/`.
+
+**When changing it**: the same rules as the libraries apply (IO through
+`IFileSystem`, no platform math in the renderer, deterministic output).
+Images must stay byte-identical run to run, because re-imports reuse them
+by hash. A schema change bumps `AssetDatabase.SchemaVersion`, and the
+generated `README.md`/`CLAUDE.md` (`Database/AgentReadme.cs`) must be
+updated to match.
+
 ## Where things are
 
 | Need to change | Look in |
@@ -236,6 +270,7 @@ any existing file.
 | collision cooking | `src/SourceSharp.MapTools/Phys/` |
 | incremental cache | `src/SourceSharp.MapTools/Compile/Cache/` and `src/SourceSharp.MapTools.Cache.Sqlite/` |
 | loader validation (`ssmap check`) | `src/SourceSharp.MapTools/Validation/` |
+| the asset database (`ssassets`) | `src/SourceSharp.AssetDb/` (exporters, renderer, SQLite schema in `Database/AssetDatabase.cs`) |
 
 ## CI and releases
 
