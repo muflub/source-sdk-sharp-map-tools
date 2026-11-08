@@ -99,18 +99,28 @@ public static class StudioMeshReader
     /// <param name="vvd">The shared vertex block.</param>
     /// <param name="vtx">The strip groups (any hardware flavour: dx90, dx80, sw).</param>
     /// <param name="bodies">Which model of each body part to read.</param>
+    /// <param name="restPose">
+    /// Whether to skin vertices into the skeleton's rest pose (see
+    /// <see cref="RestPoseSkin"/>); false returns them as the VVD stores them.
+    /// </param>
     /// <returns>One entry per drawn triangle, in file order.</returns>
     public static IReadOnlyList<StudioTriangle> Lod0Triangles(
         MdlFile mdl,
         VvdFile vvd,
         VtxFile vtx,
-        StudioBodyChoice bodies = StudioBodyChoice.FirstDrawn)
+        StudioBodyChoice bodies = StudioBodyChoice.FirstDrawn,
+        bool restPose = false)
     {
         ArgumentNullException.ThrowIfNull(mdl);
         ArgumentNullException.ThrowIfNull(vvd);
         ArgumentNullException.ThrowIfNull(vtx);
 
         StudioVertex[] vertices = vvd.VerticesForLod(0);
+        if (restPose)
+        {
+            vertices = Skin(vertices, RestPoseSkin(mdl));
+        }
+
         List<StudioTriangle> triangles = [];
 
         IReadOnlyList<(int Offset, VtxBodyPartHeader Header)> vtxParts = vtx.BodyParts();
@@ -157,6 +167,130 @@ public static class StudioMeshReader
         }
 
         return triangles;
+    }
+
+    /// <summary>
+    /// The matrices that carry a bind-pose vertex into the skeleton's rest
+    /// pose, one per bone: the bone's rest transform in model space (its
+    /// position and quaternion, composed down from the root) times its
+    /// pose-to-bone matrix.
+    /// </summary>
+    /// <param name="mdl">The model.</param>
+    /// <returns>Row-major 3x4 matrices, twelve floats per bone.</returns>
+    /// <remarks>
+    /// For a prop compiled in place the product is the identity and nothing
+    /// moves. For a character it is what stands the mesh up: the vertices of
+    /// a player model are stored in the bind pose's own frame, which can lie
+    /// on its side, and the engine always draws through the skeleton. Drawing
+    /// the rest pose rather than an animation frame keeps the reader free of
+    /// sequence decoding while still showing the model upright and whole.
+    /// </remarks>
+    public static float[] RestPoseSkin(MdlFile mdl)
+    {
+        ArgumentNullException.ThrowIfNull(mdl);
+        ReadOnlySpan<StudioBone> bones = mdl.Bones();
+        float[] toModel = new float[bones.Length * 12];
+        float[] skin = new float[bones.Length * 12];
+        Span<float> local = stackalloc float[12];
+        for (int b = 0; b < bones.Length; b++)
+        {
+            StudioBone bone = bones[b];
+            QuaternionMatrix(bone.Quat[0], bone.Quat[1], bone.Quat[2], bone.Quat[3], bone.Pos, local);
+            Span<float> target = toModel.AsSpan(b * 12, 12);
+            if (bone.Parent >= 0 && bone.Parent < b)
+            {
+                Concat(toModel.AsSpan(bone.Parent * 12, 12), local, target);
+            }
+            else
+            {
+                local.CopyTo(target);
+            }
+
+            Span<float> poseToBone = stackalloc float[12];
+            for (int i = 0; i < 12; i++)
+            {
+                poseToBone[i] = bone.PoseToBone[i];
+            }
+
+            Concat(target, poseToBone, skin.AsSpan(b * 12, 12));
+        }
+
+        return skin;
+    }
+
+    private static StudioVertex[] Skin(StudioVertex[] vertices, float[] skin)
+    {
+        int bones = skin.Length / 12;
+        StudioVertex[] result = new StudioVertex[vertices.Length];
+        for (int v = 0; v < vertices.Length; v++)
+        {
+            StudioVertex vertex = vertices[v];
+            float px = 0, py = 0, pz = 0, nx = 0, ny = 0, nz = 0, total = 0;
+            int count = Math.Clamp((int)vertex.BoneWeights.NumBones, 0, StudioIdents.MaxBonesPerVert);
+            for (int i = 0; i < count; i++)
+            {
+                int bone = vertex.BoneWeights.Bone[i];
+                float w = vertex.BoneWeights.Weight[i];
+                if (bone >= bones || w == 0)
+                {
+                    continue;
+                }
+
+                ReadOnlySpan<float> m = skin.AsSpan(bone * 12, 12);
+                Vec3 p = vertex.Position, n = vertex.Normal;
+                px += w * ((m[0] * p.X) + (m[1] * p.Y) + (m[2] * p.Z) + m[3]);
+                py += w * ((m[4] * p.X) + (m[5] * p.Y) + (m[6] * p.Z) + m[7]);
+                pz += w * ((m[8] * p.X) + (m[9] * p.Y) + (m[10] * p.Z) + m[11]);
+                nx += w * ((m[0] * n.X) + (m[1] * n.Y) + (m[2] * n.Z));
+                ny += w * ((m[4] * n.X) + (m[5] * n.Y) + (m[6] * n.Z));
+                nz += w * ((m[8] * n.X) + (m[9] * n.Y) + (m[10] * n.Z));
+                total += w;
+            }
+
+            if (total > 0)
+            {
+                float inv = 1f / total;
+                vertex.Position = new Vec3(px * inv, py * inv, pz * inv);
+                vertex.Normal = new Vec3(nx * inv, ny * inv, nz * inv);
+            }
+
+            result[v] = vertex;
+        }
+
+        return result;
+    }
+
+    /// <summary>A unit quaternion (x, y, z, w) and a translation as a row-major 3x4 matrix.</summary>
+    internal static void QuaternionMatrix(float x, float y, float z, float w, Vec3 t, Span<float> m)
+    {
+        m[0] = 1f - (2f * y * y) - (2f * z * z);
+        m[4] = (2f * x * y) + (2f * w * z);
+        m[8] = (2f * x * z) - (2f * w * y);
+        m[1] = (2f * x * y) - (2f * w * z);
+        m[5] = 1f - (2f * x * x) - (2f * z * z);
+        m[9] = (2f * y * z) + (2f * w * x);
+        m[2] = (2f * x * z) + (2f * w * y);
+        m[6] = (2f * y * z) - (2f * w * x);
+        m[10] = 1f - (2f * x * x) - (2f * y * y);
+        m[3] = t.X;
+        m[7] = t.Y;
+        m[11] = t.Z;
+    }
+
+    /// <summary>Composes two row-major 3x4 affine matrices: <paramref name="result"/> = a * b.</summary>
+    internal static void Concat(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result)
+    {
+        Span<float> r = stackalloc float[12];
+        for (int row = 0; row < 3; row++)
+        {
+            for (int col = 0; col < 4; col++)
+            {
+                float sum = (a[(row * 4) + 0] * b[col]) + (a[(row * 4) + 1] * b[4 + col]) + (a[(row * 4) + 2] * b[8 + col]);
+                r[(row * 4) + col] = col == 3 ? sum + a[(row * 4) + 3] : sum;
+            }
+        }
+
+        r.CopyTo(result);
     }
 
     /// <summary>

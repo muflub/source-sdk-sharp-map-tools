@@ -9,6 +9,7 @@ using System.Buffers;
 using System.Collections.Immutable;
 
 using SourceSharp.MapFormats.Assets;
+using SourceSharp.MapFormats.Geometry;
 using SourceSharp.MapTools.Io;
 using SourceSharp.MapTools.Materials;
 
@@ -129,9 +130,62 @@ public static class PreviewModelLoader
             return (null, $"not a readable model: {e.Message}");
         }
 
-        IReadOnlyList<StudioTriangle> triangles = StudioMeshReader.Lod0Triangles(mdl, vvd, vtx, StudioBodyChoice.Default);
+        IReadOnlyList<StudioTriangle> triangles = StudioMeshReader.Lod0Triangles(mdl, vvd, vtx, StudioBodyChoice.Default, restPose: true);
+        triangles = StandUp(triangles, mdl);
         IReadOnlyList<IReadOnlyList<string>> skins = await SkinMaterialsAsync(mdl, content, cancellationToken).ConfigureAwait(false);
         return (new PreviewModel(key, triangles, skins, mdl.Header.HullMin, mdl.Header.HullMax), null);
+    }
+
+    /// <summary>
+    /// Stands up a character whose mesh is stored Y-up.
+    /// </summary>
+    /// <remarks>
+    /// Character models (TF2's players among them) keep their vertices in a
+    /// Y-up frame and rely on every animation's root bone to turn them Z-up;
+    /// the preview draws the mesh without decoding animations, so such a model
+    /// would lie on its back. A model that is not a static prop, whose mesh is
+    /// tall along Y and flat along Z while its hull is tall along Z, is turned
+    /// +90 degrees about X, which is the turn those root bones make. Props are
+    /// never touched.
+    /// </remarks>
+    internal static IReadOnlyList<StudioTriangle> StandUp(IReadOnlyList<StudioTriangle> triangles, MdlFile mdl)
+    {
+        const int StaticPropFlag = 0x10;
+        if (triangles.Count == 0 || (mdl.Header.Flags & StaticPropFlag) != 0)
+        {
+            return triangles;
+        }
+
+        float minY = float.MaxValue, maxY = float.MinValue, minZ = float.MaxValue, maxZ = float.MinValue;
+        foreach (StudioTriangle t in triangles)
+        {
+            foreach (Vec3 p in (ReadOnlySpan<Vec3>)[t.A, t.B, t.C])
+            {
+                minY = MathF.Min(minY, p.Y);
+                maxY = MathF.Max(maxY, p.Y);
+                minZ = MathF.Min(minZ, p.Z);
+                maxZ = MathF.Max(maxZ, p.Z);
+            }
+        }
+
+        float meshY = maxY - minY, meshZ = maxZ - minZ;
+        float hullZ = mdl.Header.HullMax.Z - mdl.Header.HullMin.Z;
+        bool lying = meshY > 2f * meshZ && hullZ > 0 && MathF.Abs(meshY - hullZ) < 0.25f * hullZ;
+        if (!lying)
+        {
+            return triangles;
+        }
+
+        static Vec3 Turn(Vec3 v) => new(v.X, -v.Z, v.Y);
+        return [.. triangles.Select(t => t with
+        {
+            A = Turn(t.A),
+            B = Turn(t.B),
+            C = Turn(t.C),
+            NormalA = Turn(t.NormalA),
+            NormalB = Turn(t.NormalB),
+            NormalC = Turn(t.NormalC),
+        })];
     }
 
     /// <summary>

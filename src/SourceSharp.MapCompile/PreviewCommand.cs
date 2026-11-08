@@ -43,7 +43,7 @@ namespace SourceSharp.MapCompile;
 public static class PreviewCommand
 {
     private const string Usage =
-        "usage: ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>]";
+        "usage: ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera \"x y z pitch yaw [fov] [label]\"]...";
 
     /// <summary>Runs the command.</summary>
     /// <param name="disk">Where the map, the game and the output live.</param>
@@ -183,6 +183,11 @@ public static class PreviewCommand
             o = o with { ViewSize = size };
         }
 
+        if (a.Cameras.Count > 0)
+        {
+            o = o with { ExtraCameras = a.Cameras };
+        }
+
         if (tf2)
         {
             // TF2's view vectors: a 48 x 48 x 82 hull with the eye at 72.
@@ -241,6 +246,10 @@ public static class PreviewCommand
             {
                 a.Threads = threads;
             }
+            else if (Is(arg, "camera") && hasValue && TryParseCamera(args[++i], a.Cameras.Count + 1, out PreviewCamera? camera))
+            {
+                a.Cameras.Add(camera);
+            }
             else if (Is(arg, "individual"))
             {
                 a.Individual = true;
@@ -273,6 +282,53 @@ public static class PreviewCommand
         }
 
         parsed = a;
+        return true;
+    }
+
+    /// <summary>
+    /// Parses a custom camera, <c>"x y z pitch yaw [fov] [label words]"</c>:
+    /// a position, Source angles (pitch positive down), an optional
+    /// horizontal field of view (default 90), and an optional description.
+    /// </summary>
+    /// <param name="text">The text.</param>
+    /// <param name="number">The camera's number, for its id (<c>cam1</c>, ...).</param>
+    /// <param name="camera">The camera, sized later to the preview's view size.</param>
+    /// <returns>True when valid.</returns>
+    public static bool TryParseCamera(string text, int number, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out PreviewCamera? camera)
+    {
+        camera = null;
+        string[] parts = (text ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 5)
+        {
+            return false;
+        }
+
+        float[] numbers = new float[6];
+        numbers[5] = 90f;
+        int count = 0;
+        while (count < parts.Length && count < 6
+            && float.TryParse(parts[count], NumberStyles.Float, CultureInfo.InvariantCulture, out numbers[count]))
+        {
+            count++;
+        }
+
+        if (count < 5 || (count == 6 && numbers[5] is < 10f or > 170f))
+        {
+            return false;
+        }
+
+        string label = string.Join(' ', parts.Skip(count));
+        string id = "cam" + number.ToString(CultureInfo.InvariantCulture);
+        camera = PreviewCamera.FromAngles(
+            id,
+            CameraKind.Custom,
+            new MapFormats.Geometry.Vec3(numbers[0], numbers[1], numbers[2]),
+            numbers[3],
+            numbers[4],
+            numbers[5],
+            1024,
+            768,
+            label.Length > 0 ? label : string.Create(CultureInfo.InvariantCulture, $"custom at ({numbers[0]:0} {numbers[1]:0} {numbers[2]:0})"));
         return true;
     }
 
@@ -321,5 +377,7 @@ public static class PreviewCommand
         public bool Hdr { get; set; }
 
         public bool Tools { get; set; }
+
+        public List<PreviewCamera> Cameras { get; } = [];
     }
 }
