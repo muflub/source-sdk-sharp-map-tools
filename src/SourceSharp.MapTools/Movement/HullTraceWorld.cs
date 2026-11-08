@@ -6,6 +6,7 @@
 //=============================================================================//
 
 using SourceSharp.MapFormats.Bsp;
+using SourceSharp.MapFormats.Bsp.Structs;
 using SourceSharp.MapFormats.Geometry;
 using SourceSharp.MapFormats.Nav;
 using SourceSharp.MapTools.Io;
@@ -65,10 +66,21 @@ public sealed class HullTraceWorld
 
     private readonly NavBrush[] _solids;
     private readonly Dictionary<(int, int), int[]> _cells;
+    private readonly DNode[] _nodes = [];
+    private readonly DPlane[] _planes = [];
+    private readonly DLeaf[] _leaves = [];
 
     /// <summary>Builds a world over solids.</summary>
     /// <param name="solids">The convex solids the player collides with.</param>
     public HullTraceWorld(IReadOnlyList<NavBrush> solids)
+        : this(solids, null)
+    {
+    }
+
+    /// <summary>Builds a world over solids, with the map's BSP tree for telling open space from sealed void.</summary>
+    /// <param name="solids">The convex solids the player collides with.</param>
+    /// <param name="bsp">The compiled map whose tree answers <see cref="IsOpen"/>, or null to treat everywhere as open.</param>
+    public HullTraceWorld(IReadOnlyList<NavBrush> solids, BspData? bsp)
     {
         ArgumentNullException.ThrowIfNull(solids);
         _solids = [.. solids];
@@ -91,7 +103,45 @@ public sealed class HullTraceWorld
         }
 
         _cells = cells.ToDictionary(c => c.Key, c => c.Value.ToArray());
+        if (bsp is not null)
+        {
+            _nodes = BspStructView.As<DNode>(bsp[BspLump.Nodes]).ToArray();
+            _planes = BspStructView.As<DPlane>(bsp[BspLump.Planes]).ToArray();
+            _leaves = BspStructView.As<DLeaf>(bsp[BspLump.Leafs]).ToArray();
+        }
     }
+
+    /// <summary>
+    /// Whether a point is in the map's open space: in a BSP leaf that is not
+    /// solid. Space the compiler sealed off (inside the sky shell but
+    /// unreachable from any entity) is filled solid in the tree though no
+    /// brush is there, so a box traced through it meets nothing; this is what
+    /// tells it from the playable world. A world built without a tree answers
+    /// true everywhere.
+    /// </summary>
+    /// <param name="point">The point.</param>
+    /// <returns>True when open.</returns>
+    public bool IsOpen(Vec3 point)
+    {
+        if (_nodes.Length == 0 || _leaves.Length == 0)
+        {
+            return true;
+        }
+
+        int node = 0;
+        for (int guard = 0; guard <= _nodes.Length && node >= 0; guard++)
+        {
+            DNode n = _nodes[node];
+            DPlane plane = _planes[n.PlaneNum];
+            node = Vec3.Dot(plane.Normal, point) - plane.Dist >= 0 ? n.Children[0] : n.Children[1];
+        }
+
+        int leaf = -1 - node;
+        return leaf >= 0 && leaf < _leaves.Length && (_leaves[leaf].Contents & SolidContents) == 0;
+    }
+
+    /// <summary><c>CONTENTS_SOLID</c>.</summary>
+    private const int SolidContents = 1;
 
     /// <summary>Gets the solids, in the order traces name them.</summary>
     public IReadOnlyList<NavBrush> Solids => _solids;
@@ -123,7 +173,7 @@ public sealed class HullTraceWorld
             m => hulls.TryGetValue(m, out (Vec3, Vec3)? hull) ? hull : null,
             m => pieces.TryGetValue(m, out IReadOnlyList<NavPiece>? found) ? found : null,
             Nav3dClipClass.Player);
-        return (new HullTraceWorld(solids), warnings);
+        return (new HullTraceWorld(solids, bsp), warnings);
     }
 
     /// <summary>Sweeps a box from one position to another.</summary>
