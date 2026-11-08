@@ -34,8 +34,9 @@ public enum ZipCompressionMethod
     Store = 0,
 
     /// <summary>
-    /// <c>eCompressionType_LZMA</c>, method 14. Read-only in this port; see
-    /// <see cref="ZipArchiveReader"/>.
+    /// <c>eCompressionType_LZMA</c>, method 14. Read-only in this port: an
+    /// entry's contents unpack through <see cref="ZipEntry.ReadContents"/>,
+    /// and nothing here writes it.
     /// </summary>
     Lzma = 14,
 }

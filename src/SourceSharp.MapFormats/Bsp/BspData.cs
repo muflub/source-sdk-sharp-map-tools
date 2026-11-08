@@ -12,8 +12,8 @@ namespace SourceSharp.MapFormats.Bsp;
 /// describe them.
 /// </summary>
 /// <param name="Data">
-/// The lump's payload. For a compressed lump this is the compressed bytes as
-/// read; see <see cref="UncompressedSize"/>.
+/// The lump's payload. A loaded lump is always the plain bytes, whether or not
+/// the file stored it compressed; see <see cref="UncompressedSize"/>.
 /// </param>
 /// <param name="Version">
 /// The lump's version. Most lumps are 0; the ones that are not are listed in
@@ -22,9 +22,10 @@ namespace SourceSharp.MapFormats.Bsp;
 /// </param>
 /// <param name="UncompressedSize">
 /// Zero when the lump is stored uncompressed, which is what every reference
-/// tool writes. A non-zero value means LZMA, and is the size to decompress to. The
-/// compilers never emit this, so it is read-only state: a map that arrives
-/// compressed is decompressed on load and written back out uncompressed.
+/// tool writes. In a file a non-zero value means LZMA, and is the size to
+/// decompress to; <see cref="BspFile.LoadAsync"/> decompresses such lumps on
+/// load and records zero here, so a loaded lump is always plain and a map
+/// that arrives compressed is written back out uncompressed.
 /// </param>
 public readonly record struct BspLumpData(
     ReadOnlyMemory<byte> Data,

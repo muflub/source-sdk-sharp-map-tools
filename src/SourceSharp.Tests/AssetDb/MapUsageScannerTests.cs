@@ -16,6 +16,8 @@ using SourceSharp.MapFormats.Bsp;
 using SourceSharp.MapFormats.Bsp.Structs;
 using SourceSharp.MapFormats.Geometry;
 
+using SourceSharp.Tests.MapFormats;
+
 using Xunit;
 
 namespace SourceSharp.Tests.AssetDb;
@@ -26,101 +28,6 @@ namespace SourceSharp.Tests.AssetDb;
 /// </summary>
 public sealed class MapUsageScannerTests
 {
-    /// <summary>Lays out a BSP: header, then each lump in index order, game lump offsets absolute.</summary>
-    internal sealed class BspBuilder
-    {
-        private readonly Dictionary<BspLump, (byte[] Data, int Unpacked)> _lumps = [];
-        private readonly List<(int Id, ushort Flags, ushort Version, byte[] Data)> _gameLumps = [];
-        private bool _terminator;
-
-        public BspBuilder Lump(BspLump lump, byte[] data, int unpacked = 0)
-        {
-            _lumps[lump] = (data, unpacked);
-            return this;
-        }
-
-        public BspBuilder Structs<T>(BspLump lump, params T[] items)
-            where T : unmanaged =>
-            Lump(lump, MemoryMarshal.AsBytes(items.AsSpan()).ToArray());
-
-        public BspBuilder GameLump(int id, ushort flags, ushort version, byte[] data)
-        {
-            _gameLumps.Add((id, flags, version, data));
-            return this;
-        }
-
-        /// <summary>Adds the empty entry compressed maps end their game lump directory with.</summary>
-        public BspBuilder Terminator()
-        {
-            _terminator = true;
-            return this;
-        }
-
-        public byte[] Build()
-        {
-            List<byte> file = [.. new byte[BspData.HeaderSize]];
-            BitConverter.GetBytes(BspData.Ident).CopyTo(CollectionsMarshal.AsSpan(file));
-            BitConverter.GetBytes(20).CopyTo(CollectionsMarshal.AsSpan(file)[4..]);
-
-            for (int index = 0; index < BspData.HeaderLumps; index++)
-            {
-                BspLump lump = (BspLump)index;
-                byte[] data;
-                int unpacked = 0;
-                if (lump == BspLump.GameLump && _gameLumps.Count > 0)
-                {
-                    data = GameLumpBytes(file.Count);
-                }
-                else if (_lumps.TryGetValue(lump, out (byte[] Data, int Unpacked) entry))
-                {
-                    (data, unpacked) = entry;
-                }
-                else
-                {
-                    continue;
-                }
-
-                Span<byte> header = CollectionsMarshal.AsSpan(file).Slice(8 + (index * 16), 16);
-                BitConverter.GetBytes(file.Count).CopyTo(header);
-                BitConverter.GetBytes(data.Length).CopyTo(header[4..]);
-                BitConverter.GetBytes(unpacked).CopyTo(header[12..]);
-                file.AddRange(data);
-            }
-
-            return [.. file];
-        }
-
-        private byte[] GameLumpBytes(int lumpOffset)
-        {
-            int entries = _gameLumps.Count + (_terminator ? 1 : 0);
-            int payload = lumpOffset + 4 + (entries * 16);
-            List<byte> bytes = [.. BitConverter.GetBytes(entries)];
-            List<byte> payloads = [];
-            foreach ((int id, ushort flags, ushort version, byte[] data) in _gameLumps)
-            {
-                bytes.AddRange(BitConverter.GetBytes(id));
-                bytes.AddRange(BitConverter.GetBytes(flags));
-                bytes.AddRange(BitConverter.GetBytes(version));
-                bytes.AddRange(BitConverter.GetBytes(payload + payloads.Count));
-
-                // A compressed entry's length is its unpacked size; the
-                // test's compressed payloads are the LZMA sample.
-                bytes.AddRange(BitConverter.GetBytes((flags & 1) != 0 ? LzmaDecoderTests.Sample().Length : data.Length));
-                payloads.AddRange(data);
-            }
-
-            if (_terminator)
-            {
-                bytes.AddRange(new byte[8]);
-                bytes.AddRange(BitConverter.GetBytes(payload + payloads.Count));
-                bytes.AddRange(new byte[4]);
-            }
-
-            bytes.AddRange(payloads);
-            return [.. bytes];
-        }
-    }
-
     private static byte[] StringData(out int[] offsets, params string[] names)
     {
         List<byte> data = [];
@@ -179,7 +86,7 @@ public sealed class MapUsageScannerTests
         props.Props.Add(new StaticProp { PropType = 1 });
         GameLumpEntry sprp = props.Write();
 
-        return new BspBuilder()
+        return new BspTestBuilder()
             .Lump(BspLump.Entities, Encoding.ASCII.GetBytes(entities + "\0"))
             .Structs(BspLump.TexData, new DTexData { NameStringTableId = 0 }, new DTexData { NameStringTableId = 1 })
             .Structs(BspLump.TexInfo, new TexInfo { TexData = 0 }, new TexInfo { TexData = 1 }, new TexInfo { TexData = 9 })
@@ -191,9 +98,9 @@ public sealed class MapUsageScannerTests
     }
 
     [Fact]
-    public void FacesCountByMaterialWithTheirAreaAndTheCompilersRenamesUndone()
+    public async Task FacesCountByMaterialWithTheirAreaAndTheCompilersRenamesUndone()
     {
-        MapUsage usage = MapUsageScanner.Read("test_map", SampleMap());
+        MapUsage usage = await MapUsageScanner.ReadAsync("test_map", SampleMap(), CancellationToken.None);
 
         Assert.Equal(5, usage.Faces);
         Assert.Contains(new MapMaterialUse("brick/walla", "face", 2, 150.5), usage.Materials);
@@ -204,9 +111,9 @@ public sealed class MapUsageScannerTests
     }
 
     [Fact]
-    public void EntitiesGiveTheSkyOverlaysDecalsAndModels()
+    public async Task EntitiesGiveTheSkyOverlaysDecalsAndModels()
     {
-        MapUsage usage = MapUsageScanner.Read("test_map", SampleMap());
+        MapUsage usage = await MapUsageScanner.ReadAsync("test_map", SampleMap(), CancellationToken.None);
 
         Assert.Equal("sky_day01", usage.SkyName);
         Assert.Equal(7, usage.Entities);
@@ -218,9 +125,9 @@ public sealed class MapUsageScannerTests
     }
 
     [Fact]
-    public void StaticPropsCountPerModel()
+    public async Task StaticPropsCountPerModel()
     {
-        MapUsage usage = MapUsageScanner.Read("test_map", SampleMap());
+        MapUsage usage = await MapUsageScanner.ReadAsync("test_map", SampleMap(), CancellationToken.None);
 
         Assert.Equal(3, usage.StaticProps);
         Assert.Contains(new MapModelUse("models/props/crate.mdl", "static", 2), usage.Models);
@@ -229,9 +136,9 @@ public sealed class MapUsageScannerTests
     }
 
     [Fact]
-    public void UsageIsSortedAndHashed()
+    public async Task UsageIsSortedAndHashed()
     {
-        MapUsage usage = MapUsageScanner.Read("test_map", SampleMap());
+        MapUsage usage = await MapUsageScanner.ReadAsync("test_map", SampleMap(), CancellationToken.None);
 
         Assert.Equal(usage.Materials.OrderBy(m => m.Material, StringComparer.Ordinal).ThenBy(m => m.Kind, StringComparer.Ordinal), usage.Materials);
         Assert.Equal(usage.Models.OrderBy(m => m.Model, StringComparer.Ordinal).ThenBy(m => m.Kind, StringComparer.Ordinal), usage.Models);
@@ -239,10 +146,10 @@ public sealed class MapUsageScannerTests
     }
 
     [Fact]
-    public void AnUnreadableStaticPropLumpKeepsTheRestOfTheMap()
+    public async Task AnUnreadableStaticPropLumpKeepsTheRestOfTheMap()
     {
         byte[] strings = StringData(out int[] offsets, "a/b");
-        byte[] map = new BspBuilder()
+        byte[] map = new BspTestBuilder()
             .Lump(BspLump.Entities, "{\n\"classname\" \"worldspawn\"\n}\n\0"u8.ToArray())
             .Structs(BspLump.TexData, new DTexData { NameStringTableId = 0 })
             .Structs(BspLump.TexInfo, new TexInfo { TexData = 0 })
@@ -252,7 +159,7 @@ public sealed class MapUsageScannerTests
             .GameLump(GameLumpId.MakeId(GameLumpId.StaticProps), 0, 10, BitConverter.GetBytes(1000))
             .Build();
 
-        MapUsage usage = MapUsageScanner.Read("m", map);
+        MapUsage usage = await MapUsageScanner.ReadAsync("m", map, CancellationToken.None);
 
         Assert.Single(usage.Materials);
         Assert.Equal(0, usage.StaticProps);
@@ -260,10 +167,10 @@ public sealed class MapUsageScannerTests
     }
 
     [Fact]
-    public void TheHdrFacesStandInWhenThereAreNoLdrFaces()
+    public async Task TheHdrFacesStandInWhenThereAreNoLdrFaces()
     {
         byte[] strings = StringData(out int[] offsets, "a/b");
-        byte[] map = new BspBuilder()
+        byte[] map = new BspTestBuilder()
             .Lump(BspLump.Entities, "\0"u8.ToArray())
             .Structs(BspLump.TexData, new DTexData { NameStringTableId = 0 })
             .Structs(BspLump.TexInfo, new TexInfo { TexData = 0 })
@@ -272,7 +179,7 @@ public sealed class MapUsageScannerTests
             .Lump(BspLump.TexDataStringData, strings)
             .Build();
 
-        Assert.Equal(new MapMaterialUse("a/b", "face", 2, 7), Assert.Single(MapUsageScanner.Read("m", map).Materials));
+        Assert.Equal(new MapMaterialUse("a/b", "face", 2, 7), Assert.Single((await MapUsageScanner.ReadAsync("m", map, CancellationToken.None)).Materials));
     }
 
     /// <summary>A static prop lump of any record size: dictionary, no leaves, props whose model index is at byte 24.</summary>
@@ -313,11 +220,11 @@ public sealed class MapUsageScannerTests
     }
 
     [Fact]
-    public void AVersionSevenLumpWithTheVersionTenLayoutIsCounted()
+    public async Task AVersionSevenLumpWithTheVersionTenLayoutIsCounted()
     {
         // What Team Fortress 2's pl_cactuscanyon ships: labelled 7, 72-byte records.
         byte[] strings = StringData(out int[] offsets, "a/b");
-        byte[] map = new BspBuilder()
+        byte[] map = new BspTestBuilder()
             .Lump(BspLump.Entities, "\0"u8.ToArray())
             .Structs(BspLump.TexData, new DTexData { NameStringTableId = 0 })
             .Structs(BspLump.TexInfo, new TexInfo { TexData = 0 })
@@ -327,7 +234,7 @@ public sealed class MapUsageScannerTests
             .GameLump(GameLumpId.MakeId(GameLumpId.StaticProps), 0, 7, StaticProps(72, ["models/Cactus.mdl"], 0, 0))
             .Build();
 
-        MapUsage usage = MapUsageScanner.Read("pl_test", map);
+        MapUsage usage = await MapUsageScanner.ReadAsync("pl_test", map, CancellationToken.None);
 
         Assert.Null(usage.StaticPropsIssue);
         Assert.Equal(new MapModelUse("models/cactus.mdl", "static", 2), Assert.Single(usage.Models));
@@ -380,56 +287,6 @@ public sealed class MapUsageScannerTests
     [InlineData("plain", "plain")]
     public void MapNamesAreTheFileName(string path, string expected) =>
         Assert.Equal(expected, MapUsageScanner.MapName(path));
-
-    [Fact]
-    public void ACompressedLumpUnpacksAndMustMatchItsDeclaredSize()
-    {
-        byte[] sample = LzmaDecoderTests.Sample();
-        byte[] container = LzmaDecoderTests.Container(Convert.FromBase64String(LzmaDecoderTests.Stream0), sample.Length);
-
-        BspLumps good = BspLumps.Read(new BspBuilder().Lump(BspLump.TexDataStringData, container, sample.Length).Build());
-        BspLumps lying = BspLumps.Read(new BspBuilder().Lump(BspLump.TexDataStringData, container, sample.Length + 1).Build());
-
-        Assert.True(good.AnyCompressed);
-        Assert.Equal(sample, good.Lump(BspLump.TexDataStringData).ToArray());
-        Assert.Throws<InvalidDataException>(() => lying.Lump(BspLump.TexDataStringData));
-        Assert.True(good.Lump(BspLump.Faces).IsEmpty);
-    }
-
-    [Fact]
-    public void CompressedGameLumpEntriesRunToTheNextOffsetAndTheTerminatorIsDropped()
-    {
-        byte[] sample = LzmaDecoderTests.Sample();
-        byte[] container = LzmaDecoderTests.Container(Convert.FromBase64String(LzmaDecoderTests.Stream0), sample.Length);
-
-        BspLumps bsp = BspLumps.Read(new BspBuilder()
-            .GameLump(0x70727073, 1, 10, container)
-            .GameLump(0x64707270, 0, 4, [1, 2, 3])
-            .Terminator()
-            .Build());
-
-        IReadOnlyList<GameLumpEntry> entries = bsp.GameLumps();
-        Assert.Equal(2, entries.Count);
-        Assert.Equal(sample, entries[0].Data.ToArray());
-        Assert.Equal(0, entries[0].Flags);
-        Assert.Equal(10, entries[0].Version);
-        Assert.Equal([1, 2, 3], entries[1].Data.ToArray());
-        Assert.False(bsp.AnyCompressed);
-    }
-
-    [Fact]
-    public void NotABspOrALumpOutsideTheFileIsRefused()
-    {
-        byte[] map = SampleMap();
-        byte[] outside = (byte[])map.Clone();
-        BitConverter.GetBytes(map.Length).CopyTo(outside, 8 + ((int)BspLump.Entities * 16));
-        byte[] badVersion = (byte[])map.Clone();
-        BitConverter.GetBytes(99).CopyTo(badVersion, 4);
-
-        Assert.Throws<InvalidBspException>(() => BspLumps.Read(new byte[16]));
-        Assert.Throws<InvalidBspException>(() => BspLumps.Read(outside));
-        Assert.Throws<InvalidBspException>(() => BspLumps.Read(badVersion));
-    }
 
     [Fact]
     public async Task ScanningAGameReadsEveryMapAndRecordsTheOnesItCannot()
