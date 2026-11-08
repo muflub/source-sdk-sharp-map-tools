@@ -179,6 +179,7 @@ public static class BspSceneBuilder
         BspEntity? skyCamera = entities.FirstOrDefault(e => e.ClassName == "sky_camera");
         builder.SkyboxArea = skyCamera is null ? -1 : ambient.AreaOf(ParseVector(skyCamera.Get("origin")));
         builder.Locate = ambient;
+        builder.Lights = LocalLights.FromBsp(bsp, settings.Hdr);
 
         if (brushModels.Length > 0)
         {
@@ -323,6 +324,9 @@ public static class BspSceneBuilder
         /// <summary>Gets or sets the 3D skybox's area, or -1 when the map has none.</summary>
         public int SkyboxArea { get; set; } = -1;
 
+        /// <summary>Gets or sets the local lights models are lit by directly.</summary>
+        public LocalLights? Lights { get; set; }
+
         /// <summary>Gets or sets the leaf locator used to find a face's area.</summary>
         public AmbientLight? Locate { get; set; }
 
@@ -382,7 +386,7 @@ public static class BspSceneBuilder
                 }
 
                 int material = MaterialIndex(MaterialName(tex));
-                int lightmap = sky ? -1 : LightmapFor(f, face);
+                int lightmap = sky ? -1 : LightmapFor(f, face, (flags & SurfaceFlags.BumpLight) != 0);
                 if (face.DispInfo >= 0 && face.DispInfo < displacements.Length && displacements[face.DispInfo].Verts.Length > 0)
                 {
                     Vec3 baseNormal = FaceNormal(face);
@@ -501,13 +505,16 @@ public static class BspSceneBuilder
             }
 
             props.Add(new PreviewProp(key, origin, angles, skin, entity, Loaded: true));
+            Vec3 centre = transform.TransformPoint((model.HullMin + model.HullMax) * 0.5f);
             if (lightAt == origin)
             {
                 // The engine lights a model at the centre of its bounds, not its
                 // origin, which usually sits on the floor plane where the leaf
                 // below is solid and has no ambient samples.
-                cube = ambient.CubeAt(transform.TransformPoint((model.HullMin + model.HullMax) * 0.5f)) ?? cube;
+                cube = ambient.CubeAt(centre) ?? cube;
             }
+
+            int[] picked = Lights?.Pick(centre) ?? [];
 
             Dictionary<int, int> surfaceForSlot = [];
             foreach (StudioTriangle t in model.Triangles)
@@ -531,9 +538,9 @@ public static class BspSceneBuilder
                 }
 
                 int first = _vertices.Count;
-                _vertices.Add(new PreviewVertex(a, t.UvA.U, t.UvA.V, 0, 0, Light(cube, na == Vec3.Zero ? n : na)));
-                _vertices.Add(new PreviewVertex(b, t.UvB.U, t.UvB.V, 0, 0, Light(cube, nb == Vec3.Zero ? n : nb)));
-                _vertices.Add(new PreviewVertex(c, t.UvC.U, t.UvC.V, 0, 0, Light(cube, nc == Vec3.Zero ? n : nc)));
+                _vertices.Add(new PreviewVertex(a, t.UvA.U, t.UvA.V, 0, 0, ModelLight(cube, picked, a, na == Vec3.Zero ? n : na)));
+                _vertices.Add(new PreviewVertex(b, t.UvB.U, t.UvB.V, 0, 0, ModelLight(cube, picked, b, nb == Vec3.Zero ? n : nb)));
+                _vertices.Add(new PreviewVertex(c, t.UvC.U, t.UvC.V, 0, 0, ModelLight(cube, picked, c, nc == Vec3.Zero ? n : nc)));
                 _triangles.Add(new PreviewTriangle(first, first + 1, first + 2, surface, n));
             }
         }
@@ -588,6 +595,9 @@ public static class BspSceneBuilder
         /// </summary>
         private bool InSkybox(Vec3 point) =>
             SkyboxArea >= 0 && Locate is not null && Locate.AreaOf(point) == SkyboxArea;
+
+        private Vec3 ModelLight(Vec3[]? cube, int[] picked, Vec3 point, Vec3 normal) =>
+            Light(cube, normal) + (picked.Length > 0 && Lights is not null ? Lights.At(picked, point, normal) : Vec3.Zero);
 
         private static Vec3 Light(Vec3[]? cube, Vec3 normal) =>
             cube is null ? AmbientLight.Fallback : AmbientLight.Evaluate(cube, normal);
@@ -680,11 +690,26 @@ public static class BspSceneBuilder
         }
 
         /// <summary>
-        /// The face's style-zero lightmap (the first, unbumped set on a bumped
-        /// face), decoded once and shared by the face's triangles; -1 when the
-        /// face is unlit.
+        /// The face's lightmap: every light style it has, summed at full
+        /// strength (each style's default pattern), decoded once and shared by
+        /// the face's triangles; -1 when the face is unlit.
         /// </summary>
-        private int LightmapFor(int faceIndex, DFace face)
+        /// <remarks>
+        /// <para>
+        /// A face stores up to four styles back to back. Style 0 is the
+        /// static light; the others are lights a map can switch or flicker,
+        /// which vrad bakes separately so the engine can scale each at run
+        /// time. The engine adds them all, so a room lit only by named or
+        /// flickering lights (torches, switchable lamps) is dark in style 0
+        /// and lit by the sum.
+        /// </para>
+        /// <para>
+        /// A bump-lit face stores four maps per style (the flat one, then one
+        /// per bump basis direction); only the flat one is read, so the stride
+        /// between styles is four maps.
+        /// </para>
+        /// </remarks>
+        private int LightmapFor(int faceIndex, DFace face, bool bumped)
         {
             if (_faceLightmap.TryGetValue(faceIndex, out int existing))
             {
@@ -696,18 +721,33 @@ public static class BspSceneBuilder
             int height = face.LightmapTextureSizeInLuxels[1] + 1;
             int count = width * height;
             int bytes = count * 4;
-            if (face.LightOfs >= 0 && face.Styles[0] != 255 && width > 0 && height > 0
-                && face.LightOfs + bytes <= _lighting.Length)
+            int stride = bytes * (bumped ? 4 : 1);
+            if (face.LightOfs >= 0 && face.Styles[0] != 255 && width > 0 && height > 0)
             {
-                ReadOnlySpan<ColorRgbExp32> samples = BspStructView.As<ColorRgbExp32>(_lighting.Span.Slice(face.LightOfs, bytes));
                 Vec3[] linear = new Vec3[count];
-                for (int i = 0; i < count; i++)
+                bool any = false;
+                for (int style = 0; style < 4 && face.Styles[style] != 255; style++)
                 {
-                    linear[i] = samples[i].ToLinear() * LightScale;
+                    int at = face.LightOfs + (style * stride);
+                    if (at + bytes > _lighting.Length)
+                    {
+                        break;
+                    }
+
+                    ReadOnlySpan<ColorRgbExp32> samples = BspStructView.As<ColorRgbExp32>(_lighting.Span.Slice(at, bytes));
+                    for (int i = 0; i < count; i++)
+                    {
+                        linear[i] += samples[i].ToLinear() * LightScale;
+                    }
+
+                    any = true;
                 }
 
-                result = _lightmaps.Count;
-                _lightmaps.Add(new PreviewLightmap(width, height, linear));
+                if (any)
+                {
+                    result = _lightmaps.Count;
+                    _lightmaps.Add(new PreviewLightmap(width, height, linear));
+                }
             }
 
             _faceLightmap[faceIndex] = result;
