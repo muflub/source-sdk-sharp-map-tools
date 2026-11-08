@@ -118,21 +118,26 @@ def light(origin, color="255 214 170", brightness=180, **kv):
 
 def wall_with_openings(axis, fixed, t, a1, a2, z1, z2, openings, mat, inner=None):
     """A wall along `axis` ('x' or 'y') between a1..a2, thickness t from fixed,
-    with rectangular openings [(a_lo, a_hi, z_lo, z_hi)]."""
-    cuts = sorted(openings)
-    # Split into vertical strips: solid strips between openings, and around each opening.
-    pos = a1
+    with rectangular openings [(a_lo, a_hi, z_lo, z_hi)]. Openings may share a
+    span along the wall (a door with a window above it, two rows of windows):
+    the wall is cut into vertical strips at every opening edge, and each strip
+    is filled between the openings that cross it."""
     def piece(b1, b2, zl, zh):
+        if b2 - b1 < 1 or zh - zl < 1:
+            return
         if axis == 'x':
             box(b1, fixed, zl, b2, fixed + t, zh, mat)
         else:
             box(fixed, b1, zl, fixed + t, b2, zh, mat)
-    for (lo, hi, zl, zh) in cuts:
-        piece(pos, lo, z1, z2)
-        piece(lo, hi, z1, zl)
-        piece(lo, hi, zh, z2)
-        pos = hi
-    piece(pos, a2, z1, z2)
+    edges = sorted({a1, a2, *[o[0] for o in openings], *[o[1] for o in openings]})
+    edges = [e for e in edges if a1 <= e <= a2]
+    for b1, b2 in zip(edges, edges[1:]):
+        holes = sorted((zl, zh) for (lo, hi, zl, zh) in openings if lo <= b1 and hi >= b2)
+        z = z1
+        for (zl, zh) in holes:
+            piece(b1, b2, z, zl)
+            z = max(z, zh)
+        piece(b1, b2, z, z2)
 
 # ---------------------------------------------------------------- world shell
 SKY = "tools/toolsskybox"
