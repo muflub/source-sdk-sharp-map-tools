@@ -10,6 +10,8 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
 
+using SourceSharp.MapFormats.Compression;
+
 namespace SourceSharp.MapTools.Io;
 
 /// <summary>
@@ -26,9 +28,11 @@ namespace SourceSharp.MapTools.Io;
 /// every mount keeps working unchanged. That is what the interface is for.
 /// </para>
 /// <para>
-/// STORE and deflate both, though vbsp writes STORE: a pak that a modder built
+/// STORE, deflate and LZMA, though vbsp writes STORE: a pak that a modder built
 /// with a normal zip tool still has to mount, and <c>DeflateStream</c> is in the
 /// BCL, so supporting it costs four lines and removes a confusing failure.
+/// LZMA (method 14) is the engine's own pak compression, which shipped maps
+/// carry.
 /// </para>
 /// <para>
 /// Over a buffer rather than a stream because the lump is already in memory by
@@ -43,6 +47,7 @@ public sealed class PakArchive : IPackedArchive
     private const int EndOfCentralDirectoryLength = 22;
     private const ushort MethodStore = 0;
     private const ushort MethodDeflate = 8;
+    private const ushort MethodLzma = 14;
 
     private readonly ReadOnlyMemory<byte> _bytes;
     private readonly Dictionary<VPath, Entry> _entries;
@@ -155,6 +160,12 @@ public sealed class PakArchive : IPackedArchive
             if (entry.Method == MethodStore)
             {
                 compressed.CopyTo(result.Memory.Span);
+            }
+            else if (entry.Method == MethodLzma)
+            {
+                // The engine's own pak method 14, what a shipped map's pak
+                // compressed by the game's tools carries.
+                ZipLzma.Decompress(compressed, entry.Length).CopyTo(result.Memory.Span);
             }
             else
             {
@@ -285,10 +296,10 @@ public sealed class PakArchive : IPackedArchive
                     $"{name}: entry {i} uses Zip64, which a BSP pak never does and this reader does not handle");
             }
 
-            if (method is not (MethodStore or MethodDeflate))
+            if (method is not (MethodStore or MethodDeflate or MethodLzma))
             {
                 throw new InvalidDataException(
-                    $"{name}: entry {i} uses compression method {method}, which is neither STORE nor deflate");
+                    $"{name}: entry {i} uses compression method {method}, which is neither STORE, deflate nor LZMA");
             }
 
             // Latin-1 rather than UTF-8 for the same reason as the VPK reader:

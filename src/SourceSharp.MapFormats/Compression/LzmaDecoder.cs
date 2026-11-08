@@ -5,7 +5,7 @@
 //
 //=============================================================================//
 
-namespace SourceSharp.AssetDb.Compression;
+namespace SourceSharp.MapFormats.Compression;
 
 /// <summary>
 /// Decodes a raw LZMA stream (the LZMA1 algorithm, no container) whose
@@ -22,11 +22,11 @@ namespace SourceSharp.AssetDb.Compression;
 /// outlives a call.
 /// </para>
 /// <para>
-/// It lives here, not in the format library, because only the asset
-/// database needs it: the map compilers never write a compressed lump or pak
-/// entry, so the core library reports compression rather than decoding it
-/// (see the format library's LZMA pak-entry notes). Shipped maps, which the
-/// database reads for usage statistics, are compressed.
+/// Read side only. The engine decompresses compressed lumps, game lump
+/// entries and pak entries on load, and so do the reference compile tools,
+/// so a shipped map (Team Fortress 2's are compressed lump by lump) must
+/// decode here to be checked, diffed, recompiled or mined for content. The
+/// compilers never write compressed output, so there is no encoder.
 /// </para>
 /// <para>
 /// Decoding stops when the declared number of bytes has been produced. An
@@ -451,4 +451,42 @@ public static class ValveLzma
 
     private static uint BitConverterLe(ReadOnlySpan<byte> b) =>
         (uint)(b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24));
+}
+
+/// <summary>
+/// LZMA as a Source pak stores it (ZIP method 14, APPNOTE 5.8.8 framing):
+/// two SDK version bytes, a 16-bit properties size, the properties, then the
+/// raw stream; the unpacked size comes from the zip directory.
+/// </summary>
+public static class ZipLzma
+{
+    /// <summary>Unpacks a method-14 entry's payload.</summary>
+    /// <param name="payload">The entry's stored bytes, framing first.</param>
+    /// <param name="unpackedSize">The size the zip directory declares.</param>
+    /// <returns>Exactly <paramref name="unpackedSize"/> bytes.</returns>
+    /// <exception cref="InvalidDataException">
+    /// The framing is short, declares a properties size other than five (the
+    /// engine's decoder refuses those too), or the stream is not valid.
+    /// </exception>
+    public static byte[] Decompress(ReadOnlySpan<byte> payload, int unpackedSize)
+    {
+        const int Preamble = 4;
+        if (payload.Length < Preamble + LzmaDecoder.PropertiesSize)
+        {
+            throw new InvalidDataException(
+                $"an LZMA zip entry is {payload.Length} bytes, too short for its {Preamble + LzmaDecoder.PropertiesSize}-byte framing");
+        }
+
+        int propertiesSize = payload[2] | (payload[3] << 8);
+        if (propertiesSize != LzmaDecoder.PropertiesSize)
+        {
+            throw new InvalidDataException(
+                $"an LZMA zip entry declares {propertiesSize} properties bytes; the engine accepts only {LzmaDecoder.PropertiesSize}");
+        }
+
+        return LzmaDecoder.Decode(
+            payload.Slice(Preamble, LzmaDecoder.PropertiesSize),
+            payload[(Preamble + LzmaDecoder.PropertiesSize)..],
+            unpackedSize);
+    }
 }
