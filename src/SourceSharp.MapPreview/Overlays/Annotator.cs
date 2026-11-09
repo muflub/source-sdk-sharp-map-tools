@@ -164,6 +164,14 @@ public static class Annotator
 
             float depth = buffer.Depth[(y * image.Width) + x];
             bool hidden = p.Depth > depth + MathF.Max(8f, depth * 0.02f);
+            if (hidden && !view.Camera.IsOrthographic)
+            {
+                // A player's-eye view shows only what is in sight; a marker
+                // behind a wall there is noise. Overviews keep every marker,
+                // greyed when something is over it.
+                continue;
+            }
+
             Rgba colour = hidden ? HiddenMarkerColour : MarkerColour;
             string text = marker.Number.ToString(CultureInfo.InvariantCulture);
             int tagX = Math.Clamp(x + (4 * scale), scale, image.Width - BitmapFont.Measure(text, scale) - scale);
