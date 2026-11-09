@@ -609,7 +609,8 @@ public static class MovementCalibration
     /// simulated lane agrees when the final eye positions are within
     /// <see cref="FinalTolerance"/> on every axis and, when both probed a
     /// peak, the peaks are within <see cref="ApexTolerance"/>. A rocket lane
-    /// agrees when the launch speed its peak implies is inside
+    /// agrees when the push its peak implies (the launch speed less the
+    /// jump's own, <see cref="AirborneFuzzer.JumpSpeedAtPush"/>) is inside
     /// <see cref="LaunchKind.RocketJump"/>'s range.
     /// </summary>
     /// <param name="lanes">The lanes.</param>
@@ -637,9 +638,10 @@ public static class MovementCalibration
                 // Every lane's floor is at z = 0, where a standing player's eye is the eye height.
                 bool crouched = lane.Script.Count > 0 && lane.Script[^1].Duck;
                 float speed = LaunchSpeed(m.ApexEyeZ - profile.EyeHeight, crouched, profile);
+                float push = speed - AirborneFuzzer.JumpSpeedAtPush(profile);
                 LaunchKind kind = LaunchKind.RocketJump;
-                rows.Add(new CalibrationRow(lane.Name, g, null, speed >= kind.MinSpeed && speed <= kind.MaxSpeed,
-                    Inv($"launch about {speed:0} u/s upward; {kind.Name} samples {kind.MinSpeed:0}-{kind.MaxSpeed:0}")));
+                rows.Add(new CalibrationRow(lane.Name, g, null, push >= kind.MinSpeed && push <= kind.MaxSpeed,
+                    Inv($"launch about {speed:0} u/s upward, a push of about {push:0} on the jump; {kind.Name} pushes {kind.MinSpeed:0}-{kind.MaxSpeed:0}")));
                 continue;
             }
 

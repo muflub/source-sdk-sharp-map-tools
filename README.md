@@ -645,8 +645,16 @@ damage × the standard hull's volume over the player's × scale, capped at
 the top. Where flights get stuck, wedge in a crease, catch the lip of a
 ledge they nearly cleared, or catch a post or rail, the spots get numbered
 markers and an `airborne` section in `index.json`; ceiling bonks are
-listed as information. Floor only flights land on is drawn blue on the
-reach tile: places only blast jumpers get to, which may want player clip.
+listed as information. Floor only blast jumpers get to is drawn blue on the
+reach tile: where flights landed and everything a player walks or jumps to
+from there, grouped into areas in `blast_only_areas` (the largest get
+markers): roofs, ledges and map edges, which may want player clip or be a
+deliberate reward. Every trap is also flown out of (64 flights by default,
+each launch kind in turn), and its marker and its `escapes` say which blast
+jumps get out: a pit a sticky jumper leaves is still a trap for everyone
+else. The rocket jump's push is the one the calibration measured (about 430
+standing, 615 crouched, added to the jump's own speed), not the knockback
+cap.
 
 The simulator is held to the real game by a calibration (`ssmap movecal`,
 `MovementCalibration`): 35 lanes, each one obstacle at a measured size

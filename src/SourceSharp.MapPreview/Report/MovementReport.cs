@@ -28,10 +28,13 @@ public sealed record MovementReport(
 
 /// <summary>What the airborne fuzz found.</summary>
 /// <param name="Trajectories">Flights run.</param>
-/// <param name="ExplosiveOnlyNodes">Floor positions only flights reached, not walks or jumps.</param>
+/// <param name="ExplosiveOnlyNodes">Floor positions only blast jumps reach, not walks or jumps.</param>
 /// <param name="Problems">Spots where flights went wrong (stuck, wedged, caught, out of bounds), most frequent first.</param>
 /// <param name="CeilingBonks">The most frequent ceiling bonks: information, not problems.</param>
-public sealed record AirborneReport(int Trajectories, int ExplosiveOnlyNodes, IReadOnlyList<SpotReport> Problems, IReadOnlyList<SpotReport> CeilingBonks);
+/// <param name="BlastOnlyAreas">The largest areas only blast jumps reach (roofs, ledges, map edges), largest first.</param>
+public sealed record AirborneReport(
+    int Trajectories, int ExplosiveOnlyNodes, IReadOnlyList<SpotReport> Problems, IReadOnlyList<SpotReport> CeilingBonks,
+    IReadOnlyList<RegionReport> BlastOnlyAreas);
 
 /// <summary>A spot where flights met the same event.</summary>
 /// <param name="Kind">The event, snake_case.</param>
@@ -48,4 +51,5 @@ public sealed record SpotReport(string Kind, int Count, float[] Centre, IReadOnl
 /// <param name="Min">Its lower bound.</param>
 /// <param name="Max">Its upper bound.</param>
 /// <param name="Marker">The marker number drawn for it, or 0 when it has none.</param>
-public sealed record RegionReport(int Nodes, float[] Sample, float[] Min, float[] Max, int Marker);
+/// <param name="Escapes">For a trap, the launches whose blast jumps get out of it (empty when none do); null for other regions or when no flights were tried.</param>
+public sealed record RegionReport(int Nodes, float[] Sample, float[] Min, float[] Max, int Marker, IReadOnlyList<string>? Escapes = null);

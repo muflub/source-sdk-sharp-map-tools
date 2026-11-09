@@ -235,7 +235,7 @@ public sealed class MovementCalibrationTests
         Assert.False(rows[1].Agrees);
         Assert.True(rows[1].Known);
         Assert.Contains("known:", rows[1].Note, StringComparison.Ordinal);
-        Assert.True(rows[2].Agrees); // about 693 u/s: inside the rocket jump's range
+        Assert.True(rows[2].Agrees); // about 693 u/s in all, a push of about 422: inside the rocket jump's range
         Assert.False(rows[3].Agrees); // far too low for a rocket jump
         Assert.False(rows[4].Agrees); // the peak is 5 off
         Assert.Contains("peak by 5", rows[4].Note, StringComparison.Ordinal);
