@@ -63,6 +63,14 @@ public sealed class HullTraceWorld
     /// <summary>How far short of a surface a sweep stops, in units: the engine's distance epsilon.</summary>
     public const float DistEpsilon = 0.03125f;
 
+    /// <summary>
+    /// How far a sweep may close on a plane over its whole length and still
+    /// count as moving parallel to it, in units: far below anything a tick's
+    /// move does on purpose, far above single precision's rounding of a
+    /// slide's velocity.
+    /// </summary>
+    public const double ParallelSlack = 1e-4;
+
     /// <summary>The edge of one cell of the spatial index, in units.</summary>
     public const double CellSize = 256;
 
@@ -288,8 +296,15 @@ public sealed class HullTraceWorld
                 startOut = true;
             }
 
-            // Wholly in front of one plane: no contact with this solid.
-            if (d1 > 0 && (d2 >= DistEpsilon || d2 >= d1))
+            // Wholly in front of one plane: no contact with this solid. A
+            // sweep that closes on the plane by less than ParallelSlack over
+            // its whole length is sliding along it: positions and velocities
+            // are single precision, so a velocity just clipped to slide along
+            // a surface still closes on it by a hair when the plane is
+            // evaluated in double, and without the slack a player resting the
+            // stop distance from the surface met it again at fraction 0 on
+            // every sweep and stalled.
+            if (d1 > 0 && (d2 >= DistEpsilon || d2 >= d1 - ParallelSlack))
             {
                 return;
             }

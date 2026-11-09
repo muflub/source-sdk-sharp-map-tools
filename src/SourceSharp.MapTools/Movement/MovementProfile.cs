@@ -44,6 +44,31 @@ public sealed record MovementProfile
     /// <summary>Gets the eye height standing, above the feet.</summary>
     public float EyeHeight { get; init; } = 64f;
 
+    /// <summary>
+    /// How long a crouch takes on the ground, in seconds, before the hull
+    /// shrinks: 0.4 in Half-Life 2, 0.2 in TF2. Until then the player is
+    /// still standing, and may still jump.
+    /// </summary>
+    public float TimeToDuck { get; init; } = 0.4f;
+
+    /// <summary>
+    /// Whether a blocked walk takes the step-up ("high road") move whenever
+    /// it lands on standable ground, as TF2 does, rather than whichever of
+    /// it and the plain slide covered more ground, as Half-Life 2 does.
+    /// </summary>
+    public bool HighRoadFirst { get; init; }
+
+    /// <summary>
+    /// Whether the ground check of a player who was on the ground reaches a
+    /// step further down and pulls the player onto the floor it finds, as
+    /// TF2's does, instead of a separate stay-on-ground pull after each walk
+    /// as in Half-Life 2.
+    /// </summary>
+    public bool GroundProbeStepsDown { get; init; }
+
+    /// <summary>The eye's height above the feet when crouched, at rest.</summary>
+    public float DuckEyeHeight { get; init; } = 28f;
+
     /// <summary>Gets the highest step walked up without jumping.</summary>
     public float StepHeight { get; init; } = 18f;
 
@@ -106,10 +131,11 @@ public sealed record MovementProfile
     public static MovementProfile Hl2mp { get; } = new() { Name = "hl2mp", MaxSpeed = 320f };
 
     /// <summary>
-    /// A TF2 class: the 48 x 48 x 82 hull (62 crouched), the eye at 68, a jump
-    /// of 289 units per second (about 52 units high, 72 crouch-jumping), no
-    /// jumping while crouched on the ground, two air crouches per jump, the
-    /// ground left above 250 units per second upward, and the class's speed.
+    /// A TF2 class: the 48 x 48 x 82 hull (62 crouched), the eye at 68 (45 crouched), a jump
+    /// of 289 units per second (50 units high, 72 crouch-jumping), a crouch
+    /// that takes 0.2 seconds on the ground and no jumping once it has, two
+    /// air crouches per jump, the ground left above 250 units per second
+    /// upward, and the class's speed.
     /// </summary>
     /// <param name="playerClass">The class name: scout, soldier, pyro, demoman, heavy, engineer, medic, sniper or spy.</param>
     /// <returns>The profile.</returns>
@@ -138,6 +164,10 @@ public sealed record MovementProfile
             StandHeight = 82f,
             DuckHeight = 62f,
             EyeHeight = 68f,
+            DuckEyeHeight = 45f,
+            TimeToDuck = 0.2f,
+            HighRoadFirst = true,
+            GroundProbeStepsDown = true,
             MaxSpeed = speed,
             JumpSpeed = 289f,
             JumpWhileDucked = false,
