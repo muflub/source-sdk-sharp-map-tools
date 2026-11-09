@@ -344,6 +344,15 @@ public static class Program
                     .ConfigureAwait(false);
             }
 
+            case "movecal":
+            {
+                // The movement calibration: writes the lanes' map and the
+                // game script, or compares a game run's log with the
+                // simulator. Rooted at "/" like preview.
+                return await MoveCalCommand.RunAsync(new PhysicalFileSystem("/"), args[1..], output, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             case "layout":
             {
                 // A seeded level needs only the library's socket sets, which
@@ -666,6 +675,12 @@ public static class Program
                                                       contact sheet (overview, isometric,
                                                       spawns) and index.json with what each
                                                       view shows and numbered findings
+              movecal write <dir> | compare <console.log> [-class <c>]
+                                                      the movement calibration: writes a map of
+                                                      steps, slopes, ledges, tunnels, gaps and
+                                                      rocket jumps with a TF2 console script
+                                                      that plays it, then compares the game's
+                                                      log of that run with the simulator
               nav <map.nav3d | level.yaml> [-rooms <pack>] [--obj <out.obj>] [--floor] [--agent N]
                                                       a level navigation's cells, free volume,
                                                       components and door links; OBJ export

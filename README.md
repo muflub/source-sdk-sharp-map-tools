@@ -648,6 +648,29 @@ markers and an `airborne` section in `index.json`; ceiling bonks are
 listed as information. Floor only flights land on is drawn blue on the
 reach tile: places only blast jumpers get to, which may want player clip.
 
+The simulator is held to the real game by a calibration (`ssmap movecal`,
+`MovementCalibration`): 35 lanes, each one obstacle at a measured size
+(steps of 16 to 24 units, ramps of 40 to 50 degrees, ledges reached by a
+jump and by a crouch jump, crouch tunnels and low ceilings around the hull
+heights, running jumps over gaps of 96 to 208, the peaks of a standing and
+a crouch jump, and two rocket jumps whose launch speed is measured). Every
+lane ends at a wall, so a player either stops at the obstacle or runs on to
+the end, and the final position does not hang on how long the game held a
+button. `ssmap movecal write <dir>` writes the map and a TF2 console script
+that plays every lane and prints positions; `ssmap movecal compare
+<console.log>` reads the game's log and compares each lane with the
+simulator. `tools/preview-calibrate/movement_calibrate.py` does the whole
+run (compile, start the game with `+fps_max 66` so a script frame is a
+tick, compare). A recorded soldier run is a test fixture
+(`Fixtures/movement-calibration/tf2_soldier.log`): 34 of the 35 lanes match
+the game to two units, and the steep-slope lanes carry a documented known
+difference (both sides fail to climb; how far the slide back goes differs
+by a few units and varies between game runs). The run is what found the
+TF2 rules the simulator now follows: a standing jump peaks at 50 units and
+a crouch jump's feet at 72, a crouch takes 0.2 seconds on the ground, a
+blocked walk takes the step-up move first, and the ground check of a
+player who was standing reaches a step down.
+
 `tools/preview-calibrate/ingame_shots.py` checks the renderer against the
 game: it launches the Source SDK 2013 `mod_tf` build on the map, takes a
 screenshot at each perspective camera in `index.json`, and writes
