@@ -15,6 +15,7 @@ using SourceSharp.MapPreview.Cameras;
 using SourceSharp.MapPreview.Render;
 using SourceSharp.MapPreview.Scene;
 using SourceSharp.MapTools.Io;
+using SourceSharp.MapTools.Movement;
 
 namespace SourceSharp.MapCompile;
 
@@ -43,7 +44,7 @@ namespace SourceSharp.MapCompile;
 public static class PreviewCommand
 {
     private const string Usage =
-        "usage: ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera \"x y z pitch yaw [fov] [label]\"]...";
+        "usage: ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera \"x y z pitch yaw [fov] [label]\"]... [-movement [class]] [-airborne <flights>]";
 
     /// <summary>Runs the command.</summary>
     /// <param name="disk">Where the map, the game and the output live.</param>
@@ -188,6 +189,15 @@ public static class PreviewCommand
             o = o with { ExtraCameras = a.Cameras };
         }
 
+        if (a.Movement)
+        {
+            o = o with
+            {
+                Movement = MovementFor(a.MovementClass, tf2),
+                Airborne = a.Flights == 0 ? null : AirborneOptions.Default with { Trajectories = a.Flights ?? AirborneOptions.Default.Trajectories },
+            };
+        }
+
         if (tf2)
         {
             // TF2's view vectors: a 48 x 48 x 82 hull with the eye at 72.
@@ -249,6 +259,21 @@ public static class PreviewCommand
             else if (Is(arg, "camera") && hasValue && TryParseCamera(args[++i], a.Cameras.Count + 1, out PreviewCamera? camera))
             {
                 a.Cameras.Add(camera);
+            }
+            else if (Is(arg, "movement"))
+            {
+                // An optional class follows: a TF2 class name, or hl2mp.
+                a.Movement = true;
+                if (hasValue && !args[i + 1].StartsWith('-') && IsMovementClass(args[i + 1]))
+                {
+                    a.MovementClass = args[++i];
+                }
+            }
+            else if (Is(arg, "airborne") && hasValue
+                && int.TryParse(args[++i], NumberStyles.Integer, CultureInfo.InvariantCulture, out int flights) && flights >= 0)
+            {
+                a.Movement = true;
+                a.Flights = flights;
             }
             else if (Is(arg, "individual"))
             {
@@ -334,6 +359,36 @@ public static class PreviewCommand
         return true;
     }
 
+    /// <summary>
+    /// The movement profile for <c>-movement</c>: the named class, else a TF2
+    /// soldier for a TF2 game and Half-Life 2 Deathmatch's player otherwise.
+    /// </summary>
+    /// <param name="playerClass">The class named after <c>-movement</c>, or null.</param>
+    /// <param name="tf2">Whether the game is TF2.</param>
+    /// <returns>The profile.</returns>
+    public static MovementProfile MovementFor(string? playerClass, bool tf2) =>
+        playerClass is null ? (tf2 ? MovementProfile.Tf2("soldier") : MovementProfile.Hl2mp)
+        : playerClass.Equals("hl2mp", StringComparison.OrdinalIgnoreCase) ? MovementProfile.Hl2mp
+        : MovementProfile.Tf2(playerClass);
+
+    private static bool IsMovementClass(string name)
+    {
+        if (name.Equals("hl2mp", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        try
+        {
+            _ = MovementProfile.Tf2(name);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Parses <c>WxH</c>, each side 64 to 2048 pixels.</summary>
     /// <param name="text">The text.</param>
     /// <param name="size">The size.</param>
@@ -381,5 +436,11 @@ public static class PreviewCommand
         public bool Tools { get; set; }
 
         public List<PreviewCamera> Cameras { get; } = [];
+
+        public bool Movement { get; set; }
+
+        public string? MovementClass { get; set; }
+
+        public int? Flights { get; set; }
     }
 }

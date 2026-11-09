@@ -580,7 +580,7 @@ first 20 places that have none, the count, and fails when there is any
 ### `preview`
 
 ```sh
-ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera "x y z pitch yaw [fov] [label]"]...
+ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera "x y z pitch yaw [fov] [label]"]... [-movement [class]]
 ```
 
 Renders a compiled map with its textures, models and baked lighting, for an
@@ -616,6 +616,37 @@ full strength; models lit by the ambient cube at their centre plus the four
 strongest local lights; the 3D skybox's miniature left out. `-hdr` reads the
 HDR lumps, `-tools` keeps nodraw, trigger and other tool faces, `-exposure`
 scales the light. The images are the same bytes at any `-threads`.
+
+`-movement` adds where a real player can go, found by simulating the
+game's movement (`SourceSharp.MapTools.Movement`): the player's hull is
+swept against the map's player collision (brushes with their bevels,
+displacements, solid static props' `.phy` pieces; displacement and prop
+pieces are given bevels across their slanted edges, so a box coming down
+beside a steep triangle does not stand on its edge's extension in mid-air)
+by a re-implementation
+of the engine's movement tick (friction, ground and air acceleration, the
+slide move, steps, jumps and crouch jumps). Every standable floor is
+sampled every 32 units, and walks and running crouch-jumps in eight
+directions from each say where a player ends up. The result is a reach
+tile on the sheet (green: floor every team's spawns reach; yellow: only
+some teams; grey: none; red: a trap), numbered markers for traps (places
+a player can get into but not out of) and spawns that start inside a
+solid, and a `movement` section in `index.json` with the counts, the
+traps and the largest unreached islands. The profile is a TF2 soldier
+for a TF2 game and the Half-Life 2 Deathmatch player otherwise; name a TF2
+class (`-movement scout`) or `hl2mp` to choose.
+
+The movement analysis also fuzzes flights (`AirborneFuzzer`): 2000 seeded
+launches by default (`-airborne <n>`, `0` for none) from the floor the spawns
+reach, sampled from TF2's rocket, sticky and grenade jumps, airblast and
+charges (speeds and angles from the game's knockback rules: blast push is
+damage × the standard hull's volume over the player's × scale, capped at
+1000 per blast). Each flight air-strafes along its heading and crouches at
+the top. Where flights get stuck, wedge in a crease, catch the lip of a
+ledge they nearly cleared, or catch a post or rail, the spots get numbered
+markers and an `airborne` section in `index.json`; ceiling bonks are
+listed as information. Floor only flights land on is drawn blue on the
+reach tile: places only blast jumpers get to, which may want player clip.
 
 `tools/preview-calibrate/ingame_shots.py` checks the renderer against the
 game: it launches the Source SDK 2013 `mod_tf` build on the map, takes a

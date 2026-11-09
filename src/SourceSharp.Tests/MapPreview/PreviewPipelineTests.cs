@@ -114,7 +114,7 @@ public class PreviewPipelineTests
     }
 
     [Fact]
-    public void MarkersAreDrawnWhereTheyProjectAndGreyedWhenHidden()
+    public void APlayersEyeViewDrawsOnlyTheMarkersInSight()
     {
         PreviewCamera camera = PreviewCamera.FromAngles("c", CameraKind.Custom, Vec3.Zero, 0, 0, 90, 64, 64, "c");
         GBuffer buffer = new(64, 64);
@@ -127,9 +127,29 @@ public class PreviewPipelineTests
 
         IReadOnlyList<int> drawn = Annotator.Markers(image, camera.View(), buffer, [visible, hidden, behind, outside], 1);
 
+        Assert.Equal([1], drawn);
+        Assert.Equal(Annotator.MarkerColour, image.Get(32, 32));
+        Assert.DoesNotContain(Annotator.HiddenMarkerColour, Enumerable.Range(0, 64 * 64).Select(i => image.Get(i % 64, i / 64)));
+    }
+
+    [Fact]
+    public void AnOverviewDrawsEveryMarkerAndGreysTheHiddenOnes()
+    {
+        // Looking straight down from z = 100 over a floor 50 units below the
+        // camera: a marker on the floor is in sight, one 40 units under it
+        // is hidden but still drawn, greyed.
+        PreviewCamera top = new("t", CameraKind.Overview, new Vec3(0, 0, 100), new Vec3(0, 0, -1), new Vec3(0, 1, 0), 0, 50, 64, 64, "t");
+        GBuffer buffer = new(64, 64);
+        Array.Fill(buffer.Depth, 50f);
+        RgbaImage image = RgbaImage.Filled(64, 64, new Rgba(0, 0, 0));
+        PreviewMarker visible = new(1, "k", "on the floor", new Vec3(0, 0, 52));
+        PreviewMarker hidden = new(2, "k", "under it", new Vec3(-25, -25, 10));
+
+        IReadOnlyList<int> drawn = Annotator.Markers(image, top.View(), buffer, [visible, hidden], 1);
+
         Assert.Equal([1, 2], drawn);
         Assert.Equal(Annotator.MarkerColour, image.Get(32, 32));
-        Assert.Equal(Annotator.HiddenMarkerColour, image.Get(24, 24));
+        Assert.Contains(Annotator.HiddenMarkerColour, Enumerable.Range(0, 64 * 64).Select(i => image.Get(i % 64, i / 64)));
     }
 
     [Fact]

@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
-"""Generates ss_minetown.vmf: a TF2 mining town with a main street of
-storefronts, and a mine entrance in the north cliff whose tunnel descends
-to a lit cavern and a shaft to the level below.
+"""Generates ss_minetown.vmf: a TF2 mining town in a canyon. A main street
+of storefronts opens into a plaza; the town's edges wander rather than run
+straight, and each side gives a reason nobody walks out: a sheer, jagged
+cliff behind the hotel and a steep hillside to the west, the canyon to the
+east (barbed wire along its rim, a trestle bridge that ends in mid-air), a
+ridge to the south (a rail spur running into a boarded-up adit, barricades
+and wire) and the cliff face to the north, whose mine entrance leads down a
+tunnel to a lit cavern and a shaft to the level below. Player clip over
+the hills, ridge and cliff tops keeps blast jumpers in, and a fall into the
+canyon is a death.
 
 Coordinates: x east, y north, z up. Town ground at z=0, cavern floor at
 z=-384. Player hull 48x48x82, step 18; doors are 128 wide, 160 tall.
@@ -103,6 +110,71 @@ def gable(x1, x2, y1, y2, zbase, rise, mat, ridge_along_x):
                  ((x1,y2,zbase),(x2,y2,zbase),(xm,y2,zbase+rise))]
     solids.append(convex(faces, c, mat))
 
+def disp_chunk(n, heights, alphas=None):
+    """A dispinfo chunk for a top face starting at its low-x low-y corner:
+    rows run along +y, columns along +x, distances along +z."""
+    def kv(name, vals):
+        return f'\t\t\t\t\t"{name}" "{vals}"\n'
+    normals = ''.join(kv(f"row{r}", " ".join(["0 0 1"] * n)) for r in range(n))
+    dist = ''.join(kv(f"row{r}", " ".join(f"{heights[r][c]:.2f}" for c in range(n))) for r in range(n))
+    zeros = ''.join(kv(f"row{r}", " ".join(["0 0 0"] * n)) for r in range(n))
+    alph = ''.join(kv(f"row{r}", " ".join(f"{(alphas[r][c] if alphas else 0):.0f}" for c in range(n))) for r in range(n))
+    tags = ''.join(kv(f"row{r}", " ".join(["9"] * (2 * (n - 1)))) for r in range(n - 1))
+    return ('\t\t\tdispinfo\n\t\t\t{\n\t\t\t\t"power" "3"\n\t\t\t\t"startposition" "[%s]"\n\t\t\t\t"flags" "0"\n'
+            '\t\t\t\t"elevation" "0"\n\t\t\t\t"subdiv" "0"\n'
+            f'\t\t\t\tnormals\n\t\t\t\t{{\n{normals}\t\t\t\t}}\n\t\t\t\tdistances\n\t\t\t\t{{\n{dist}\t\t\t\t}}\n'
+            f'\t\t\t\toffsets\n\t\t\t\t{{\n{zeros}\t\t\t\t}}\n\t\t\t\toffset_normals\n\t\t\t\t{{\n{normals}\t\t\t\t}}\n'
+            f'\t\t\t\talphas\n\t\t\t\t{{\n{alph}\t\t\t\t}}\n\t\t\t\ttriangle_tags\n\t\t\t\t{{\n{tags}\t\t\t\t}}\n'
+            '\t\t\t\tallowed_verts\n\t\t\t\t{\n\t\t\t\t\t"10" "-1 -1 -1 -1 -1 -1 -1 -1 -1 -1"\n\t\t\t\t}\n\t\t\t}\n')
+
+def terrain(x1, y1, x2, y2, height, mat, side="tools/toolsnodraw"):
+    """A 64-unit-thick slab under z = 0 whose top is a power-3 displacement
+    following height(x, y); every other side nodraw."""
+    n = 9
+    hs = [[height(x1 + (x2 - x1) * c / (n - 1), y1 + (y2 - y1) * r / (n - 1)) for c in range(n)] for r in range(n)]
+    # Displacements neither seal the map nor fill space: a solid filler up to
+    # just below the surface's lowest point keeps the space under the ground
+    # out of the world, as it would be in Hammer.
+    # A flat tile gets one filler; a hilly one a 4 x 4 grid of them, each
+    # topped just under the lowest of its own patch of surface.
+    lowest = min(min(r) for r in hs)
+    highest = max(max(r) for r in hs)
+    parts = 1 if highest - lowest < 32 else 4
+    step = (n - 1) // parts
+    for pr in range(parts):
+        for pc in range(parts):
+            patch = [hs[r][c] for r in range(pr * step, pr * step + step + 1) for c in range(pc * step, pc * step + step + 1)]
+            top = min(patch) - 16
+            if top > -728:
+                fx1 = x1 + (x2 - x1) * pc / parts
+                fy1 = y1 + (y2 - y1) * pr / parts
+                box(fx1, fy1, -744, fx1 + (x2 - x1) / parts, fy1 + (y2 - y1) / parts, top, "tools/toolsnodraw")
+    box(x1, y1, -64, x2, y2, 0, side, top=mat)
+    sol = solids.pop()
+    marker = '\t\t\t"smoothing_groups" "0"\n'
+    first = sol.index(marker) + len(marker)
+    chunk = disp_chunk(n, hs) % f"{x1:g} {y1:g} 0"
+    solids.append(sol[:first] + chunk + sol[first:])
+    return max(max(r) for r in hs)
+
+def wedge(points_bottom, points_top, mat):
+    """A convex prism from a bottom and a top quad (each four points in the
+    same order), for slanted rock faces."""
+    pts = points_bottom + points_top
+    c = tuple(sum(p[i] for p in pts) / len(pts) for i in range(3))
+    b, t = points_bottom, points_top
+    faces = [(b[0], b[1], b[2]), (t[0], t[1], t[2])]
+    for i in range(4):
+        j = (i + 1) % 4
+        faces.append((b[i], b[j], t[j]))
+    solids.append(convex(faces, c, mat))
+
+def brush_entity(classname, lo, hi, mat, **kv):
+    """An entity with one box brush (a trigger or clip volume)."""
+    box(lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], mat)
+    sol = solids.pop()
+    entities.append({"classname": classname, **{k: str(v) for k, v in kv.items()}, "__solid": sol})
+
 def ent(classname, origin=None, **kv):
     e = {"classname": classname}
     if origin is not None:
@@ -158,16 +230,109 @@ BEAM = "wood/wood_beam02"
 ROOF = "cp_manor/wood_shingles01"
 WALLS = ["wood/wood_wall004", "wood/wood_wall006", "wood/wood_wall007", "wood/wood_wall009", "wood/wood_wall005a", "wood/wood_wall008"]
 
-# Town ground: x -1536..1536, y -2304..1536, top z=0.
 TX0, TX1, TY0, TY1 = -1536, 1536, -2304, 1536
-box(TX0, TY0, -64, TX1, TY1, 0, DIRT)
-# Street: a slightly worn strip down the middle.
-box(-256, TY0, 0, 256, TY1, 1, "nature/dirtground006")
 
-# Canyon walls around the town (west, east, south), with a rock top.
-for (x1, x2) in [(X0, TX0), (TX1, X1)]:
-    box(x1, TY0, -64, x2, TY1, 640, ROCK, top=ROCKTOP)
-box(X0, Y0, -64, X1, TY0, 640, ROCK, top=ROCKTOP)
+def curve(points, t):
+    """A smooth line through control points [(t, value)], flat beyond the
+    ends: cosine easing between neighbours, so the edge bends rather than
+    kinks."""
+    if t <= points[0][0]:
+        return points[0][1]
+    for (t0, v0), (t1, v1) in zip(points, points[1:]):
+        if t <= t1:
+            f = (1 - math.cos(math.pi * (t - t0) / (t1 - t0))) / 2
+            return v0 + (v1 - v0) * f
+    return points[-1][1]
+
+def slope_of(fn, t, h=8.0):
+    return (fn(t + h) - fn(t - h)) / (2 * h)
+
+# The town's boundary is three wandering lines rather than a rectangle. The
+# west line bulges back behind the hotel and becomes a sheer cliff from the
+# saloon to the hardware store; the east line follows the canyon rim and
+# swings out round the assay office; the south line dips round the spawn
+# depot and climbs toward both corners, where the ridge wraps in.
+WEST_PTS = [(-2816, -1010), (-2300, -1060), (-1800, -1115), (-1350, -1090), (-1000, -1125),
+            (-720, -1440), (-300, -1500), (120, -1470), (380, -1250), (760, -1190), (1050, -1330), (1536, -1440)]
+EAST_PTS = [(-2816, 1080), (-2300, 1120), (-1750, 1060), (-1250, 1100), (-820, 1270), (-300, 1370),
+            (120, 1340), (450, 1215), (820, 1260), (1100, 1440), (1300, 1536)]
+SOUTH_PTS = [(-2304, -2120), (-1500, -2160), (-900, -2290), (-450, -2335), (450, -2335), (900, -2280), (1500, -2150), (2304, -2100)]
+CLIFF_Y0, CLIFF_Y1 = -980, 640     # the stretch of the west edge that is a sheer cliff
+
+def west_edge(y): return curve(WEST_PTS, y)
+def east_edge(y): return curve(EAST_PTS, y)
+def south_edge(x): return curve(SOUTH_PTS, x)
+
+def rise(d, cap, grade):
+    """A hillside rising `grade` units per unit out from its foot, eased in
+    over the first 48 units so the foot is a curve rather than a crease, and
+    levelling off at `cap`."""
+    if d <= 0:
+        return 0.0
+    ease = 48.0
+    h = grade * d * d / (2 * ease) if d < ease else grade * (ease / 2 + d - ease)
+    return min(cap, h)
+
+def ground(x, y):
+    """The canyon floor's height: flat through the town and rising or
+    falling outside it. The three sides are added rather than chosen, so
+    where two meet (the ridge running into the west hill, or into the
+    canyon) the surfaces join without a seam or a V-shaped trough."""
+    rough = 28 * math.sin(x / 170.0) * math.cos(y / 210.0) + 14 * math.sin((x + 2 * y) / 95.0)
+    dw, de, ds = west_edge(y) - x, x - east_edge(y), south_edge(x) - y
+    h = rise(dw, 560, 1.9) + rise(ds, 520, 1.8) - rise(de, 680, 3.0)
+    h = min(h, 640.0)
+    # The canyon's far wall, which the clip keeps anyone from reaching.
+    h += rise(x - 1960, 1100, 2.6)
+    out = max(dw, de, ds)
+    if out > 0:
+        return h + rough * min(1.0, out / 120.0)
+    return rough * 0.25 * max(0.0, 1 - (-out) / 160.0)
+
+for gx in range(X0, X1, 512):
+    for gy in range(Y0, TY1, 512):
+        x2, y2 = gx + 512, min(gy + 512, TY1)
+        corners = [ground(gx, gy), ground(x2, gy), ground(gx, y2), ground(x2, y2), ground(gx + 256, gy + 256)]
+        steep = max(corners) - min(corners) > 120 or max(corners) > 150 or min(corners) < -150
+        terrain(gx, gy, x2, y2, ground, ROCK if steep else DIRT)
+# A sealed floor under the terrain (displacements do not seal the map) and
+# a worn strip down the street.
+box(X0, Y0, -760, X1, TY1, -744, "tools/toolsnodraw")
+box(-256, -2300, 0, 256, TY1 - 512, 1, "nature/dirtground006")
+
+# The west cliff: slabs of rock standing on the edge line, each leaning
+# back by its own amount and topped at its own height, so the face is
+# jagged and stepped. They are tallest mid-run and lower toward the ends,
+# where the hillside takes over.
+for y0 in range(CLIFF_Y0, CLIFF_Y1, 128):
+    y1 = y0 + 128
+    xe0, xe1 = west_edge(y0), west_edge(y1)
+    taper = min(1.0, (y0 - CLIFF_Y0 + 128) / 384.0, (CLIFF_Y1 - y0) / 384.0)
+    top = 220 + taper * (260 + 60 * math.sin(y0 * 0.023))
+    lean = 40 + 36 * (1 + math.sin(y0 * 0.017 + 1.3))
+    back = min(xe0, xe1) - 420
+    wedge([(xe0, y0, -32), (xe1, y1, -32), (back, y1, -32), (back, y0, -32)],
+          [(xe0 - lean, y0, top), (xe1 - lean, y1, top), (back, y1, top), (back, y0, top)], ROCK)
+
+# Player clip over the hills, the ridge, the cliff and the canyon's far
+# wall, as TF2 maps do, so blast jumpers cannot climb out of the town. These
+# are world brushes: player clip in the world blocks players only.
+CLIP = "tools/toolsplayerclip"
+for y in range(Y0, TY1, 128):
+    edge = max(west_edge(y), west_edge(y + 128))
+    cliff = CLIFF_Y0 <= y < CLIFF_Y1
+    box(X0, y, 360 if cliff else 380, edge - (0 if cliff else 200), y + 128, ZT - 16, CLIP)
+for x in range(-2304, 2304, 128):
+    edge = max(south_edge(x), south_edge(x + 128))
+    box(x, Y0, 380, x + 128, edge - 200, ZT - 16, CLIP)
+box(2000, Y0, -320, X1, TY1, ZT - 16, CLIP)
+# Over the north cliff's top, so nobody stands on the plateau.
+box(X0, TY1 - 32, 560, X1, Y1, ZT - 16, CLIP)
+# A fall into the canyon is a death: kill volumes along its floor, one per
+# strip so each follows the rim.
+for y in range(Y0, TY1, 256):
+    rim = min(east_edge(y), east_edge(y + 256))
+    brush_entity("trigger_hurt", (rim + 190, y, -760), (2000, y + 256, -520), "tools/toolstrigger", damage=1000, damagetype=32, spawnflags=1)
 
 # ---------------------------------------------------------------- north cliff, tunnel and cavern
 CY0, CY1 = TY1, TY1 + 96          # cliff face slab
@@ -177,7 +342,7 @@ cliff_top = 768
 TZ = 96                            # mine terrace height
 TER0 = TY1 - 512                   # terrace south edge
 # Cliff face with the mine mouth cut out at terrace level.
-wall_with_openings('x', CY0, CY1 - CY0, X0, X1, -64, cliff_top, [(-MX, MX, TZ, TZ + MZ)], ROCK)
+wall_with_openings('x', CY0, CY1 - CY0, X0, X1, -760, cliff_top, [(-MX, MX, TZ, TZ + MZ)], ROCK)
 # The terrace: a raised shelf across the town's north end, reached by stairs
 # on both sides of a central rail ramp.
 box(TX0, TER0, -64, TX1, TY1, TZ, "wood/wood_wall004", top=DIRT)
@@ -188,6 +353,15 @@ for k in range(6):
 ramp_y(-160, 160, TER0 - 576, TER0, -16, 0, TZ, "wood/wood_wall004", top=DIRT)
 for x in (-176, 160):
     ramp_y(x, x + 16, TER0 - 576, TER0, -16, 16, TZ + 16, BEAM)
+# Jagged rock faces leaning on the cliff, either side of the mine terrace.
+for i, xs in enumerate(range(TX0, TX1, 192)):
+    if -560 < xs + 96 < 560:
+        continue
+    d1 = 80 + 70 * (math.sin(xs * 0.013) + 1)
+    d2 = 80 + 70 * (math.sin((xs + 192) * 0.013) + 1)
+    top = cliff_top - 40 - 60 * (1 + math.sin(xs * 0.021))
+    wedge([(xs, CY0 - d1, TZ), (xs + 192, CY0 - d2, TZ), (xs + 192, CY0, TZ), (xs, CY0, TZ)],
+          [(xs, CY0 - 24, top), (xs + 192, CY0 - 24, top + 30), (xs + 192, CY0, top + 30), (xs, CY0, top)], ROCK)
 # Plateau above everything north of the cliff.
 box(X0, CY1, cliff_top - 32, X1, Y1, cliff_top, ROCK, top=ROCKTOP)
 
@@ -240,6 +414,8 @@ for (x, y) in [(SX0 - 16, SY0 - 16), (SX1, SY0 - 16), (SX0 - 16, SY1), (SX1, SY1
 box(SX0 - 16, SY0 - 16, CAVZ + 288, SX1 + 16, SY0, CAVZ + 304, BEAM)
 box(SX0 - 16, SY1, CAVZ + 288, SX1 + 16, SY1 + 16, CAVZ + 304, BEAM)
 box(-8, SY0 - 16, CAVZ + 288, 8, SY1 + 16, CAVZ + 304, BEAM)
+# Nobody climbs out of the shaft: a fall to the next level is a respawn.
+brush_entity("trigger_hurt", (SX0, SY0, PITZ), (SX1, SY1, PITZ + 96), "tools/toolstrigger", damage=1000, damagetype=32, spawnflags=1)
 # Sign at the shaft.
 box(-64, SY0 - 40, CAVZ + 180, 64, SY0 - 36, CAVZ + 244, "signs/lowerlevel_red")
 box(-24, SY0 - 22, CAVZ + 28, 24, SY0 - 18, CAVZ + 76, "signs/arrow_dn_red")
@@ -318,20 +494,20 @@ def hardware(x1, x2, y1, y2):
     prop("props_farm/tools_rack.mdl", (x1 + 20, (y1 + y2) / 2, 8))
     prop("props_farm/spool_rope.mdl", (x2 - 64, y1 + 64, 8))
     prop("props_farm/spool_wire.mdl", (x2 - 64, y2 - 64, 8))
-    prop("props_2fort/oildrum.mdl", ((x1 + x2) / 2, y1 + 48, 8))
+    prop("props_2fort/oildrum.mdl", (x2 - 140, (y1 + y2) / 2, 8))
 
 # West side (fronts face east, toward the street). The street opens into a
 # plaza between y -640 and 256, framed by the hotel and the bank.
 stores_w = [(-960, -400, -1792, -1312, WALLS[0], "signs/sign_post", general_store, 256),
             (-960, -400, -1184, -768, WALLS[1], "signs/sign_bar", saloon, 288),
             (-1344, -704, -576, 128, WALLS[3], "signs/billboard001", saloon, 384),
-            (-960, -400, 384, 768, WALLS[2], None, hardware, 256)]
+            (-1056, -496, 352, 736, WALLS[2], None, hardware, 256)]
 for (x1, x2, y1, y2, wm, sm, inter, h) in stores_w:
     store(x1, x2, y1, y2, "east", h, wm, sm, interior=inter)
 stores_e = [(400, 960, -1792, -1312, WALLS[4], "signs/blufreight", hardware, 288),
             (400, 960, -1184, -768, WALLS[5], None, general_store, 256),
             (704, 1216, -512, 64, "concrete/wall011", "signs/sign_barracks", assay, 320),
-            (400, 960, 384, 768, WALLS[0], "signs/red_barn", assay, 288)]
+            (528, 1088, 416, 800, WALLS[0], "signs/red_barn", assay, 288)]
 for (x1, x2, y1, y2, wm, sm, inter, h) in stores_e:
     store(x1, x2, y1, y2, "west", h, wm, sm, interior=inter)
 
@@ -376,17 +552,103 @@ for y in range(-2048, 1280, 512):
     prop("props_2fort/telephonepole001.mdl", (-288, y, 0), yaw=90)
     prop("props_2fort/telephonepole001.mdl", (288, y + 256, 0), yaw=90)
     light((0, y + 128, 220), color="255 190 120", brightness=40)
-for (x, y, yaw) in [(-1152, -1600, 0), (1216, -800, 30), (-1216, 640, 70), (1216, 900, 10), (-220, 880, 0), (230, 860, 45)]:
+for (x, y, yaw) in [(-1060, -1600, 0), (1180, -800, 30), (-1120, 640, 70), (1200, 900, 10), (-220, 880, 0), (230, 860, 45)]:
     prop("props_farm/wooden_barrel.mdl", (x, y, 0), yaw=yaw)
-for (x, y, z, m) in [(-1408, 1280, TZ, "boulder1_large"), (1408, 1200, TZ, "boulder2_large"), (1376, -2100, 0, "boulder3_large"), (-1400, -2000, 0, "boulder_pile1"), (300, 1400, TZ, "boulder_pile2")]:
+for (x, y, z, m) in [(-1408, 1280, TZ, "boulder1_large"), (1408, 1200, TZ, "boulder2_large"), (300, 1400, TZ, "boulder_pile2")]:
     prop(f"props_coalmines/{m}.mdl", (x, y, z))
-for y in range(-2048, TER0 - 256, 256):
-    prop("props_coalmines/wood_fence_256.mdl", (-1200, y + 128, 0), yaw=90)
-    prop("props_coalmines/wood_fence_256.mdl", (1200, y + 128, 0), yaw=90)
-prop("props_farm/haypile001.mdl", (-1100, -400, 0))
+
+# West: boulders bedded into the foot of the hillside (never standing
+# clear of it, which would leave a gap a falling player wedges in), but not
+# along the cliff.
+boulders = ["boulder1_large", "boulder2_large", "boulder3_large", "boulder_pile1", "boulder_pile2", "boulder5_large", "boulder6_large"]
+for i, y in enumerate(range(-2100, 1000, 230)):
+    if CLIFF_Y0 - 120 < y < CLIFF_Y1 + 120:
+        continue
+    prop(f"props_coalmines/{boulders[i % len(boulders)]}.mdl", (west_edge(y) - 24, y, -8), yaw=(i * 67) % 360)
+# Rubble at the cliff's foot.
+for i, y in enumerate(range(CLIFF_Y0 + 100, CLIFF_Y1 - 60, 310)):
+    prop("props_mining/gravel_pile001.mdl" if i % 2 else "props_coalmines/boulder_pile1.mdl", (west_edge(y) + 8, y, 0), yaw=(i * 53) % 360)
+
+def along(fn, t):
+    """The yaw (degrees) of a fence laid along an edge line at t, for a line
+    given as x(y) (`fn` west/east) or y(x) (south)."""
+    return math.degrees(math.atan2(1.0, slope_of(fn, t)))
+
+# East: barbed wire along the canyon rim, following it, broken only where
+# the old bridge leaves; danger signs on posts.
+BRIDGE_Y0, BRIDGE_Y1 = -704, -576
+for i, y in enumerate(range(-2240, 1100, 128)):
+    yc = y + 64
+    if BRIDGE_Y0 - 64 < yc < BRIDGE_Y1 + 64:
+        continue
+    prop("props_mining/barbfence001_reference.mdl" if i % 2 == 0 else "props_mining/barbfence002_reference.mdl",
+         (east_edge(yc) - 30, yc, 0), yaw=along(east_edge, yc))
+for y in (-1500, -300, 700):
+    x = east_edge(y + 48) - 64
+    box(x, y, 0, x + 8, y + 96, 72, "signs/hazard_yellow001")
+
+# The bridge is out: a trestle bridge's stub reaching over the canyon from
+# the plaza, its deck ending in splintered planks, a barricade across its
+# near end.
+rim = min(east_edge(BRIDGE_Y0), east_edge(BRIDGE_Y1))
+box(rim - 64, BRIDGE_Y0, -8, rim + 288, BRIDGE_Y1, 4, WOODFLOOR)
+# Planks still nailed at the deck's end hang down into the canyon.
+for (ya, yb, reach, drop) in [(BRIDGE_Y0 + 8, BRIDGE_Y0 + 56, 40, -150), (BRIDGE_Y0 + 70, BRIDGE_Y0 + 104, 64, -96)]:
+    x0, x1 = rim + 288, rim + 288 + reach
+    wedge([(x0, ya, -8), (x0, yb, -8), (x1, yb, drop - 8), (x1, ya, drop - 8)],
+          [(x0, ya, 4), (x0, yb, 4), (x1, yb, drop + 4), (x1, ya, drop + 4)], WOODFLOOR)
+for x in (rim + 32, rim + 224):
+    for y in (BRIDGE_Y0, BRIDGE_Y1 - 16):
+        box(x, y, -620, x + 16, y + 16, -8, BEAM)
+    box(x, BRIDGE_Y0, -320, x + 16, BRIDGE_Y1, -304, BEAM)
+for y in (BRIDGE_Y0, BRIDGE_Y1 - 8):
+    for x in range(int(rim), int(rim) + 288, 96):
+        box(x, y, 4, x + 8, y + 8, 44, BEAM)
+    box(rim, y, 36, rim + 280, y + 8, 44, BEAM)
+prop("props_mining/wooden_barrier01.mdl", (rim - 96, (BRIDGE_Y0 + BRIDGE_Y1) / 2, 0), yaw=90)
+box(rim - 120, BRIDGE_Y1 + 8, 0, rim - 112, BRIDGE_Y1 + 104, 72, "signs/hazard_yellow001")
+
+# South: a rail yard along the ridge. Its spur runs west into a boarded-up
+# adit in a rock outcrop where the ridge meets the west hill; timber
+# barricades and barbed wire follow the ridge's foot.
+RAIL_Y = -2210
+OUT_X = -860                        # the outcrop's face
+box(-1300, -2420, -32, OUT_X - 32, -2040, 300, ROCK, top=ROCKTOP)
+wedge([(OUT_X - 32, -2420, 300), (OUT_X - 32, -2040, 300), (-1300, -2040, 300), (-1300, -2420, 300)],
+      [(OUT_X - 120, -2420, 470), (OUT_X - 120, -2040, 470), (-1300, -2040, 470), (-1300, -2420, 470)], ROCK)
+box(-1320, -2440, 300, OUT_X - 8, -2020, ZT - 16, CLIP)
+for y in (RAIL_Y - 80, RAIL_Y + 64):
+    box(OUT_X - 32, y, 0, OUT_X, y + 16, 192, BEAM)
+box(OUT_X - 32, RAIL_Y - 80, 192, OUT_X, RAIL_Y + 80, 208, BEAM)
+for z in range(20, 180, 34):
+    box(OUT_X - 44, RAIL_Y - 64, z, OUT_X - 36, RAIL_Y + 64, z + 26, "wood/wood_wall006")
+box(OUT_X - 28, RAIL_Y - 48, 120, OUT_X - 24, RAIL_Y + 48, 168, "signs/hazard_yellow001")
+# The spur ends at a buffer beam short of the spawn depot.
+for x in range(OUT_X, -420 - 255, 256):
+    prop("props_mining/track_straight_256.mdl", (x + 128, RAIL_Y, 1), yaw=90)
+box(-436, RAIL_Y - 64, 0, -420, RAIL_Y + 64, 40, BEAM)
+for x in (-700, -540):
+    prop("props_trainyard/cart_base_separate.mdl", (x, RAIL_Y, 6), yaw=90)
+    prop("props_2fort/miningcrate001.mdl", (x, RAIL_Y, 40), yaw=100)
+prop("props_2fort/miningcrate001.mdl", (620, RAIL_Y + 20, 0), yaw=10)
+prop("props_2fort/miningcrate002.mdl", (700, RAIL_Y + 30, 0), yaw=75)
+for i, x in enumerate(range(-680, 1100, 160)):
+    xc = x + 80
+    if -420 < xc < 420:
+        continue  # the red spawn depot stands here
+    yaw = math.degrees(math.atan2(slope_of(south_edge, xc), 1.0))
+    prop("props_mining/wooden_barrier01.mdl", (xc, south_edge(xc) + 34, 0), yaw=yaw)
+    prop("props_mining/barbedfence_set01.mdl" if i % 3 else "props_mining/barbfence001_reference.mdl",
+         (xc, south_edge(xc) - 6, ground(xc, south_edge(xc) - 6)), yaw=yaw)
+prop("props_farm/haypile001.mdl", (700, 250, 0), yaw=20)
 prop("props_2fort/wagonwheel001.mdl", (330, -1500, 30), yaw=90)
 prop("props_mining/sign001.mdl", (-260, TY1 - 64, TZ), yaw=0)
 prop("props_mining/billboard001.mdl", (1100, 1350, TZ), yaw=200)
+# The terrace's east end stands over the canyon: a rock buttress under it
+# and a fence along it.
+box(TX1 - 128, TER0, -700, TX1, TY1, -64, ROCK)
+for y in range(TER0, TY1 - 128, 256):
+    prop("props_coalmines/wood_fence_256.mdl", (TX1 - 24, y + 128, TZ), yaw=90)
 # Mine mouth timbering.
 for x in (-MX - 16, MX):
     box(x, CY0 - 32, TZ, x + 16, CY0, TZ + MZ + 16, BEAM)
@@ -434,8 +696,9 @@ world = (f'world\n{{\n\t"id" "{nid()}"\n\t"mapversion" "1"\n\t"classname" "world
          f'\t"maxpropscreenwidth" "-1"\n' + "".join(solids) + "}\n")
 ents = []
 for e in entities:
+    solid = e.pop("__solid", "")
     body = "".join(f'\t"{k}" "{v}"\n' for k, v in e.items())
-    ents.append(f'entity\n{{\n\t"id" "{nid()}"\n{body}}}\n')
+    ents.append(f'entity\n{{\n\t"id" "{nid()}"\n{body}{solid}}}\n')
 env = [
     {"classname": "light_environment", "origin": "0 0 512", "angles": "-50 125 0", "pitch": "-50",
      "_light": "255 226 190 420", "_ambient": "140 150 185 70", "_lightHDR": "-1 -1 -1 1", "_ambientHDR": "-1 -1 -1 1"},

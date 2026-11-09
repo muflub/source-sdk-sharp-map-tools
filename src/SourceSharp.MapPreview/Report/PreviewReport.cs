@@ -102,13 +102,15 @@ public sealed record MarkerReport(int Number, string Kind, string Text, float[] 
 /// <param name="Skybox">The 2D skybox and which of its faces loaded.</param>
 /// <param name="Spawns">The player spawns.</param>
 /// <param name="EntityClasses">Entity counts by class, sorted by class.</param>
+/// <param name="Movement">The movement analysis, when it was asked for.</param>
 public sealed record PreviewChecks(
     IReadOnlyList<MissingMaterialReport> MissingMaterials,
     IReadOnlyList<MissingModelReport> MissingModels,
     LightingReport Lighting,
     SkyboxReport Skybox,
     IReadOnlyList<SpawnReport> Spawns,
-    IReadOnlyDictionary<string, int> EntityClasses);
+    IReadOnlyDictionary<string, int> EntityClasses,
+    MovementReport? Movement = null);
 
 /// <summary>A material that draws as the checker.</summary>
 /// <param name="Name">The material name.</param>

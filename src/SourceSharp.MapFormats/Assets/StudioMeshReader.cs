@@ -192,6 +192,7 @@ public static class StudioMeshReader
         float[] toModel = new float[bones.Length * 12];
         float[] skin = new float[bones.Length * 12];
         Span<float> local = stackalloc float[12];
+        Span<float> poseToBone = stackalloc float[12];
         for (int b = 0; b < bones.Length; b++)
         {
             StudioBone bone = bones[b];
@@ -206,7 +207,6 @@ public static class StudioMeshReader
                 local.CopyTo(target);
             }
 
-            Span<float> poseToBone = stackalloc float[12];
             for (int i = 0; i < 12; i++)
             {
                 poseToBone[i] = bone.PoseToBone[i];
