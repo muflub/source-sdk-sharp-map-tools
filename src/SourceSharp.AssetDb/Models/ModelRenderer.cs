@@ -5,9 +5,7 @@
 //
 //=============================================================================//
 
-using System.Runtime.CompilerServices;
-
-using SourceSharp.AssetDb.Imaging;
+using SourceSharp.MapFormats.Imaging;
 using SourceSharp.MapFormats.Assets;
 using SourceSharp.MapFormats.Geometry;
 
@@ -155,75 +153,19 @@ public static class ModelRenderer
     /// <param name="vtx">The strip groups.</param>
     /// <returns>One entry per drawn triangle, in file order.</returns>
     /// <remarks>
-    /// <para>
-    /// The two-step every studio reader gets wrong once: a strip index names a
-    /// GROUP vertex, whose <c>OrigMeshVertId</c> names a vertex of the MESH,
-    /// which the model's byte offset into the VVD and the mesh's own run
-    /// offset base into the file's vertex block. Skipping the VVD's fixup
-    /// table picks the right COUNT of vertices and the wrong ones.
-    /// </para>
-    /// <para>
-    /// A strip flagged as a triangle strip contributes one triangle per index
-    /// past the first two, every second one wound the other way so the surface
-    /// normal is continuous along the strip; any other strip is a triangle
-    /// list read three indices at a time. A triangle whose indices name
-    /// vertices the file does not hold is dropped, not guessed at. The VTX and
-    /// MDL hierarchies are walked in lockstep and stop at whichever runs out
-    /// first, the same way the reference loaders pair them.
-    /// </para>
-    /// <para>
-    /// Of each body part, only the first model that yields triangles is drawn.
-    /// A bodygroup's models are alternatives, and drawing them all overlays
-    /// every variant at once; the first is the default look, and when it is
-    /// the usual empty "off" option the next one is what the part shows.
-    /// </para>
+    /// The walk itself is <see cref="StudioMeshReader.Lod0Triangles"/>, shared with
+    /// the map preview. Thumbnails read <see cref="StudioBodyChoice.FirstDrawn"/>: of
+    /// each body part, the first model that yields triangles, so a part whose first
+    /// option is the usual empty "off" choice shows what it looks like when on.
     /// </remarks>
     public static IReadOnlyList<ModelTriangle> CollectTriangles(MdlFile mdl, VvdFile vvd, VtxFile vtx)
     {
-        ArgumentNullException.ThrowIfNull(mdl);
-        ArgumentNullException.ThrowIfNull(vvd);
-        ArgumentNullException.ThrowIfNull(vtx);
-
-        StudioVertex[] vertices = vvd.VerticesForLod(0);
-        List<ModelTriangle> triangles = [];
-
-        IReadOnlyList<(int Offset, VtxBodyPartHeader Header)> vtxParts = vtx.BodyParts();
-        int partLimit = Math.Min(vtxParts.Count, mdl.BodyParts().Length);
-
-        for (int partId = 0; partId < partLimit; partId++)
+        IReadOnlyList<StudioTriangle> read = StudioMeshReader.Lod0Triangles(mdl, vvd, vtx, StudioBodyChoice.FirstDrawn);
+        ModelTriangle[] triangles = new ModelTriangle[read.Count];
+        for (int i = 0; i < triangles.Length; i++)
         {
-            (int partOffset, VtxBodyPartHeader vtxPart) = vtxParts[partId];
-            IReadOnlyList<(int Offset, VtxModelHeader Header)> vtxModels = vtx.Models(partOffset, vtxPart);
-            IReadOnlyList<StudioModel> mdlModels = [.. mdl.Models(partId)];
-            int modelLimit = Math.Min(vtxModels.Count, mdlModels.Count);
-
-            for (int modelId = 0; modelId < modelLimit; modelId++)
-            {
-                int before = triangles.Count;
-                (int modelOffset, VtxModelHeader vtxModel) = vtxModels[modelId];
-                IReadOnlyList<(int Offset, VtxModelLodHeader Header)> lods = vtx.Lods(modelOffset, vtxModel);
-                if (lods.Count == 0)
-                {
-                    continue;
-                }
-
-                (int lodOffset, VtxModelLodHeader vtxLod) = lods[0];
-                IReadOnlyList<(int Offset, VtxMeshHeader Header)> vtxMeshes = vtx.Meshes(lodOffset, vtxLod);
-                StudioModel mdlModel = mdlModels[modelId];
-                ReadOnlySpan<StudioMesh> mdlMeshes = mdl.Meshes(partId, modelId);
-                int meshLimit = Math.Min(vtxMeshes.Count, mdlMeshes.Length);
-
-                for (int meshId = 0; meshId < meshLimit; meshId++)
-                {
-                    (int meshOffset, VtxMeshHeader vtxMesh) = vtxMeshes[meshId];
-                    CollectMeshTriangles(vtx, vtxMesh, meshOffset, mdlModel, mdlMeshes[meshId], vertices, triangles);
-                }
-
-                if (triangles.Count > before)
-                {
-                    break;
-                }
-            }
+            StudioTriangle t = read[i];
+            triangles[i] = new ModelTriangle(t.A, t.B, t.C, t.UvA, t.UvB, t.UvC, t.Slot);
         }
 
         return triangles;
@@ -495,109 +437,6 @@ public static class ModelRenderer
                 image.FillRect(0, y, size, 1, origin ? OriginLine : GridLine);
             }
         }
-    }
-
-    /// <summary>
-    /// One mesh's triangles: group vertices based into the VVD's block, then
-    /// every strip unpacked.
-    /// </summary>
-    /// <remarks>
-    /// The model's <c>VertexIndex</c> is a BYTE offset into the VVD's block
-    /// (divide by the vertex size); the mesh's <c>VertexOffset</c> is an INDEX
-    /// into the model's run. Confusing the two scales one of them by 48.
-    /// </remarks>
-    private static void CollectMeshTriangles(
-        VtxFile vtx,
-        in VtxMeshHeader mesh,
-        int meshOffset,
-        in StudioModel owner,
-        in StudioMesh ownerMesh,
-        StudioVertex[] vertices,
-        List<ModelTriangle> into)
-    {
-        int vertexBase = (owner.VertexIndex / Unsafe.SizeOf<StudioVertex>()) + ownerMesh.VertexOffset;
-        int slot = ownerMesh.Material;
-
-        foreach ((int groupOffset, VtxStripGroupHeader group) in vtx.StripGroups(meshOffset, mesh))
-        {
-            ReadOnlySpan<VtxVertex> groupVertices = vtx.Vertices(groupOffset, group);
-            ReadOnlySpan<ushort> groupIndices = vtx.Indices(groupOffset, group);
-
-            foreach (VtxStripHeader strip in vtx.Strips(groupOffset, group))
-            {
-                bool isStrip = ((VtxStripFlags)strip.Flags & VtxStripFlags.IsTriStrip) != 0;
-                int triangles = isStrip
-                    ? strip.NumIndices - 2
-                    : strip.NumIndices - (strip.NumIndices % 3);
-
-                for (int i = 0; i < triangles; i++)
-                {
-                    int a = isStrip ? i : i * 3;
-                    int b = a + 1;
-                    int c = a + 2;
-                    if (isStrip && (i & 1) != 0)
-                    {
-                        (b, c) = (c, b); // keep the winding continuous along the strip
-                    }
-
-                    AddTriangle(
-                        vertexBase,
-                        slot,
-                        groupVertices,
-                        groupIndices,
-                        strip.IndexOffset + a,
-                        strip.IndexOffset + b,
-                        strip.IndexOffset + c,
-                        vertices,
-                        into);
-                }
-            }
-        }
-    }
-
-    /// <summary>Resolves three strip indices to vertices and appends the triangle.</summary>
-    private static void AddTriangle(
-        int vertexBase,
-        int slot,
-        ReadOnlySpan<VtxVertex> groupVertices,
-        ReadOnlySpan<ushort> groupIndices,
-        int a,
-        int b,
-        int c,
-        StudioVertex[] vertices,
-        List<ModelTriangle> into)
-    {
-        if ((uint)a >= (uint)groupIndices.Length || (uint)b >= (uint)groupIndices.Length ||
-            (uint)c >= (uint)groupIndices.Length)
-        {
-            return;
-        }
-
-        int ga = groupIndices[a], gb = groupIndices[b], gc = groupIndices[c];
-        if (ga >= groupVertices.Length || gb >= groupVertices.Length || gc >= groupVertices.Length)
-        {
-            return;
-        }
-
-        int ia = vertexBase + groupVertices[ga].OrigMeshVertId;
-        int ib = vertexBase + groupVertices[gb].OrigMeshVertId;
-        int ic = vertexBase + groupVertices[gc].OrigMeshVertId;
-
-        if ((uint)ia >= (uint)vertices.Length
-            || (uint)ib >= (uint)vertices.Length
-            || (uint)ic >= (uint)vertices.Length)
-        {
-            return;
-        }
-
-        into.Add(new ModelTriangle(
-            vertices[ia].Position,
-            vertices[ib].Position,
-            vertices[ic].Position,
-            (vertices[ia].TexCoord[0], vertices[ia].TexCoord[1]),
-            (vertices[ib].TexCoord[0], vertices[ib].TexCoord[1]),
-            (vertices[ic].TexCoord[0], vertices[ic].TexCoord[1]),
-            slot));
     }
 
     /// <summary>

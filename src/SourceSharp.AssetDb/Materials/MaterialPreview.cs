@@ -8,7 +8,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 
-using SourceSharp.AssetDb.Imaging;
+using SourceSharp.MapFormats.Imaging;
 using SourceSharp.AssetDb.Textures;
 using SourceSharp.MapFormats.Assets;
 using SourceSharp.MapFormats.Geometry;

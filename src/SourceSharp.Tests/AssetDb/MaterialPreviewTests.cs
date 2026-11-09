@@ -6,7 +6,7 @@
 //=============================================================================//
 
 using SourceSharp.AssetDb;
-using SourceSharp.AssetDb.Imaging;
+using SourceSharp.MapFormats.Imaging;
 using SourceSharp.AssetDb.Materials;
 using SourceSharp.MapTools.Io;
 

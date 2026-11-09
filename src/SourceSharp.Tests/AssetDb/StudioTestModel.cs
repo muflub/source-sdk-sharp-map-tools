@@ -47,12 +47,17 @@ internal static class StudioTestModel
         int flags = 256,
         string[]? textureNames = null,
         string? keyValues = null,
-        int version = StudioIdents.MdlVersion)
+        int version = StudioIdents.MdlVersion,
+        Vec3[]? normals = null,
+        bool leadingEmptyModel = false,
+        bool triStrip = false,
+        StudioBone? bone = null)
     {
+        int models = leadingEmptyModel ? 2 : 1;
         return (
-            Mdl(name, textureNames ?? [textureName], searchPath, skinFamilies, skinRefs, flags, keyValues, version),
-            Vvd(vertices, uvs),
-            Vtx(vertices.Length, indices));
+            Mdl(name, textureNames ?? [textureName], searchPath, skinFamilies, skinRefs, flags, keyValues, version, models, bone),
+            Vvd(vertices, uvs, normals),
+            Vtx(vertices.Length, indices, models, triStrip));
     }
 
     private static byte[] Mdl(
@@ -63,7 +68,9 @@ internal static class StudioTestModel
         int skinRefs,
         int flags,
         string? keyValues,
-        int version)
+        int version,
+        int models,
+        StudioBone? bone)
     {
         int headerSize = Unsafe.SizeOf<StudioHeader>();
         int partSize = Unsafe.SizeOf<StudioBodyParts>();
@@ -73,7 +80,8 @@ internal static class StudioTestModel
 
         int partAt = headerSize;
         int modelAt = partAt + partSize;
-        int meshAt = modelAt + modelSize;
+        int realModelAt = modelAt + (modelSize * (models - 1));
+        int meshAt = modelAt + (modelSize * models);
         int textureAt = meshAt + meshSize;
         int cdTableAt = textureAt + (textureSize * textureNames.Length);
         int skinAt = cdTableAt + 4;
@@ -124,17 +132,32 @@ internal static class StudioTestModel
             Mass = 25f,
 
             // Everything after the strings block, so the length is honest.
-            Length = stringsAt + strings.Count,
+            Length = stringsAt + strings.Count + (bone is null ? 0 : Unsafe.SizeOf<StudioBone>()),
         };
+
+        // With an explicit bone it follows the strings; without one the header
+        // keeps NumBones = 1 over offset 0, which no reader that ignores bones
+        // notices and which keeps existing models' bytes unchanged.
+        if (bone is not null)
+        {
+            header.BoneIndex = stringsAt + strings.Count;
+        }
         Encoding.Latin1.GetBytes(name).CopyTo((Span<byte>)header.Name);
 
-        StudioBodyParts part = new() { NumModels = 1, ModelIndex = modelAt - partAt };
-        StudioModel model = new() { NumMeshes = 1, MeshIndex = meshAt - modelAt };
-        StudioMesh mesh = new() { ModelIndex = modelAt - meshAt };
+        // With a leading empty model, the part's first option is the usual "off"
+        // bodygroup choice: a model with no meshes, ahead of the real one.
+        StudioBodyParts part = new() { NumModels = models, ModelIndex = modelAt - partAt };
+        StudioModel model = new() { NumMeshes = 1, MeshIndex = meshAt - realModelAt };
+        StudioMesh mesh = new() { ModelIndex = realModelAt - meshAt };
 
         List<byte> bytes = [];
         Put(bytes, in header);
         Put(bytes, in part);
+        for (int empty = 1; empty < models; empty++)
+        {
+            Put(bytes, new StudioModel());
+        }
+
         Put(bytes, in model);
         Put(bytes, in mesh);
         for (int i = 0; i < textureNames.Length; i++)
@@ -154,10 +177,17 @@ internal static class StudioTestModel
         }
 
         bytes.AddRange(strings);
+        if (bone is { } b)
+        {
+            StudioBone copy = b;
+            copy.Parent = -1;
+            Put(bytes, in copy);
+        }
+
         return [.. bytes];
     }
 
-    private static byte[] Vvd(Vec3[] vertices, (float U, float V)[]? uvs)
+    private static byte[] Vvd(Vec3[] vertices, (float U, float V)[]? uvs, Vec3[]? normals)
     {
         VertexFileHeader header = new()
         {
@@ -174,7 +204,7 @@ internal static class StudioTestModel
         Put(bytes, in header);
         for (int i = 0; i < vertices.Length; i++)
         {
-            StudioVertex vertex = new() { Position = vertices[i] };
+            StudioVertex vertex = new() { Position = vertices[i], Normal = normals?[i] ?? default };
             if (uvs is not null)
             {
                 vertex.TexCoord[0] = uvs[i].U;
@@ -189,7 +219,7 @@ internal static class StudioTestModel
         return [.. bytes];
     }
 
-    private static byte[] Vtx(int vertexCount, int[] indices)
+    private static byte[] Vtx(int vertexCount, int[] indices, int models, bool triStrip)
     {
         int headerSize = Unsafe.SizeOf<VtxFileHeader>();
         int partSize = Unsafe.SizeOf<VtxBodyPartHeader>();
@@ -202,7 +232,8 @@ internal static class StudioTestModel
 
         int partAt = headerSize;
         int modelAt = partAt + partSize;
-        int lodAt = modelAt + modelSize;
+        int realModelAt = modelAt + (modelSize * (models - 1));
+        int lodAt = modelAt + (modelSize * models);
         int meshAt = lodAt + lodSize;
         int groupAt = meshAt + meshSize;
         int stripAt = groupAt + groupSize;
@@ -221,8 +252,13 @@ internal static class StudioTestModel
 
         List<byte> bytes = [];
         Put(bytes, in header);
-        Put(bytes, new VtxBodyPartHeader { NumModels = 1, ModelOffset = modelAt - partAt });
-        Put(bytes, new VtxModelHeader { NumLods = 1, LodOffset = lodAt - modelAt });
+        Put(bytes, new VtxBodyPartHeader { NumModels = models, ModelOffset = modelAt - partAt });
+        for (int empty = 1; empty < models; empty++)
+        {
+            Put(bytes, new VtxModelHeader());
+        }
+
+        Put(bytes, new VtxModelHeader { NumLods = 1, LodOffset = lodAt - realModelAt });
         Put(bytes, new VtxModelLodHeader { NumMeshes = 1, MeshOffset = meshAt - lodAt });
         Put(bytes, new VtxMeshHeader { NumStripGroups = 1, StripGroupHeaderOffset = groupAt - meshAt });
         Put(bytes, new VtxStripGroupHeader
@@ -238,7 +274,7 @@ internal static class StudioTestModel
         {
             NumIndices = indices.Length,
             NumVerts = vertexCount,
-            Flags = (byte)VtxStripFlags.IsTriList,
+            Flags = (byte)(triStrip ? VtxStripFlags.IsTriStrip : VtxStripFlags.IsTriList),
         });
 
         for (int i = 0; i < vertexCount; i++)

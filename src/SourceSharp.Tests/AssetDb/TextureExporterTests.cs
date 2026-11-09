@@ -6,8 +6,8 @@
 //=============================================================================//
 
 using SourceSharp.AssetDb;
-using SourceSharp.AssetDb.Imaging;
 using SourceSharp.AssetDb.Materials;
+using SourceSharp.MapFormats.Imaging;
 using SourceSharp.AssetDb.Textures;
 using SourceSharp.MapFormats.Assets;
 using SourceSharp.MapGen.Content;

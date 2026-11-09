@@ -331,6 +331,19 @@ public static class Program
                     .ConfigureAwait(false);
             }
 
+            case "preview":
+            {
+                // Renders a compiled map's views: reads the map, and mounts its
+                // game (|appid_N| through the Steam library) for textures and
+                // models.
+                PhysicalFileSystem disk = new("/");
+                string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                IReadOnlyList<VPath> roots = [.. DefaultSteamRoots(home).Select(VPath.Create)];
+
+                return await PreviewCommand.RunAsync(disk, roots, args[1..], output, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             case "layout":
             {
                 // A seeded level needs only the library's socket sets, which
@@ -647,6 +660,12 @@ public static class Program
                                                       the props' model hulls; -check reads
                                                       the built file instead and fails on a
                                                       place to stand with no ground under it
+              preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>]
+                                                      renders a compiled map with its textures,
+                                                      models and baked lighting: a labelled
+                                                      contact sheet (overview, isometric,
+                                                      spawns) and index.json with what each
+                                                      view shows and numbered findings
               nav <map.nav3d | level.yaml> [-rooms <pack>] [--obj <out.obj>] [--floor] [--agent N]
                                                       a level navigation's cells, free volume,
                                                       components and door links; OBJ export

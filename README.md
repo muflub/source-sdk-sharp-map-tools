@@ -187,6 +187,13 @@ progress output and the cache report, maps failures to exit codes and wires
 Ctrl-C to cancellation. It references the libraries with no
 `InternalsVisibleTo`, so anything `ssmap` can do, another host can do too.
 
+### `SourceSharp.MapPreview`
+
+Renders compiled maps for the agents that build them: textures, models and
+the baked lighting, drawn by a deterministic CPU rasteriser, plus a JSON
+report of what each view shows and what is wrong. `ssmap preview` is its
+host; see [`preview`](#preview). Held to the same rules as `MapTools`.
+
 ### `SourceSharp.AssetDb`
 
 `ssassets`, a second host. It mounts a game the way the compilers do and
@@ -569,6 +576,52 @@ props' `.phy` pieces from `-game`. A place has ground when the player's box,
 moved down a step (18 units) from its feet, meets a solid. It lists the
 first 20 places that have none, the count, and fails when there is any
 (`NavFloorCheck` in the library).
+
+### `preview`
+
+```sh
+ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera "x y z pitch yaw [fov] [label]"]...
+```
+
+Renders a compiled map with its textures, models and baked lighting, for an
+agent (or a person) to check what a map looks like without running the game.
+The output folder (`<map>.preview/` beside the map unless `-out` names one)
+gets:
+
+- **`sheet.png`**: every view as a labelled tile (512 x 384) on one image,
+  about 1536 x 800, sized to be read by a vision model in one go;
+- **`views/NN-<id>.png`**: each view at `-size` (1024 x 768 by default), with
+  `-individual` or `-no-sheet`;
+- **`index.json`**: for each view its camera (position, angles, field of view
+  or orthographic size), the entities and models it shows and its brightness;
+  numbered markers; and the checks: missing materials and models (each with
+  a marker number), lightmap statistics, the skybox, spawns and entity counts.
+
+The views are an overview straight down with everything above the highest
+spawn plus 200 units cut away (so roofs do not hide interiors), an
+isometric view, a player's-eye view from one spawn per team, then each
+`-camera`: a position, Source angles (pitch positive down), an optional
+horizontal field of view and an optional label. Every view is labelled; the
+orthographic ones get a scale bar and the others a wireframe figure the size
+of the player's hull standing in the scene (TF2's 48 x 82 for a TF2 game
+directory, else 32 x 72). Problems are drawn rather than refused: a missing
+material is the engine's magenta checker, a missing model a magenta box,
+each with a numbered marker that `index.json` lists with its coordinates.
+
+Textures and models come from `-game` (the directory holding
+`gameinfo.txt`; by default the map folder's parent when that holds one),
+with the map's own pak searched first, as the engine does. Lighting is read
+the way the engine applies it: every light style a face stores, summed at
+full strength; models lit by the ambient cube at their centre plus the four
+strongest local lights; the 3D skybox's miniature left out. `-hdr` reads the
+HDR lumps, `-tools` keeps nodraw, trigger and other tool faces, `-exposure`
+scales the light. The images are the same bytes at any `-threads`.
+
+`tools/preview-calibrate/ingame_shots.py` checks the renderer against the
+game: it launches the Source SDK 2013 `mod_tf` build on the map, takes a
+screenshot at each perspective camera in `index.json`, and writes
+side-by-side comparisons. `samples/ss_minetown/` is a generated TF2 map built
+this way, with its camera list.
 
 ### Per-machine defaults
 

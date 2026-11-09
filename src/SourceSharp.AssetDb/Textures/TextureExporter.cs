@@ -8,7 +8,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 
-using SourceSharp.AssetDb.Imaging;
+using SourceSharp.MapFormats.Imaging;
 using SourceSharp.AssetDb.Materials;
 using SourceSharp.MapFormats.Assets;
 using SourceSharp.MapTools.Io;

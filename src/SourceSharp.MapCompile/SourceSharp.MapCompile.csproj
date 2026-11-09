@@ -80,6 +80,7 @@
     -->
     <ProjectReference Include="..\SourceSharp.MapFormats\SourceSharp.MapFormats.csproj" />
     <ProjectReference Include="..\SourceSharp.MapTools\SourceSharp.MapTools.csproj" />
+    <ProjectReference Include="..\SourceSharp.MapPreview\SourceSharp.MapPreview.csproj" />
   </ItemGroup>
 
   <!--

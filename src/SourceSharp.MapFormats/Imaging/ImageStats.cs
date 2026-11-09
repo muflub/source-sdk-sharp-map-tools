@@ -7,7 +7,7 @@
 
 using SourceSharp.MapFormats.Assets;
 
-namespace SourceSharp.AssetDb.Imaging;
+namespace SourceSharp.MapFormats.Imaging;
 
 /// <summary>
 /// What an agent can filter a texture on without looking at it: its average

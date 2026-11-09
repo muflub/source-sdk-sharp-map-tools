@@ -5,7 +5,7 @@
 //
 //=============================================================================//
 
-using SourceSharp.AssetDb.Imaging;
+using SourceSharp.MapFormats.Imaging;
 using SourceSharp.AssetDb.Models;
 using SourceSharp.MapFormats.Assets;
 using SourceSharp.MapFormats.Geometry;

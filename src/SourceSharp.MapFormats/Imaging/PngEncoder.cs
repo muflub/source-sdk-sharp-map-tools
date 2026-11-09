@@ -9,7 +9,7 @@ using System.Buffers.Binary;
 using System.IO;
 using System.IO.Compression;
 
-namespace SourceSharp.AssetDb.Imaging;
+namespace SourceSharp.MapFormats.Imaging;
 
 /// <summary>
 /// Encodes 8-bit RGBA pixels as a minimal PNG: colour type 6, bit depth 8,

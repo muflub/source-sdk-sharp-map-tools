@@ -1,0 +1,10 @@
+0 -1650 150 6 90 85 main street looking north to the mine
+250 -700 130 8 135 95 the plaza: hotel, water tower and bank
+-200 -224 110 -8 180 90 the two-storey hotel
+-520 -976 72 4 180 90 inside the saloon
+0 520 170 6 90 90 up to the mine terrace and headframe
+0 1720 168 18 90 90 into the tunnel down to the mine
+0 2720 -300 6 90 95 the cavern
+640 3104 -300 4 0 90 the side gallery
+0 3120 -230 42 90 90 the shaft to the lower level
+-1350 -2200 560 22 55 90 the town from the south-west ridge
