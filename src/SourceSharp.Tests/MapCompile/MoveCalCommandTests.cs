@@ -17,6 +17,13 @@ namespace SourceSharp.Tests.MapCompile;
 /// <summary>Facts for <c>ssmap movecal</c>: its arguments, the files it writes, and its comparison's exit codes.</summary>
 public sealed class MoveCalCommandTests
 {
+    /// <summary>
+    /// A path as the command sees it: the command resolves its argument to a
+    /// full host path, which on Windows puts a drive in front of a rooted
+    /// one, so the disk is filled at the same resolved place.
+    /// </summary>
+    private static string Rooted(string path) => VPath.Create(Path.GetFullPath(path)).Value;
+
     [Theory]
     [InlineData(new[] { "write", "/out" }, true, "write", "soldier")]
     [InlineData(new[] { "compare", "/log", "-class", "scout" }, true, "compare", "scout")]
@@ -41,8 +48,8 @@ public sealed class MoveCalCommandTests
         int code = await MoveCalCommand.RunAsync(disk, ["write", "/work", "-class", "demoman"], output);
 
         Assert.Equal(Program.ExitSuccess, code);
-        string vmf = Encoding.ASCII.GetString(disk.GetBytes(VPath.Create("/work/ss_movecal.vmf"))!);
-        string cfg = Encoding.ASCII.GetString(disk.GetBytes(VPath.Create("/work/movecal.cfg"))!);
+        string vmf = Encoding.ASCII.GetString(disk.GetBytes(VPath.Create(Rooted("/work/ss_movecal.vmf")))!);
+        string cfg = Encoding.ASCII.GetString(disk.GetBytes(VPath.Create(Rooted("/work/movecal.cfg")))!);
         Assert.StartsWith("versioninfo", vmf, StringComparison.Ordinal);
         Assert.Contains("joinclass demoman", cfg, StringComparison.Ordinal);
         Assert.Contains($"{MovementCalibration.Lanes().Count} lanes", output.ToString(), StringComparison.Ordinal);
@@ -52,7 +59,7 @@ public sealed class MoveCalCommandTests
     public async Task CompareOfTheRecordedRunSucceeds()
     {
         InMemoryFileSystem disk = new();
-        disk.AddText("/run/console.log", MovementCalibrationTests.RecordedLog());
+        disk.AddText(Rooted("/run/console.log"), MovementCalibrationTests.RecordedLog());
         StringWriter output = new();
 
         int code = await MoveCalCommand.RunAsync(disk, ["compare", "/run/console.log"], output);
@@ -65,7 +72,7 @@ public sealed class MoveCalCommandTests
     public async Task CompareOfALogMissingLanesFails()
     {
         InMemoryFileSystem disk = new();
-        disk.AddText("/run/console.log", "nothing here\n");
+        disk.AddText(Rooted("/run/console.log"), "nothing here\n");
         StringWriter output = new();
 
         int code = await MoveCalCommand.RunAsync(disk, ["compare", "/run/console.log"], output);
@@ -79,7 +86,7 @@ public sealed class MoveCalCommandTests
     {
         StringWriter missing = new();
         Assert.Equal(RoomCommands.ExitFailed, await MoveCalCommand.RunAsync(new InMemoryFileSystem(), ["compare", "/nowhere.log"], missing));
-        Assert.Contains("ssmap movecal: /nowhere.log", missing.ToString(), StringComparison.Ordinal);
+        Assert.Contains("ssmap movecal: " + Path.GetFullPath("/nowhere.log"), missing.ToString(), StringComparison.Ordinal);
 
         StringWriter usage = new();
         Assert.Equal(Program.ExitUsage, await MoveCalCommand.RunAsync(new InMemoryFileSystem(), ["compare"], usage));
