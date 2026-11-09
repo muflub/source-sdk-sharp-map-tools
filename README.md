@@ -633,6 +633,18 @@ traps and the largest unreached islands. The profile is a TF2 soldier
 for a TF2 game and the Half-Life 2 Deathmatch player otherwise; name a TF2
 class (`-movement scout`) or `hl2mp` to choose.
 
+The movement analysis also fuzzes flights (`AirborneFuzzer`): 2000 seeded
+launches by default (`-airborne <n>`, `0` for none) from the floor the spawns
+reach, sampled from TF2's rocket, sticky and grenade jumps, airblast and
+charges (speeds and angles from the game's knockback rules: blast push is
+damage × the standard hull's volume over the player's × scale, capped at
+1000 per blast). Each flight air-strafes along its heading and crouches at
+the top. Where flights get stuck, wedge in a crease, catch the lip of a
+ledge they nearly cleared, or catch a post or rail, the spots get numbered
+markers and an `airborne` section in `index.json`; ceiling bonks are
+listed as information. Floor only flights land on is drawn blue on the
+reach tile: places only blast jumpers get to, which may want player clip.
+
 `tools/preview-calibrate/ingame_shots.py` checks the renderer against the
 game: it launches the Source SDK 2013 `mod_tf` build on the map, takes a
 screenshot at each perspective camera in `index.json`, and writes

@@ -37,8 +37,11 @@ public static class ReachOverlay
     /// <summary>The colour of a trap.</summary>
     public static Rgba Trap => new(240, 40, 40);
 
+    /// <summary>The colour of floor only explosive jumps reach.</summary>
+    public static Rgba ExplosiveOnly => new(60, 140, 255);
+
     /// <summary>The legend drawn under the view's label.</summary>
-    public const string Legend = "GREEN ALL TEAMS  YELLOW SOME  GREY NONE  RED TRAP";
+    public const string Legend = "GREEN ALL TEAMS  YELLOW SOME  GREY NONE  BLUE BLAST JUMP ONLY  RED TRAP";
 
     /// <summary>Paints the dots.</summary>
     /// <param name="image">The image.</param>
@@ -47,9 +50,11 @@ public static class ReachOverlay
     /// <param name="result">The analysis.</param>
     /// <param name="scale">Dot size multiplier.</param>
     /// <param name="cutAboveZ">The view's cutaway height: floor above it is not drawn, as the geometry above it is not.</param>
+    /// <param name="explosiveOnly">Floor nodes only explosive jumps reach, drawn blue, or null.</param>
     /// <returns>How many dots were drawn.</returns>
-    public static int Draw(RgbaImage image, CameraView view, GBuffer buffer, ReachabilityResult result, int scale, float? cutAboveZ = null)
+    public static int Draw(RgbaImage image, CameraView view, GBuffer buffer, ReachabilityResult result, int scale, float? cutAboveZ = null, IReadOnlyCollection<int>? explosiveOnly = null)
     {
+        HashSet<int> blast = explosiveOnly is null ? [] : [.. explosiveOnly];
         ArgumentNullException.ThrowIfNull(image);
         ArgumentNullException.ThrowIfNull(buffer);
         ArgumentNullException.ThrowIfNull(result);
@@ -83,6 +88,7 @@ public static class ReachOverlay
 
             int reachedBy = result.ReachedBy.Values.Count(r => r[n]);
             Rgba colour = trapped.Contains(n) ? Trap
+                : reachedBy == 0 && blast.Contains(n) ? ExplosiveOnly
                 : reachedBy == 0 ? Unreached
                 : reachedBy == teams ? AllTeams
                 : SomeTeams;

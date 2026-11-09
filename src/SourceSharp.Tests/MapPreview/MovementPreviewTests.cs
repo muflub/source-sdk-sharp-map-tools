@@ -105,6 +105,65 @@ public class MovementPreviewTests
     }
 
     [Fact]
+    public async Task AnAirborneFuzzAddsItsSectionAndCanBeTurnedOff()
+    {
+        BspData bsp = await PreviewTestMaps.RoomAsync(false, new PreviewTestMaps.TestEntity("info_player_teamspawn", [("origin", "128 128 16"), ("TeamNum", "2")]));
+        await using ContentFileSystem game = await PreviewTestMaps.ContentAsync();
+        PreviewOptions options = PreviewOptions.Default with
+        {
+            TileSize = (64, 48),
+            Movement = MovementProfile.Tf2("soldier"),
+            Reachability = ReachabilityOptions.Default with { Spacing = 64 },
+            Airborne = AirborneOptions.Default with { Trajectories = 200 },
+        };
+
+        PreviewResult with = await new PreviewSession(game).RenderAsync(bsp, "room", options);
+        PreviewResult without = await new PreviewSession(game).RenderAsync(bsp, "room", options with { Airborne = null });
+
+        AirborneReport air = with.Report.Checks.Movement!.Airborne!;
+        Assert.Equal(200, air.Trajectories);
+        Assert.All(air.Problems, p => Assert.NotEqual("ceiling_bonk", p.Kind));
+        Assert.All(air.CeilingBonks, p => Assert.Equal("ceiling_bonk", p.Kind));
+        using JsonDocument json = JsonDocument.Parse(with.ReportJson());
+        JsonElement section = json.RootElement.GetProperty("checks").GetProperty("movement").GetProperty("airborne");
+        Assert.Equal(200, section.GetProperty("trajectories").GetInt32());
+        Assert.Null(without.Report.Checks.Movement!.Airborne);
+    }
+
+    [Fact]
+    public void SpotReportsWriteTheirSolidAndMarker()
+    {
+        PreviewReport report = new("m", 20, [], new SceneCounts(0, 0, 0, 0, 0, 0), [], [], [],
+            new PreviewChecks([], [], new LightingReport(0, 0, 0, 0, 0, false), new SkyboxReport(null, 0), [], new SortedDictionary<string, int>(),
+                new MovementReport("p", 1, new Dictionary<int, int> { [2] = 1 }, [], [], [], 0,
+                    new AirborneReport(10, 3, [new SpotReport("edge_catch", 4, [1, 2, 3], ["rocket_jump"], [[0, 0, 0], [16, 16, 100]], 7)],
+                        [new SpotReport("ceiling_bonk", 2, [0, 0, 0], ["sticky_jump"], null, 0)]))));
+
+        using JsonDocument json = JsonDocument.Parse(PreviewReportWriter.Write(report));
+        JsonElement air = json.RootElement.GetProperty("checks").GetProperty("movement").GetProperty("airborne");
+
+        Assert.Equal(3, air.GetProperty("explosive_only_nodes").GetInt32());
+        JsonElement problem = air.GetProperty("problems")[0];
+        Assert.Equal(7, problem.GetProperty("marker").GetInt32());
+        Assert.Equal(100, problem.GetProperty("solid")[1][2].GetDouble());
+        JsonElement bonk = air.GetProperty("ceiling_bonks")[0];
+        Assert.False(bonk.TryGetProperty("solid", out _));
+        Assert.False(bonk.TryGetProperty("marker", out _));
+    }
+
+    [Fact]
+    public void BlastOnlyFloorIsDrawnBlue()
+    {
+        (RgbaImage image, CameraView view, GBuffer buffer) = TopDown();
+        Vec3[] nodes = [new(0, 0, 0)];
+
+        ReachOverlay.Draw(image, view, buffer, Result(nodes, new() { [2] = [false] }), 2, null, [0]);
+
+        Rgba c = ReachOverlay.ExplosiveOnly;
+        Assert.Equal(new Rgba((byte)((c.R * ReachOverlay.Opacity + 50) / 100), (byte)((c.G * ReachOverlay.Opacity + 50) / 100), (byte)((c.B * ReachOverlay.Opacity + 50) / 100)), image.Get(50, 50));
+    }
+
+    [Fact]
     public async Task WithoutMovementThereIsNoMovementSection()
     {
         BspData bsp = await PreviewTestMaps.RoomAsync(false, new PreviewTestMaps.TestEntity("info_player_teamspawn", [("origin", "128 128 16")]));
@@ -137,7 +196,9 @@ public class MovementPreviewTests
         using StringWriter output = new();
 
         int exit = await PreviewCommand.RunAsync(fs, [], ["/maps/room.bsp", "-movement", "heavy", "-size", "64x64", "-individual"], output);
-        int plain = await PreviewCommand.RunAsync(fs, [], ["/maps/room.bsp", "-movement", "-out", "/second", "-size", "64x64"], output);
+        int plain = await PreviewCommand.RunAsync(fs, [], ["/maps/room.bsp", "-movement", "-out", "/second", "-size", "64x64", "-airborne", "0"], output);
+        int flights = await PreviewCommand.RunAsync(fs, [], ["/maps/room.bsp", "-airborne", "50", "-out", "/third", "-size", "64x64"], output);
+        int bad = await PreviewCommand.RunAsync(fs, [], ["/maps/room.bsp", "-airborne", "-5"], output);
 
         Assert.Equal(Program.ExitSuccess, exit);
         Assert.Equal(Program.ExitSuccess, plain);
@@ -148,5 +209,10 @@ public class MovementPreviewTests
         byte[] second = fs.GetBytes(VPath.Create(Path.GetFullPath("/second/index.json")))!;
         using JsonDocument doc2 = JsonDocument.Parse(second);
         Assert.Equal("hl2mp", doc2.RootElement.GetProperty("checks").GetProperty("movement").GetProperty("profile").GetString());
+        Assert.False(doc2.RootElement.GetProperty("checks").GetProperty("movement").TryGetProperty("airborne", out _));
+        Assert.Equal(Program.ExitSuccess, flights);
+        using JsonDocument doc3 = JsonDocument.Parse(fs.GetBytes(VPath.Create(Path.GetFullPath("/third/index.json")))!);
+        Assert.Equal(50, doc3.RootElement.GetProperty("checks").GetProperty("movement").GetProperty("airborne").GetProperty("trajectories").GetInt32());
+        Assert.Equal(Program.ExitUsage, bad);
     }
 }

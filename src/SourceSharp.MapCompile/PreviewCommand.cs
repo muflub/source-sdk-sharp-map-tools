@@ -44,7 +44,7 @@ namespace SourceSharp.MapCompile;
 public static class PreviewCommand
 {
     private const string Usage =
-        "usage: ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera \"x y z pitch yaw [fov] [label]\"]... [-movement [class]]";
+        "usage: ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera \"x y z pitch yaw [fov] [label]\"]... [-movement [class]] [-airborne <flights>]";
 
     /// <summary>Runs the command.</summary>
     /// <param name="disk">Where the map, the game and the output live.</param>
@@ -191,7 +191,11 @@ public static class PreviewCommand
 
         if (a.Movement)
         {
-            o = o with { Movement = MovementFor(a.MovementClass, tf2) };
+            o = o with
+            {
+                Movement = MovementFor(a.MovementClass, tf2),
+                Airborne = a.Flights == 0 ? null : AirborneOptions.Default with { Trajectories = a.Flights ?? AirborneOptions.Default.Trajectories },
+            };
         }
 
         if (tf2)
@@ -264,6 +268,12 @@ public static class PreviewCommand
                 {
                     a.MovementClass = args[++i];
                 }
+            }
+            else if (Is(arg, "airborne") && hasValue
+                && int.TryParse(args[++i], NumberStyles.Integer, CultureInfo.InvariantCulture, out int flights) && flights >= 0)
+            {
+                a.Movement = true;
+                a.Flights = flights;
             }
             else if (Is(arg, "individual"))
             {
@@ -430,5 +440,7 @@ public static class PreviewCommand
         public bool Movement { get; set; }
 
         public string? MovementClass { get; set; }
+
+        public int? Flights { get; set; }
     }
 }

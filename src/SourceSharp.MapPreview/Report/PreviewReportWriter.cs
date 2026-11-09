@@ -237,7 +237,48 @@ public static class PreviewReportWriter
         Regions(w, "traps", m.Traps);
         Regions(w, "islands", m.Islands);
         w.WriteNumber("island_count", m.IslandCount);
+        if (m.Airborne is { } air)
+        {
+            w.WriteStartObject("airborne");
+            w.WriteNumber("trajectories", air.Trajectories);
+            w.WriteNumber("explosive_only_nodes", air.ExplosiveOnlyNodes);
+            Spots(w, "problems", air.Problems);
+            Spots(w, "ceiling_bonks", air.CeilingBonks);
+            w.WriteEndObject();
+        }
+
         w.WriteEndObject();
+    }
+
+    private static void Spots(Utf8JsonWriter w, string name, IReadOnlyList<SpotReport> spots)
+    {
+        w.WriteStartArray(name);
+        foreach (SpotReport spot in spots)
+        {
+            w.WriteStartObject();
+            w.WriteString("kind", spot.Kind);
+            w.WriteNumber("count", spot.Count);
+            w.WritePropertyName("centre");
+            Vector(w, spot.Centre);
+            Strings(w, "launches", spot.Launches);
+            if (spot.Solid is { } solid)
+            {
+                w.WritePropertyName("solid");
+                w.WriteStartArray();
+                Vector(w, solid[0]);
+                Vector(w, solid[1]);
+                w.WriteEndArray();
+            }
+
+            if (spot.Marker > 0)
+            {
+                w.WriteNumber("marker", spot.Marker);
+            }
+
+            w.WriteEndObject();
+        }
+
+        w.WriteEndArray();
     }
 
     private static void Regions(Utf8JsonWriter w, string name, IReadOnlyList<RegionReport> regions)

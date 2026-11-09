@@ -74,6 +74,16 @@ public sealed record PreviewOptions
 
     /// <summary>Gets how reachability is sampled.</summary>
     public ReachabilityOptions Reachability { get; init; } = ReachabilityOptions.Default;
+
+    /// <summary>
+    /// Gets how flights are fuzzed when <see cref="Movement"/> is set, or null
+    /// to skip them. Problem spots get markers; floor only flights reach is
+    /// drawn blue on the reach tile.
+    /// </summary>
+    public AirborneOptions? Airborne { get; init; } = AirborneOptions.Default;
+
+    /// <summary>Gets the most problem spots from the airborne fuzz that get markers.</summary>
+    public int AirborneMarkers { get; init; } = 8;
 }
 
 /// <summary>An image a preview produced.</summary>
@@ -171,7 +181,7 @@ public sealed class PreviewSession
 
         (List<PreviewMarker> markers, List<MissingMaterialReport> missingMaterials, List<MissingModelReport> missingModels) =
             Findings(scene, materials, modelIssues);
-        (ReachabilityResult? reach, MovementReport? movement) =
+        (ReachabilityResult? reach, MovementReport? movement, AirborneResult? air) =
             await MovementAsync(bsp, scene, o, content, markers, cancellationToken).ConfigureAwait(false);
 
         (int width, int height) = o.Sheet && !o.Individual ? o.TileSize : o.ViewSize;
@@ -194,7 +204,7 @@ public sealed class PreviewSession
             if (reach is not null && planned1.Camera.Kind == CameraKind.Overview)
             {
                 reachTile = new RgbaImage(rendered.Image.Width, rendered.Image.Height, (byte[])rendered.Image.Pixels.Clone());
-                ReachOverlay.Draw(reachTile, view, rendered.Buffer, reach, Math.Max(2, scale * 2), planned1.Filter.CutAboveZ);
+                ReachOverlay.Draw(reachTile, view, rendered.Buffer, reach, Math.Max(2, scale * 2), planned1.Filter.CutAboveZ, air?.ExplosiveOnly);
                 Annotator.ScaleBar(reachTile, view, scale);
                 Annotator.Markers(reachTile, view, rendered.Buffer, markers, scale);
                 Annotator.Label(reachTile, $"{n + 1} reach {movement!.Profile}", scale);
@@ -283,12 +293,12 @@ public sealed class PreviewSession
     /// its props' models, walks and jumps from every floor, and markers for
     /// the stuck spawns and traps it finds.
     /// </summary>
-    private static async Task<(ReachabilityResult? Result, MovementReport? Report)> MovementAsync(
+    private static async Task<(ReachabilityResult? Result, MovementReport? Report, AirborneResult? Air)> MovementAsync(
         BspData bsp, PreviewScene scene, PreviewOptions o, IContentFileSystem content, List<PreviewMarker> markers, CancellationToken cancellationToken)
     {
         if (o.Movement is not { } profile)
         {
-            return (null, null);
+            return (null, null, null);
         }
 
         (HullTraceWorld world, _) = await HullTraceWorld.FromBspAsync(bsp, content, cancellationToken).ConfigureAwait(false);
@@ -320,7 +330,41 @@ public sealed class PreviewSession
             .OrderByDescending(g => g.Nodes.Count).ThenBy(g => g.Nodes[0]).Take(10)
             .Select(g => new RegionReport(g.Nodes.Count, V(g.Sample), V(g.Min), V(g.Max), 0))];
         Dictionary<int, int> reached = result.ReachedBy.ToDictionary(r => r.Key, r => r.Value.Count(b => b));
-        return (result, new MovementReport(profile.Name, result.Nodes.Count, reached, stuck, traps, islands, result.Islands.Count));
+        AirborneResult? air = null;
+        AirborneReport? airReport = null;
+        if (o.Airborne is { } airOptions)
+        {
+            air = AirborneFuzzer.Analyze(world, profile, result, airOptions, cancellationToken);
+            List<SpotReport> problems = [];
+            foreach (EventCluster spot in air.Clusters.Where(c => AirborneFuzzer.IsProblem(c.Kind)).Take(10))
+            {
+                int number = 0;
+                if (problems.Count < o.AirborneMarkers)
+                {
+                    number = markers.Count + 1;
+                    markers.Add(new PreviewMarker(number, Snake(spot.Kind.ToString()), $"{Snake(spot.Kind.ToString())} in {spot.Count} of {air.Trajectories} flights", spot.Centre));
+                }
+
+                problems.Add(Spot(spot, world, number));
+            }
+
+            List<SpotReport> bonks = [.. air.Clusters.Where(c => !AirborneFuzzer.IsProblem(c.Kind)).Take(5).Select(c => Spot(c, world, 0))];
+            airReport = new AirborneReport(air.Trajectories, air.ExplosiveOnly.Count, problems, bonks);
+        }
+
+        return (result, new MovementReport(profile.Name, result.Nodes.Count, reached, stuck, traps, islands, result.Islands.Count, airReport), air);
+    }
+
+    private static SpotReport Spot(EventCluster c, HullTraceWorld world, int marker)
+    {
+        float[][]? solid = null;
+        if (c.Brush >= 0)
+        {
+            MapFormats.Nav.NavBrush b = world.Solids[c.Brush];
+            solid = [V(new Vec3((float)b.MinX, (float)b.MinY, (float)b.MinZ)), V(new Vec3((float)b.MaxX, (float)b.MaxY, (float)b.MaxZ))];
+        }
+
+        return new SpotReport(Snake(c.Kind.ToString()), c.Count, V(c.Centre), c.Launches, solid, marker);
     }
 
     /// <summary>Markers and report entries for every missing material and model, numbered in scene order.</summary>
