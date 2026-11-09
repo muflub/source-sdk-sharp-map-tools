@@ -165,6 +165,14 @@ public sealed class NavBrush
     /// <summary>How many corners the brush has.</summary>
     public int VertexCount => _vertices.Length / 3;
 
+    /// <summary>
+    /// How many edge axes the brush has: one per edge and box axis that are
+    /// not parallel, the edge crossed with the axis. With the face normals
+    /// and the three box axes they are every axis that can separate a box
+    /// from the brush.
+    /// </summary>
+    public int EdgeAxisCount => _edgeAxes.Length / 5;
+
     /// <summary>The bounding box's low x.</summary>
     public double MinX { get; }
 
@@ -188,6 +196,17 @@ public sealed class NavBrush
     /// <returns>Its normal and distance.</returns>
     public (double X, double Y, double Z, double D) Plane(int index) =>
         (_planes[index * 4], _planes[(index * 4) + 1], _planes[(index * 4) + 2], _planes[(index * 4) + 3]);
+
+    /// <summary>
+    /// One edge axis (unit length) and the brush's extent along it. The two
+    /// planes <c>a·x ≤ Hi</c> and <c>-a·x ≤ -Lo</c> support the brush; a
+    /// swept-box clip that includes them is exact at the brush's slanted
+    /// edges, as the compiler's bevel planes make it for world brushes.
+    /// </summary>
+    /// <param name="index">The axis.</param>
+    /// <returns>Its direction and the brush's lowest and highest projection on it.</returns>
+    public (double X, double Y, double Z, double Lo, double Hi) EdgeAxis(int index) =>
+        (_edgeAxes[index * 5], _edgeAxes[(index * 5) + 1], _edgeAxes[(index * 5) + 2], _edgeAxes[(index * 5) + 3], _edgeAxes[(index * 5) + 4]);
 
     /// <summary>An axis-aligned box brush.</summary>
     /// <param name="mins">The low corner.</param>

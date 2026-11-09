@@ -69,6 +69,28 @@ public sealed class NavBrushTests
     }
 
     [Fact]
+    public void EdgeAxesCarryTheBrushsExtentAlongThem()
+    {
+        // The tetrahedron x, y, z ≥ 0, x + y + z ≤ 10: its edge from
+        // (10, 0, 0) to (0, 10, 0) crossed with z is the diagonal (1, 1, 0),
+        // along which the brush runs from 0 (the corner at the origin) to
+        // 10 / √2 (that edge).
+        float third = 1f / MathF.Sqrt(3f);
+        NavBrush tetra = NavBrush.FromPlanes([
+            (new Vec3(-1, 0, 0), 0f), (new Vec3(0, -1, 0), 0f), (new Vec3(0, 0, -1), 0f),
+            (new Vec3(third, third, third), 10f * third)], 1)!;
+        double r = Math.Sqrt(0.5);
+        List<(double X, double Y, double Z, double Lo, double Hi)> axes = [.. Enumerable.Range(0, tetra.EdgeAxisCount).Select(tetra.EdgeAxis)];
+
+        Assert.All(axes, a => Assert.Equal(1.0, Math.Sqrt((a.X * a.X) + (a.Y * a.Y) + (a.Z * a.Z)), 6));
+        Assert.All(axes, a => Assert.True(a.Lo <= a.Hi));
+        (double X, double Y, double Z, double Lo, double Hi) diagonal = Assert.Single(axes.Where(a => Math.Abs(Math.Abs(a.X) - r) < 1e-6 && Math.Abs(a.X - a.Y) < 1e-6 && Math.Abs(a.Z) < 1e-6).Take(1));
+        double sign = Math.Sign(diagonal.X);
+        Assert.Equal(sign > 0 ? 0 : -10 * r, diagonal.Lo, 4);
+        Assert.Equal(sign > 0 ? 10 * r : 0, diagonal.Hi, 4);
+    }
+
+    [Fact]
     public void ABoxIsAxialAndItsBoundsDecideAlone()
     {
         NavBrush box = NavBrush.Box(new Vec3(0, 0, 0), new Vec3(10, 10, 10), 1);

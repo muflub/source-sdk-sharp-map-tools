@@ -406,4 +406,103 @@ public class PlayerMovementTests
         Assert.InRange(state.Origin.Z, 0f, 0.05f);
         Assert.True(world.Solids.Count >= 6);
     }
+
+    /// <summary>
+    /// A one-unit shell under a steep triangle, as a displacement's surface
+    /// is collided: the triangle on top, the same plane a unit lower
+    /// underneath, and a side through each edge square to the triangle.
+    /// </summary>
+    private static NavBrush TriangleShell(Vec3 a, Vec3 b, Vec3 c)
+    {
+        Vec3 n = Vec3.Cross(b - a, c - a).Normalise().Normalised;
+        Vec3 centre = (a + b + c) * (1f / 3f);
+        List<(Vec3 Normal, float Dist)> planes = [(n, Vec3.Dot(n, a)), (-n, -Vec3.Dot(n, a) + 1f)];
+        foreach ((Vec3 p, Vec3 q) in new[] { (a, b), (b, c), (c, a) })
+        {
+            Vec3 side = Vec3.Cross(q - p, n).Normalise().Normalised;
+            if (Vec3.Dot(side, centre - p) > 0)
+            {
+                side = -side;
+            }
+
+            planes.Add((side, Vec3.Dot(side, p)));
+        }
+
+        return NavBrush.FromPlanes(planes, Solid)!;
+    }
+
+    [Fact]
+    public void ABoxComingDownBesideASteepTriangleStopsOnlyWhereItTouches()
+    {
+        // A triangle from a canyon rim's displacement, falling 173 units in
+        // 64. Without bevels across its slanted edges a box coming down
+        // beside it met the edges' extensions in mid-air, up to a hundred
+        // units above the surface, and stood there on a ledge that is not
+        // in the map. Every stop must be a real contact: lowered half a unit
+        // further, the box overlaps the triangle. The sample columns sit off
+        // the triangle's corner lines, so no box merely grazes a corner.
+        NavBrush shell = TriangleShell(new Vec3(0, 0, 0), new Vec3(64, 0, -173), new Vec3(64, 64, -72));
+        HullTraceWorld world = new([shell]);
+        int hits = 0;
+        for (int x = -36; x <= 100; x += 8)
+        {
+            for (int y = -36; y <= 100; y += 8)
+            {
+                HullTrace t = world.Trace(new Vec3(x, y, 100), new Vec3(x, y, -400), Mins, Maxs);
+                if (!t.Hit)
+                {
+                    continue;
+                }
+
+                hits++;
+                Assert.False(shell.Overlaps(At(t.End)), $"({x}, {y}) stopped inside the shell");
+                Assert.True(shell.Overlaps(At(t.End - new Vec3(0, 0, 0.5f))), $"({x}, {y}) stopped short of the shell at {t.End.Z}");
+            }
+        }
+
+        Assert.True(hits > 20);
+
+        static NavBox At(Vec3 o) => new(o.X + Mins.X, o.Y + Mins.Y, o.Z + Mins.Z, o.X + Maxs.X, o.Y + Maxs.Y, o.Z + Maxs.Z);
+    }
+
+    [Fact]
+    public void EdgeBevelsAreNewSupportingPlanesOnly()
+    {
+        // A box has none.
+        Assert.Empty(HullTraceWorld.EdgeBevels(Box(0, 0, 0, 10, 10, 10)));
+
+        // The prism z ≤ x (x ≤ 10, z ≥ 0, 0 ≤ y ≤ 10): its slope's edges
+        // crossed with y give the slope's own normal, which the clip already
+        // has, and the axial ones are bounding planes; only the slope's
+        // reverse is new.
+        float r = MathF.Sqrt(0.5f);
+        NavBrush wedge = NavBrush.FromPlanes([
+            (new Vec3(-r, 0, r), 0f), (new Vec3(1, 0, 0), 10f), (new Vec3(0, 0, -1), 0f),
+            (new Vec3(0, 1, 0), 10f), (new Vec3(0, -1, 0), 0f)], Solid)!;
+        List<(double X, double Y, double Z, double D)> planes = Planes(HullTraceWorld.EdgeBevels(wedge));
+        Assert.DoesNotContain(planes, p => Near(p, -r, 0, r));
+        Assert.DoesNotContain(planes, p => Math.Abs(p.X) > 0.999 || Math.Abs(p.Y) > 0.999 || Math.Abs(p.Z) > 0.999);
+        Assert.Contains(planes, p => Near(p, r, 0, -r));
+
+        // The tetrahedron x, y, z ≥ 0, x + y + z ≤ 10: the bevel across its
+        // bottom edge, facing out along (1, 1, 0) at 10 / √2, is the one a
+        // box needs; no two bevels face the same way.
+        float third = 1f / MathF.Sqrt(3f);
+        NavBrush tetra = NavBrush.FromPlanes([
+            (new Vec3(-1, 0, 0), 0f), (new Vec3(0, -1, 0), 0f), (new Vec3(0, 0, -1), 0f),
+            (new Vec3(third, third, third), 10f * third)], Solid)!;
+        planes = Planes(HullTraceWorld.EdgeBevels(tetra));
+        (double X, double Y, double Z, double D) diagonal = Assert.Single(planes, p => Near(p, r, r, 0));
+        Assert.Equal(10 * r, diagonal.D, 4);
+        for (int a = 0; a < planes.Count; a++)
+        {
+            Assert.All(planes.Skip(a + 1), p => Assert.False(Near(p, planes[a].X, planes[a].Y, planes[a].Z)));
+        }
+
+        static bool Near((double X, double Y, double Z, double D) p, double x, double y, double z) =>
+            Math.Abs(p.X - x) < 1e-6 && Math.Abs(p.Y - y) < 1e-6 && Math.Abs(p.Z - z) < 1e-6;
+
+        static List<(double X, double Y, double Z, double D)> Planes(double[] b) =>
+            [.. Enumerable.Range(0, b.Length / 4).Select(i => (b[i * 4], b[(i * 4) + 1], b[(i * 4) + 2], b[(i * 4) + 3]))];
+    }
 }

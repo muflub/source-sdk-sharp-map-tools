@@ -620,7 +620,10 @@ scales the light. The images are the same bytes at any `-threads`.
 `-movement` adds where a real player can go, found by simulating the
 game's movement (`SourceSharp.MapTools.Movement`): the player's hull is
 swept against the map's player collision (brushes with their bevels,
-displacements, solid static props' `.phy` pieces) by a re-implementation
+displacements, solid static props' `.phy` pieces; displacement and prop
+pieces are given bevels across their slanted edges, so a box coming down
+beside a steep triangle does not stand on its edge's extension in mid-air)
+by a re-implementation
 of the engine's movement tick (friction, ground and air acceleration, the
 slide move, steps, jumps and crouch jumps). Every standable floor is
 sampled every 32 units, and walks and running crouch-jumps in eight

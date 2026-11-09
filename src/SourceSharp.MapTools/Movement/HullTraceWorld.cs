@@ -45,11 +45,13 @@ public readonly record struct HullTrace(float Fraction, Vec3 End, Vec3 Normal, b
 /// Pushing planes out is exact on faces but rounds a solid's edges outward
 /// into the planes' extensions unless the solid also has bevel planes there.
 /// World brushes carry the compiler's bevels. Displacement and prop pieces do
-/// not, so every solid is given its axis-aligned bounding planes as well:
-/// they are valid supporting planes of any convex shape, so they never
-/// change what a box touches except to remove that rounding at axial edges.
-/// Slanted edges between two non-axial faces keep it; the calibration map
-/// measures how often that matters.
+/// not, so every solid is given its axis-aligned bounding planes and, unless
+/// it is a plain box, the two supporting planes across each edge axis (an
+/// edge crossed with a box axis). Supporting planes never change what a box
+/// touches except to remove that rounding, and with all of them the clip is
+/// exact. Without the edge planes a box coming down beside a steep
+/// displacement triangle met the extension of the triangle's slanted edge
+/// in mid-air and stood on it: a ledge a real player cannot use.
 /// </para>
 /// <para>
 /// The world is immutable once built and holds no per-trace state, so any
@@ -65,6 +67,11 @@ public sealed class HullTraceWorld
     public const double CellSize = 256;
 
     private readonly NavBrush[] _solids;
+
+    // Each solid's edge bevels (normal x, y, z and distance per plane): the
+    // supporting planes across its edge axes that are not already one of
+    // its own planes or bounding planes. Empty for a box.
+    private readonly double[][] _bevels;
     private readonly Dictionary<(int, int), int[]> _cells;
     private readonly DNode[] _nodes = [];
     private readonly DPlane[] _planes = [];
@@ -84,6 +91,12 @@ public sealed class HullTraceWorld
     {
         ArgumentNullException.ThrowIfNull(solids);
         _solids = [.. solids];
+        _bevels = new double[_solids.Length][];
+        for (int i = 0; i < _solids.Length; i++)
+        {
+            _bevels[i] = EdgeBevels(_solids[i]);
+        }
+
         Dictionary<(int, int), List<int>> cells = [];
         for (int i = 0; i < _solids.Length; i++)
         {
@@ -216,7 +229,7 @@ public sealed class HullTraceWorld
                         continue;
                     }
 
-                    ClipBox(s, start, end, mins, maxs, ref fraction, ref normal, ref startSolid, ref allSolid, ref hit, i);
+                    ClipBox(s, _bevels[i], start, end, mins, maxs, ref fraction, ref normal, ref startSolid, ref allSolid, ref hit, i);
                     if (allSolid)
                     {
                         return new HullTrace(0, start, normal, true, true, hit);
@@ -239,19 +252,23 @@ public sealed class HullTraceWorld
 
     /// <summary>
     /// Clips a swept box against one convex solid, updating the nearest hit so
-    /// far. Planes are the solid's own and its six bounding planes.
+    /// far. Planes are the solid's own, its six bounding planes and, for a
+    /// solid that is not a box, its edge bevels.
     /// </summary>
     private static void ClipBox(
-        NavBrush solid, Vec3 start, Vec3 end, Vec3 mins, Vec3 maxs,
+        NavBrush solid, double[] bevels, Vec3 start, Vec3 end, Vec3 mins, Vec3 maxs,
         ref double fraction, ref Vec3 normal, ref bool startSolid, ref bool allSolid, ref int hit, int index)
     {
         double enter = -1, leave = 1;
         (double X, double Y, double Z) clip = default;
         bool startOut = false, getOut = false;
         int planes = solid.PlaneCount;
-        for (int p = 0; p < planes + 6; p++)
+        int total = planes + 6 + (bevels.Length / 4);
+        for (int p = 0; p < total; p++)
         {
-            (double nx, double ny, double nz, double d) = p < planes ? solid.Plane(p) : Bounding(solid, p - planes);
+            (double nx, double ny, double nz, double d) = p < planes ? solid.Plane(p)
+                : p < planes + 6 ? Bounding(solid, p - planes)
+                : (bevels[(p - planes - 6) * 4], bevels[((p - planes - 6) * 4) + 1], bevels[((p - planes - 6) * 4) + 2], bevels[((p - planes - 6) * 4) + 3]);
 
             // Push the plane out by the box: the corner that reaches furthest
             // against the normal decides how far.
@@ -319,6 +336,69 @@ public sealed class HullTraceWorld
             fraction = Math.Max(0, enter);
             normal = new Vec3((float)clip.X, (float)clip.Y, (float)clip.Z);
             hit = index;
+        }
+    }
+
+    /// <summary>
+    /// A solid's edge bevels: the two supporting planes across each of its
+    /// edge axes, one facing along the axis and one against it, leaving out
+    /// any that face the same way as a plane the clip already has (one of
+    /// the solid's own, which for a world brush includes the compiler's
+    /// bevels, or a bounding plane) or as an earlier bevel. Parallel edges
+    /// share an axis, so a prism's three side edges give one pair, not
+    /// three. A box has none: its edge axes are the box axes.
+    /// </summary>
+    /// <param name="s">The solid.</param>
+    /// <returns>Normal and distance per bevel, four values each.</returns>
+    internal static double[] EdgeBevels(NavBrush s)
+    {
+        if (s.IsAxial)
+        {
+            return [];
+        }
+
+        // Facing the same way to within about a twelfth of a degree: a plane
+        // read from the map is stored in single precision, so an edge axis
+        // worked from the corners in double never matches it exactly, and a
+        // bevel that close to an existing plane adds nothing.
+        const double same = 1 - 1e-6;
+        List<double> bevels = [];
+        for (int a = 0; a < s.EdgeAxisCount; a++)
+        {
+            (double x, double y, double z, double lo, double hi) = s.EdgeAxis(a);
+            Add(x, y, z, hi);
+            Add(-x, -y, -z, -lo);
+        }
+
+        return [.. bevels];
+
+        void Add(double x, double y, double z, double d)
+        {
+            // A bounding plane is an axis, and a unit normal faces the same
+            // way as one exactly when that component is 1.
+            if (x >= same || -x >= same || y >= same || -y >= same || z >= same || -z >= same)
+            {
+                return;
+            }
+
+            for (int p = 0; p < s.PlaneCount; p++)
+            {
+                (double px, double py, double pz, _) = s.Plane(p);
+                if ((px * x) + (py * y) + (pz * z) >= same)
+                {
+                    return;
+                }
+            }
+
+            for (int b = 0; b < bevels.Count; b += 4)
+            {
+                if ((bevels[b] * x) + (bevels[b + 1] * y) + (bevels[b + 2] * z) >= same)
+                {
+                    return;
+                }
+            }
+
+            bevels.AddRange([x, y, z, d]);
         }
     }
 
