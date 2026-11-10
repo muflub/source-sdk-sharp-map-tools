@@ -10,7 +10,7 @@ using SourceSharp.MapGen.Rooms;
 namespace RoomsSampleTool;
 
 /// <summary>
-/// <c>RoomsSample --out &lt;dir&gt; | --check &lt;dir&gt; | --list | --stress &lt;dir&gt; [rooms] | --transit &lt;dir&gt; | --features &lt;dir&gt; | --multi &lt;dir&gt; | --multicell &lt;dir&gt;</c>
+/// <c>RoomsSample --out &lt;dir&gt; | --check &lt;dir&gt; | --list | --stress &lt;dir&gt; [rooms] | --transit &lt;dir&gt; | --features &lt;dir&gt; | --multi &lt;dir&gt; | --multicell &lt;dir&gt; | --slots &lt;dir&gt;</c>
 /// </summary>
 /// <remarks>
 /// <c>--out</c> writes every generated file (the README is hand-written and
@@ -27,7 +27,9 @@ namespace RoomsSampleTool;
 /// <c>samples/rooms-features</c>), <c>--multi</c> the multi-library
 /// sample (<see cref="RoomsMultiSample"/>, under <c>samples/rooms-multi</c>)
 /// and <c>--multicell</c> the sample of rooms larger than one cell
-/// (<see cref="RoomsMultiCellSample"/>, under <c>samples/rooms-multicell</c>).
+/// (<see cref="RoomsMultiCellSample"/>, under <c>samples/rooms-multicell</c>),
+/// and <c>--slots</c> the door slots sample (<see cref="RoomsSlotsSample"/>,
+/// under <c>samples/rooms-slots</c>).
 /// </remarks>
 internal static class Program
 {
@@ -100,13 +102,14 @@ internal static class Program
             return 0;
         }
 
-        if (args.Length == 2 && args[0] is "--features" or "--multi" or "--multicell")
+        if (args.Length == 2 && args[0] is "--features" or "--multi" or "--multicell" or "--slots")
         {
             string root = Path.GetFullPath(args[1]);
             IReadOnlyDictionary<string, byte[]> files = args[0] switch
             {
                 "--features" => RoomsFeaturesSample.Build(),
                 "--multicell" => RoomsMultiCellSample.Build(),
+                "--slots" => RoomsSlotsSample.Build(),
                 _ => RoomsMultiSample.Build(),
             };
             foreach ((string path, byte[] bytes) in files)
@@ -135,7 +138,7 @@ internal static class Program
             return 0;
         }
 
-        Console.Error.WriteLine("usage: RoomsSample --out <dir> | --check <dir> | --list | --stress <dir> [rooms] | --transit <dir> | --features <dir> | --multi <dir> | --multicell <dir>");
+        Console.Error.WriteLine("usage: RoomsSample --out <dir> | --check <dir> | --list | --stress <dir> [rooms] | --transit <dir> | --features <dir> | --multi <dir> | --multicell <dir> | --slots <dir>");
         return 2;
     }
 }
