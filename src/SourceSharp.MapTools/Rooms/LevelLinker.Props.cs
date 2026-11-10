@@ -104,6 +104,7 @@ public static partial class LevelLinker
             ResolvedPlacement placement = resolved[p];
             RoomDefinition definition = placement.Room.Definition;
             RoomPlacement where = placement.Instance.Placement;
+            ulong joinedSockets = JoinedSockets(definition, placement.Instance);
             JoinedMask joined = JoinedSides(definition, placement.Instance);
             if (!files.TryGetValue(placement.Instance.Placement.Room, out List<(int RoomProp, int Linked)>? roomFiles))
             {
@@ -113,7 +114,7 @@ public static partial class LevelLinker
             for (int i = 0; i < props.Props.Count; i++)
             {
                 RoomProp prop = props.Props[i];
-                bool keep = RoomNeeds.Hold(prop.Needs, where.NormalizedRotation, where.CellX, where.CellY, occupied.Contains, joined)
+                bool keep = RoomNeeds.Hold(prop.Needs, where.NormalizedRotation, where.CellX, where.CellY, occupied.Contains, joined, joinedSockets)
                     && (prop.Socket < 0 || furniture.Keeps(p, prop.Socket));
                 if (!keep)
                 {

@@ -218,8 +218,15 @@ internal sealed class RoomNameTurn
             w.Int(needs.Conditions.Length);
             foreach (TurnedNeed need in needs.Conditions)
             {
+                // A socket condition (a room larger than one cell, 17.8) sets
+                // the third flag and adds its socket's index; every other
+                // condition is the two bytes it always was.
                 w.Byte((byte)need.Need.Direction);
-                w.Byte((byte)((need.Need.Joined ? 1 : 0) | (need.Need.Negated ? 2 : 0)));
+                w.Byte((byte)((need.Need.Joined ? 1 : 0) | (need.Need.Negated ? 2 : 0) | (need.Need.Socket >= 0 ? 4 : 0)));
+                if (need.Need.Socket >= 0)
+                {
+                    w.Byte((byte)need.Need.Socket);
+                }
                 w.Byte(unchecked((byte)(sbyte)need.Dx));
                 w.Byte(unchecked((byte)(sbyte)need.Dy));
             }
@@ -290,8 +297,9 @@ internal sealed class RoomNameTurn
             for (int c = conditions.Capacity; c > 0; c--)
             {
                 RoomDirection direction = (RoomDirection)r.Small(RoomDirections.Count - 1, "a direction of");
-                int flags = r.Small(3, "condition flags of");
-                conditions.Add(new TurnedNeed(new RoomNeed(direction, (flags & 1) != 0, (flags & 2) != 0), Offset(r), Offset(r)));
+                int flags = r.Small(7, "condition flags of");
+                int socket = (flags & 4) != 0 ? r.Small(RoomDefinition.MaxFootprint * 4, "a socket of") : -1;
+                conditions.Add(new TurnedNeed(new RoomNeed(direction, (flags & 1) != 0, (flags & 2) != 0) { Socket = socket }, Offset(r), Offset(r)));
             }
 
             needs.Add(new NeedsRef(entity, pair, conditions.MoveToImmutable()));
@@ -425,9 +433,17 @@ internal static class RoomNameAnalysis
     /// <param name="nameKeys">Name-valued keys the library adds to the built-in table, or null.</param>
     /// <returns>The four turns' tables.</returns>
     /// <exception cref="RoomLintException">A name or a <c>room_needs</c> key breaks the rule; the message is the design's.</exception>
-    public static RoomNameTurn[] Analyse(string room, IReadOnlyList<LevelEntity> entities, IReadOnlySet<string>? nameKeys)
+    /// <param name="definition">
+    /// The room, when it is known: a room larger than one cell has several
+    /// neighbours on a side, so its names may name only its own cell, it has
+    /// no neighbour flags, and its <c>room_needs</c> names a socket
+    /// (<c>joined_&lt;socket&gt;</c>) rather than a side or a direction (the
+    /// rooms design, 17.8 and O28). Null reads a room of one cell.
+    /// </param>
+    public static RoomNameTurn[] Analyse(string room, IReadOnlyList<LevelEntity> entities, IReadOnlySet<string>? nameKeys, RoomDefinition? definition = null)
     {
         ArgumentNullException.ThrowIfNull(entities);
+        RoomDefinition? large = definition is { IsLarge: true } ? definition : null;
         List<(int Entity, int Pair, int Kind, List<(string? Text, LocalName Name, NameField Field)> Pieces)> named = [];
         List<(int Entity, int Pair, List<RoomNeed> Needs)> needs = [];
         List<FoldCandidate> candidates = [];
@@ -455,7 +471,7 @@ internal static class RoomNameAnalysis
 
                 if (RoomNeeds.IsKey(pair.Key))
                 {
-                    needs.Add((e, p, CheckNeeds(room, entity, className, value)));
+                    needs.Add((e, p, large is null ? CheckNeeds(room, entity, className, value) : CheckLargeNeeds(large, entity, className, value)));
                     continue;
                 }
 
@@ -465,6 +481,8 @@ internal static class RoomNameAnalysis
                     bool local = false;
                     local |= Field(who, pair.Key, output.Target, NameField.Target, entity, ownReferences, warnings, out LocalName target);
                     local |= Field(who, pair.Key, output.Parameter, NameField.Parameter, entity, ownReferences, warnings, out LocalName parameter);
+                    OwnCellOnly(large, who, pair.Key, output.Target, target);
+                    OwnCellOnly(large, who, pair.Key, output.Parameter, parameter);
                     CheckLogicRoomInput(room, entity, className, pair.Key, output, target);
                     if (local)
                     {
@@ -492,6 +510,7 @@ internal static class RoomNameAnalysis
 
                 if (Field(who, pair.Key, value, NameField.Whole, entity, ownReferences, warnings, out LocalName name))
                 {
+                    OwnCellOnly(large, who, pair.Key, value, name);
                     bool definesName = string.Equals(pair.Key, "targetname", StringComparison.OrdinalIgnoreCase);
                     named.Add((e, p, definesName ? 2 : 0, [(null, name, NameField.Whole)]));
                     if (string.Equals(pair.Key, "targetname", StringComparison.OrdinalIgnoreCase))
@@ -546,8 +565,8 @@ internal static class RoomNameAnalysis
     /// </summary>
     /// <returns>The rule's warnings.</returns>
     /// <exception cref="RoomLintException">A name or a <c>room_needs</c> key breaks the rule.</exception>
-    public static IReadOnlyList<string> CheckVmf(string room, IReadOnlyList<LevelEntity> entities, IReadOnlySet<string>? nameKeys) =>
-        Analyse(room, entities, nameKeys)[0].Warnings;
+    public static IReadOnlyList<string> CheckVmf(string room, IReadOnlyList<LevelEntity> entities, IReadOnlySet<string>? nameKeys, RoomDefinition? definition = null) =>
+        Analyse(room, entities, nameKeys, definition)[0].Warnings;
 
     /// <summary>A level offset: the authored one turned by the placement's quarter turns, as geometry turns.</summary>
     public static (int Dx, int Dy) Turn(int dx, int dy, int turns)
@@ -558,7 +577,7 @@ internal static class RoomNameAnalysis
 
     private static TurnedNeed Turned(RoomNeed need, int turn)
     {
-        if (need.Joined)
+        if (need.Joined || need.Socket >= 0)
         {
             return new TurnedNeed(need, 0, 0);
         }
@@ -676,6 +695,46 @@ internal static class RoomNameAnalysis
     }
 
     /// <summary>A <c>room_needs</c> key checked: it parses, and does not sit on a baked light, an overlay or a shadow-casting static prop.</summary>
+    /// <summary>
+    /// A larger room's name may name only its own cell (<c>cxry_</c>, its
+    /// anchor), and may not be a neighbour flag: a side of it has several
+    /// neighbours (the rooms design, 17.8 and O28; refused with 17.3's text).
+    /// </summary>
+    private static void OwnCellOnly(RoomDefinition? large, string who, string key, string value, LocalName name)
+    {
+        if (large is null || name.Rest is null)
+        {
+            return;
+        }
+
+        if (name.Dx != 0 || name.Dy != 0 || RoomLinkerNames.Parse(name.Rest).Kind is LinkerNameKind.Has or LinkerNameKind.Joined)
+        {
+            throw new RoomLintException(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"{who} key \"{key}\": \"{value}\" names a neighbour cell; a room of {large.CellsX} x {large.CellsY} cells names only its own cell (cxry_)."));
+        }
+    }
+
+    /// <summary>
+    /// A larger room's <c>room_needs</c>: every condition names one of its
+    /// sockets, <c>joined_&lt;socket&gt;</c>; a direction or a side is
+    /// refused with 17.3's text, since a side has several neighbours. The
+    /// other rules are a one-cell room's.
+    /// </summary>
+    private static List<RoomNeed> CheckLargeNeeds(RoomDefinition large, LevelEntity entity, string className, string value)
+    {
+        string room = large.Name;
+        bool sockets = RoomNeeds.TryParse(value, large.Sockets, out List<RoomNeed> parsed, out _);
+        if (!sockets || parsed.Any(n => n.Socket < 0))
+        {
+            throw new RoomLintException(
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"room {room}: entity {entity.Id} ({className}) room_needs \"{value}\": a room of {large.CellsX} x {large.CellsY} cells")
+                + " has several neighbours on a side; name a socket, joined_<socket>.");
+        }
+
+        _ = CheckNeeds(room, entity, className, string.Join(",", parsed.Select(n => (n.Negated ? "!" : string.Empty) + "joined_east")));
+        return parsed;
+    }
+
     private static List<RoomNeed> CheckNeeds(string room, LevelEntity entity, string className, string value)
     {
         if (!RoomNeeds.TryParse(value, out List<RoomNeed> needs, out string? unknown))
@@ -754,10 +813,10 @@ internal static class RoomNameAnalysis
     }
 
     /// <summary>A room's tables from its compiled entity lump.</summary>
-    public static RoomNameTurn[] Analyse(string room, BspData bsp, IReadOnlySet<string>? nameKeys)
+    public static RoomNameTurn[] Analyse(string room, BspData bsp, IReadOnlySet<string>? nameKeys, RoomDefinition? definition = null)
     {
         List<BspEntity> parsed = EntityLump.Parse(bsp[BspLump.Entities]);
-        return Analyse(room, [.. parsed.Select((e, i) => LevelEntity.FromBsp(e, -1, i))], nameKeys);
+        return Analyse(room, [.. parsed.Select((e, i) => LevelEntity.FromBsp(e, -1, i))], nameKeys, definition);
     }
 
     private static ImmutableHashSet<string> BuildNameKeys()

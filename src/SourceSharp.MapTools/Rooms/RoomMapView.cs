@@ -165,12 +165,16 @@ internal sealed class RoomMapView
     /// </summary>
     internal static MapCut CutOf(RoomDefinition definition, VmfDocument document, RoomPlacement? placement)
     {
+        // The room's footprint as placed (17.8): its cell for a room of one cell.
         double c = definition.CellSize;
         double x = placement is { } p ? p.CellX * c : 0;
         double y = placement is { } q ? q.CellY * c : 0;
+        RoomPlacement? footprint = placement is { } f ? f with { CellsX = definition.CellsX, CellsY = definition.CellsY } : null;
+        double spanX = footprint is { } fx ? (fx.SpanCellsX == 1 ? c : fx.SpanCellsX * c) : definition.SpanX;
+        double spanY = footprint is { } fy ? (fy.SpanCellsY == 1 ? c : fy.SpanCellsY * c) : definition.SpanY;
         return new MapCut(
-            (x, y, 0, x + c, y + c, definition.Height),
-            placement,
+            (x, y, 0, x + spanX, y + spanY, definition.Height),
+            footprint,
             definition.CellSize,
             RoomCompiler.SealBoxes(definition),
             FurnitureOf(definition, document));

@@ -164,7 +164,7 @@ public static class RoomCompiler
         RoomNameAnalysis.CheckVmf(
             definition.Name,
             [.. document.GetChunks(MapFileLoader.EntityChunk).Select((e, i) => LevelEntity.FromVmf(e, -1, i))],
-            nameKeys);
+            nameKeys, definition);
 
         // A brush entity whose angles a turned placement could not treat
         // right (open point O15), refused before the compile as the split
@@ -279,7 +279,7 @@ public static class RoomCompiler
         // The names per turn, from the compile's own entity list (the one the
         // link indexes), so every link of the room fills in cells and
         // nothing more.
-        RoomNameTurn[] names = RoomNameAnalysis.Analyse(definition.Name, vbsp.Bsp, nameKeys);
+        RoomNameTurn[] names = RoomNameAnalysis.Analyse(definition.Name, vbsp.Bsp, nameKeys, definition);
 
         // The static props the link carries: each record matched to its
         // entity, its model's hull read from the content (the link has no

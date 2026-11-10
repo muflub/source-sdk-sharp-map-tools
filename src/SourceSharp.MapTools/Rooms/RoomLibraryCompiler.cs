@@ -291,6 +291,17 @@ public static class RoomLibraryCompiler
             foreach (LibraryRoom room in rooms)
             {
                 _ = nav.ColumnVoxels(room.Definition);
+
+                // Navigation is one grid per cell of a room of one cell; a
+                // room larger than one cell would be built over its anchor
+                // cell alone, so a library holding one is refused rather than
+                // given wrong navigation.
+                if (room.Definition.IsLarge)
+                {
+                    throw new RoomLibraryException(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                        $"room {room.Definition.Name}: navigation is not built for a room of {room.Definition.CellsX} x {room.Definition.CellsY} cells;")
+                        + $" set {Nav.NavSettings.EnabledKey} 0 on the library's worldspawn to pack it without navigation.");
+                }
             }
         }
 

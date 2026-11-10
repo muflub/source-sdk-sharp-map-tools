@@ -311,7 +311,7 @@ internal sealed class RoomBrushModels
                 id,
                 className,
                 IsOriginRelative(entity),
-                Needs(room, id, className, entity),
+                Needs(definition, id, className, entity),
                 Socket(definition, id, className, entity),
                 Priority(room, id, className, entity),
                 nodeRun,
@@ -385,7 +385,12 @@ internal sealed class RoomBrushModels
             foreach (RoomNeed need in model.Needs)
             {
                 w.Byte((byte)need.Direction);
-                w.Byte((byte)((need.Joined ? 1 : 0) | (need.Negated ? 2 : 0)));
+                w.Byte((byte)((need.Joined ? 1 : 0) | (need.Negated ? 2 : 0) | (need.Socket >= 0 ? 4 : 0)));
+                if (need.Socket >= 0)
+                {
+                    // A larger room's joined_<socket> (17.8): its socket's index.
+                    w.Byte((byte)need.Socket);
+                }
             }
 
             w.Int(model.Socket);
@@ -491,14 +496,15 @@ internal sealed class RoomBrushModels
             for (int n = needs.Capacity; n > 0; n--)
             {
                 RoomDirection direction = (RoomDirection)r.Small(7, "a direction");
-                int flags = r.Small(3, "condition flags");
+                int flags = r.Small(7, "condition flags");
                 bool joined = (flags & 1) != 0;
-                if (joined && !RoomDirections.IsSide(direction))
+                int bySocket = (flags & 4) != 0 ? r.Small(RoomDefinition.MaxFootprint * 4, "a socket") : -1;
+                if (joined && bySocket < 0 && !RoomDirections.IsSide(direction))
                 {
                     throw r.Mismatch($"a joined condition on the diagonal {RoomDirections.Name(direction)}");
                 }
 
-                needs.Add(new RoomNeed(direction, joined, (flags & 2) != 0));
+                needs.Add(new RoomNeed(direction, joined, (flags & 2) != 0) { Socket = bySocket });
             }
 
             int socket = r.Int();
@@ -753,8 +759,9 @@ internal sealed class RoomBrushModels
         }
     }
 
-    private static ImmutableArray<RoomNeed> Needs(string room, int id, string className, BspEntity entity)
+    private static ImmutableArray<RoomNeed> Needs(RoomDefinition definition, int id, string className, BspEntity entity)
     {
+        string room = definition.Name;
         if (entity.Get(RoomNeeds.Key) is not { } value)
         {
             return [];
@@ -762,7 +769,7 @@ internal sealed class RoomBrushModels
 
         // The naming rule checked the key on the VMF before the compile
         // (RoomNameAnalysis.CheckVmf), with its own message.
-        if (!RoomNeeds.TryParse(value, out List<RoomNeed> parsed, out string? unknown))
+        if (!RoomNeeds.TryParse(value, definition.IsLarge ? definition.Sockets : null, out List<RoomNeed> parsed, out string? unknown))
         {
             throw new RoomLintException(
                 $"room {room}: entity {id} ({className}) room_needs \"{value}\": unknown direction \"{unknown}\";"

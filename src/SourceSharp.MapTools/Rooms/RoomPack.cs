@@ -108,7 +108,7 @@ public sealed record RoomPackItem(string Name, ReadOnlyMemory<byte> Room)
         // room's names whatever the link will say of it.
         RoomNameTables names = room.Names is { } stored2 && stored2.IsFor(room) && stored2.IsComplete
             ? stored2
-            : new RoomNameTables(RoomNameAnalysis.Analyse(room.Definition.Name, room.Bsp, null), room.Bsp);
+            : new RoomNameTables(RoomNameAnalysis.Analyse(room.Definition.Name, room.Bsp, null, room.Definition), room.Bsp);
         IReadOnlyList<RoomPackSectionData> turned = RoomNavPack.Interleave(linkSections, [.. names.Sections()]);
 
         // The counts first, straight after the container: every room has

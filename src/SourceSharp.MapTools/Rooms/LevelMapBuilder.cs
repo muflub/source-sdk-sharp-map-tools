@@ -237,8 +237,22 @@ public static class LevelMapBuilder
             }
 
             MapCut cut = RoomMapView.CutOf(room.Definition, room.Document, instance.Placement);
-            IReadOnlyList<MapPolygon> polygons = MapPolygonUnion.Union(RoomMapFaces.Place(
-                byCell.GetValueOrDefault((instance.Placement.CellX, instance.Placement.CellY)) ?? [], cut));
+            // Every cell the room covers (its own alone for a room of one
+            // cell), each face once.
+            List<MapFaceSource> own = [];
+            HashSet<MapFaceSource> seen = new(ReferenceEqualityComparer.Instance);
+            foreach ((int cx, int cy, _, _) in instance.Placement.Covered())
+            {
+                foreach (MapFaceSource face in byCell.GetValueOrDefault((cx, cy)) ?? [])
+                {
+                    if (seen.Add(face))
+                    {
+                        own.Add(face);
+                    }
+                }
+            }
+
+            IReadOnlyList<MapPolygon> polygons = MapPolygonUnion.Union(RoomMapFaces.Place(own, cut));
             definitions.Add(room.Definition);
             views.Add(new RoomMapView(room.MapLabel, polygons, RoomMapView.DoorsOf(room.Definition), read.Markers));
             transits.Add(read.Transit);
@@ -267,7 +281,10 @@ public static class LevelMapBuilder
         Dictionary<(int, int), int> byCell = [];
         for (int p = 0; p < layout.Rooms.Count; p++)
         {
-            byCell[(layout.Rooms[p].Placement.CellX, layout.Rooms[p].Placement.CellY)] = p;
+            foreach ((int x, int y, _, _) in layout.Rooms[p].Placement.Covered())
+            {
+                byCell[(x, y)] = p;
+            }
         }
 
         ImmutableArray<Map2dRoom>.Builder placements = ImmutableArray.CreateBuilder<Map2dRoom>(layout.Rooms.Count);
@@ -325,9 +342,8 @@ public static class LevelMapBuilder
                 bool open = instance.Joints.Any(j => string.Equals(j.Socket, socket.Name, StringComparison.Ordinal));
                 if (open)
                 {
-                    (int axis, int sign) = transform.WorldNormal(socket.Facing);
-                    neighbour = byCell.GetValueOrDefault(
-                        (placement.CellX + (axis == 0 ? sign : 0), placement.CellY + (axis == 1 ? sign : 0)), Map2dFormat.NoPlacement);
+                    (_, (int X, int Y) across) = placement.SocketCells(definition, socket, cellSize);
+                    neighbour = byCell.GetValueOrDefault(across, Map2dFormat.NoPlacement);
                 }
 
                 Vec3 a = transform.Apply(new Vec3(door.X0, door.Y0, door.ZLow));
@@ -360,13 +376,15 @@ public static class LevelMapBuilder
     /// <summary>A room-local point turned and moved to its placement's cell, on whole units: <see cref="RoomTransform.Apply"/> in integers.</summary>
     internal static Map2dPoint Turn(MapPoint p, RoomPlacement placement, long cell)
     {
+        // A larger room's turn moves it back by its footprint (17.8).
         long tx = placement.CellX * cell, ty = placement.CellY * cell;
+        long sx = placement.CellsX * cell, sy = placement.CellsY * cell;
         (long x, long y) = placement.NormalizedRotation switch
         {
             0 => (p.X + tx, p.Y + ty),
-            1 => (-p.Y + tx + cell, p.X + ty),
-            2 => (-p.X + tx + cell, -p.Y + ty + cell),
-            _ => (p.Y + tx, -p.X + ty + cell),
+            1 => (-p.Y + tx + sy, p.X + ty),
+            2 => (-p.X + tx + sx, -p.Y + ty + sy),
+            _ => (p.Y + tx, -p.X + ty + sx),
         };
         return new Map2dPoint(checked((int)x), checked((int)y));
     }

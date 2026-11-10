@@ -467,7 +467,12 @@ internal sealed class RoomStaticProps
             foreach (RoomNeed need in prop.Needs)
             {
                 w.Byte((byte)need.Direction);
-                w.Byte((byte)((need.Joined ? 1 : 0) | (need.Negated ? 2 : 0)));
+                w.Byte((byte)((need.Joined ? 1 : 0) | (need.Negated ? 2 : 0) | (need.Socket >= 0 ? 4 : 0)));
+                if (need.Socket >= 0)
+                {
+                    // A larger room's joined_<socket> (17.8): its socket's index.
+                    w.Byte((byte)need.Socket);
+                }
             }
         }
 
@@ -557,14 +562,15 @@ internal sealed class RoomStaticProps
             for (int n = needs.Capacity; n > 0; n--)
             {
                 RoomDirection direction = (RoomDirection)r.Small(7, "a direction");
-                int flags = r.Small(3, "condition flags");
+                int flags = r.Small(7, "condition flags");
                 bool joined = (flags & 1) != 0;
-                if (joined && !RoomDirections.IsSide(direction))
+                int bySocket = (flags & 4) != 0 ? r.Small(RoomDefinition.MaxFootprint * 4, "a socket") : -1;
+                if (joined && bySocket < 0 && !RoomDirections.IsSide(direction))
                 {
                     throw r.Mismatch($"a joined condition on the diagonal {RoomDirections.Name(direction)}");
                 }
 
-                needs.Add(new RoomNeed(direction, joined, (flags & 2) != 0));
+                needs.Add(new RoomNeed(direction, joined, (flags & 2) != 0) { Socket = bySocket });
             }
 
             props.Add(new RoomProp(id, needs.MoveToImmutable(), socket, priority));
@@ -624,7 +630,7 @@ internal sealed class RoomStaticProps
         {
             // The naming rule checked the key on the VMF before the compile
             // (RoomNameAnalysis.CheckVmf), with its own message.
-            if (!RoomNeeds.TryParse(value, out List<RoomNeed> parsed, out string? unknown))
+            if (!RoomNeeds.TryParse(value, definition.IsLarge ? definition.Sockets : null, out List<RoomNeed> parsed, out string? unknown))
             {
                 throw new RoomLintException(
                     $"room {room}: entity {source.Id} (prop_static) room_needs \"{value}\": unknown direction \"{unknown}\";"

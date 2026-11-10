@@ -133,7 +133,9 @@ public sealed class RoomNameSummary
             needs.Add(string.Join(',', key.Conditions.Select(c =>
                 (c.Need.Negated ? "!" : string.Empty)
                 + (c.Need.Joined ? RoomLinkerNames.JoinedPrefix : string.Empty)
-                + RoomDirections.Name(c.Need.Direction))));
+                + (c.Need.Socket >= 0
+                    ? "socket " + c.Need.Socket.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : RoomDirections.Name(c.Need.Direction)))));
         }
 
         return new RoomNameSummary([.. local], neighbours, [.. owned], needs, [.. names.Warnings]);

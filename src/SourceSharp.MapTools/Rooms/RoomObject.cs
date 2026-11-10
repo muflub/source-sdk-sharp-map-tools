@@ -109,7 +109,7 @@ public sealed record RoomObject(
     internal RoomNameTurn NamesFor(int turn, IReadOnlySet<string>? nameKeys) =>
         Names is { } stored && stored.IsFor(this) && stored.Turn(turn) is { } names
             ? names
-            : RoomNameAnalysis.Analyse(Definition.Name, Bsp, nameKeys)[turn];
+            : RoomNameAnalysis.Analyse(Definition.Name, Bsp, nameKeys, Definition)[turn];
 
     /// <summary>
     /// The room's static props as the link carries them

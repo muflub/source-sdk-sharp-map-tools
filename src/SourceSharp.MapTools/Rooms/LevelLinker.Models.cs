@@ -137,6 +137,7 @@ public static partial class LevelLinker
             }
 
             RoomPlacement where = resolved[p].Instance.Placement;
+            ulong joinedSockets = JoinedSockets(resolved[p].Room.Definition, resolved[p].Instance);
             JoinedMask joined = JoinedSides(resolved[p].Room.Definition, resolved[p].Instance);
             int[] map = new int[models.Models.Count];
             int omittedVolume = transitions?.Placements[p] is { } transition && transition.OmitsVolume(transitions.ModEntities)
@@ -145,7 +146,7 @@ public static partial class LevelLinker
             for (int m = 0; m < map.Length; m++)
             {
                 RoomBrushModel model = models.Models[m];
-                bool keep = RoomNeeds.Hold(model.Needs, where.NormalizedRotation, where.CellX, where.CellY, occupied.Contains, joined)
+                bool keep = RoomNeeds.Hold(model.Needs, where.NormalizedRotation, where.CellX, where.CellY, occupied.Contains, joined, joinedSockets)
                     && (model.Socket < 0 || furniture.Keeps(p, model.Socket))
                     && model.Id != omittedVolume;
                 map[m] = keep ? next++ : -1;

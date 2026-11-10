@@ -36,6 +36,15 @@ internal sealed class ResolverRoom
     /// <summary>The placement's joined sockets, by authored side.</summary>
     public required JoinedMask Joined { get; init; }
 
+    /// <summary>The placement's joined sockets, a bit per socket index, for a larger room's <c>joined_&lt;socket&gt;</c> (17.8).</summary>
+    public ulong JoinedSockets { get; init; }
+
+    /// <summary>The cells the placement covers along x from its anchor (<see cref="Column"/>): 1 for a room of one cell.</summary>
+    public int SpanX { get; init; } = 1;
+
+    /// <summary>The cells the placement covers along y from its anchor (<see cref="Row"/>).</summary>
+    public int SpanY { get; init; } = 1;
+
     /// <summary>The cell centre, written as an <c>origin</c> value: where an entity the linker writes stands.</summary>
     public required string CellCentre { get; init; }
 
@@ -131,7 +140,16 @@ internal static class LevelEntityResolver
         Dictionary<(int, int), int> cells = new(rooms.Count);
         for (int i = 0; i < rooms.Count; i++)
         {
-            cells[(rooms[i].Column, rooms[i].Row)] = i;
+            // Every cell a placement covers names it (17.8): a neighbour's
+            // name or flag that looks at a larger room's cell finds the room.
+            for (int dy = 0; dy < rooms[i].SpanY; dy++)
+            {
+                for (int dx = 0; dx < rooms[i].SpanX; dx++)
+                {
+                    cells[(rooms[i].Column + dx, rooms[i].Row + dy)] = i;
+                }
+            }
+
             if (rooms[i].Names.EntityCount != rooms[i].Entities.Count)
             {
                 throw Mismatch(rooms[i], $"a table for {rooms[i].Names.EntityCount} entities; the room has {rooms[i].Entities.Count}");
@@ -314,7 +332,9 @@ internal static class LevelEntityResolver
                 bool holds = true;
                 foreach (TurnedNeed condition in needs.Conditions)
                 {
-                    bool value = condition.Need.Joined
+                    bool value = condition.Need.Socket >= 0
+                        ? (room.JoinedSockets & (1UL << condition.Need.Socket)) != 0
+                        : condition.Need.Joined
                         ? (room.Joined & RoomDirections.JoinedBit(condition.Need.Direction)) != 0
                         : cells.ContainsKey((room.Column + condition.Dx, room.Row + condition.Dy));
                     holds &= value != condition.Need.Negated;
@@ -387,10 +407,15 @@ internal static class LevelEntityResolver
 
                     int x = room.Column + segment.Dx;
                     int y = room.Row + segment.Dy;
-                    string resolved = Prefix(x, y) + segment.Rest;
                     RoomState? target = segment.Dx == 0 && segment.Dy == 0
                         ? state
                         : cells.TryGetValue((x, y), out int index) ? States[index] : null;
+
+                    // A larger room's names carry its anchor's cell, so a
+                    // neighbour's name looking at any cell it covers names it.
+                    string resolved = (target is { } found && (found.Room.SpanX != 1 || found.Room.SpanY != 1)
+                        ? Prefix(found.Room.Column, found.Room.Row)
+                        : Prefix(x, y)) + segment.Rest;
                     if (target is null)
                     {
                         bool offGrid = x < 0 || y < 0 || x >= (options.Columns ?? int.MaxValue) || y >= (options.Rows ?? int.MaxValue);

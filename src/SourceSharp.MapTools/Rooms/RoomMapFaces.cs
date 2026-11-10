@@ -313,7 +313,7 @@ internal static class RoomMapFaces
 
         double sign = facing > 0 ? 1 : -1;
         (double MinX, double MinY, double MinZ, double MaxX, double MaxY, double MaxZ)? box = cut.Cell is { } cell && placement is not null
-            ? (0, 0, cell.MinZ, cut.CellSize, cut.CellSize, cell.MaxZ)
+            ? (0, 0, cell.MinZ, Span(cut.CellSize, cut.Placement?.CellsX ?? 1), Span(cut.CellSize, cut.Placement?.CellsY ?? 1), cell.MaxZ)
             : cut.Cell;
         ReadOnlySpan<Vec3> vertices = surface.Vertices;
         ReadOnlySpan<int> indices = surface.TriangleIndices;
@@ -397,6 +397,9 @@ internal static class RoomMapFaces
         }
     }
 
+    /// <summary>A footprint's span along one of the room's axes: the cell itself for one cell.</summary>
+    private static double Span(float cellSize, int cells) => cells == 1 ? cellSize : cells * (double)cellSize;
+
     /// <summary>A world point in its placement's room frame: the placement's turn and move undone, exactly.</summary>
     /// <param name="p">The world point.</param>
     /// <param name="placement">The placement.</param>
@@ -404,15 +407,20 @@ internal static class RoomMapFaces
     /// <returns>The room-local point.</returns>
     public static (double X, double Y, double Z) ToLocal((double X, double Y, double Z) p, RoomPlacement placement, float cellSize)
     {
+        // A larger room's turn moves it back by its footprint (17.8): the
+        // room's span along its own x and y, which is the cell for a room of
+        // one cell, so its arithmetic is what it was.
         double c = cellSize;
+        double sx = placement.CellsX == 1 ? c : placement.CellsX * c;
+        double sy = placement.CellsY == 1 ? c : placement.CellsY * c;
         double tx = (double)placement.CellX * c;
         double ty = (double)placement.CellY * c;
         return placement.NormalizedRotation switch
         {
             0 => (p.X - tx, p.Y - ty, p.Z),
-            1 => (p.Y - ty, tx + c - p.X, p.Z),
-            2 => (tx + c - p.X, ty + c - p.Y, p.Z),
-            _ => (ty + c - p.Y, p.X - tx, p.Z),
+            1 => (p.Y - ty, tx + sy - p.X, p.Z),
+            2 => (tx + sx - p.X, ty + sy - p.Y, p.Z),
+            _ => (ty + sx - p.Y, p.X - tx, p.Z),
         };
     }
 

@@ -530,6 +530,32 @@ public sealed class RoomLibraryCompilerTests
     }
 
     /// <summary>
+    /// A library building navigation that holds a room larger than one cell
+    /// is refused before any room compiles, saying how to pack it without
+    /// navigation: a larger room's grid is not built.
+    /// </summary>
+    [Fact]
+    public async Task NavigationOfALargerRoomIsRefusedBeforeAnyRoom()
+    {
+        (IReadOnlyList<LibraryRoom> rooms, CountingContent content) = await LibraryAsync();
+        LibraryRoom hall = RoomLibraryVmf.Split(RoomHarness.LibraryVmf(MultiCellHarness.Hall))[0];
+        int started = 0;
+        RoomLibraryException refused = await Assert.ThrowsAsync<RoomLibraryException>(() => CompileAsync([.. rooms, hall], new RoomLibraryCompileSettings(VbspOptions.Default, content)
+        {
+            Nav = SourceSharp.MapTools.Nav.NavSettings.Default,
+            BeforeRoomProbe = (_, _) =>
+            {
+                Interlocked.Increment(ref started);
+                return ValueTask.CompletedTask;
+            },
+        }));
+        Assert.Equal(
+            "room hall: navigation is not built for a room of 2 x 2 cells; set nav 0 on the library's worldspawn to pack it without navigation.",
+            refused.Message);
+        Assert.Equal(0, started);
+    }
+
+    /// <summary>
     /// A room whose height is not a whole number of the library's voxels
     /// (the rooms design, 17.6) is refused once, before any room compiles,
     /// with the 17.3 text; a whole number of them compiles.

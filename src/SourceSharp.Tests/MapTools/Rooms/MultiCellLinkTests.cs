@@ -8,6 +8,7 @@
 using SourceSharp.MapFormats.Bsp;
 using SourceSharp.MapFormats.Bsp.Structs;
 using SourceSharp.MapFormats.Geometry;
+using SourceSharp.MapFormats.Map2d;
 using SourceSharp.MapFormats.Text;
 
 using SourceSharp.MapTools.Bsp;
@@ -262,6 +263,53 @@ public sealed class MultiCellLinkTests
         DLeaf[] leaves = BspStructView.As<DLeaf>(bsp[BspLump.Leafs]).ToArray();
         DLeaf leaf = leaves.First(l => l.Cluster == cluster);
         return $"[{leaf.Mins[0]} {leaf.Mins[1]} {leaf.Mins[2]} .. {leaf.Maxs[0]} {leaf.Maxs[1]} {leaf.Maxs[2]}]";
+    }
+
+    // ---- the level map ------------------------------------------------------------------------
+
+    /// <summary>
+    /// The level's map of a level with the hall, at every turn: the link's,
+    /// from the rooms' map sections, is the flattened level's compile's by
+    /// the same face rule, byte for byte; the hall's floor reaches across
+    /// its four cells; its open door names the hub it opens into.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Rotations))]
+    public async Task TheHallsMapIsTheFlattenedCompilesAtEveryTurn(int rotation)
+    {
+        VmfDocument library = RoomHarness.LibraryVmf(Hall, Hub);
+        RoomLibrary rooms = await RoomPropHarness.CompileAsync(library);
+        LevelGrid level = RoomHeightHarness.Level("hub, hub, hub", "+, +, hub", $"hall@{rotation}, +, hub");
+        LevelLayout layout = RoomPropHarness.Layout(rooms, level);
+        LevelMapPlan plan = LevelMapBuilder.Plan(layout, level.Columns, level.Rows, rooms.Get);
+        Assert.Null(plan.Warning);
+        Map2dLevel linked = plan.Build(42);
+        BspData flat = await TransitHarness.CompileFlatAsync(library, level, mod: false);
+        Map2dLevel compiled = LevelMapBuilder.FromCompile(flat, 42, level, [library]);
+        Assert.Equal(Map2dWriter.Write(linked), Map2dWriter.Write(compiled));
+
+        int hall = layout.Rooms.ToList().FindIndex(r => r.Placement.Room == "hall");
+        Map2dRing floor = Assert.Single(linked.Rings, r => r.Placement == hall && !r.IsHole && r.ZLow == 16);
+        Assert.Equal((16, 496), (floor.Points.Min(p => p.X), floor.Points.Max(p => p.X)));
+        Assert.Equal((16, 496), (floor.Points.Min(p => p.Y), floor.Points.Max(p => p.Y)));
+        Assert.All(linked.Doors.Where(d => d.Placement == hall && d.Open), d => Assert.Equal("hub", layout.Rooms[d.Neighbour].Placement.Room));
+        Assert.Contains(linked.Doors, d => d.Placement == hall && d.Open);
+    }
+
+    /// <summary>The map's integer turn of a W x D room is <see cref="RoomTransform.Apply"/>'s point, at every turn.</summary>
+    [Fact]
+    public void TheMapsIntegerTurnOfAFootprintIsTheTransforms()
+    {
+        foreach (int rotation in (ReadOnlySpan<int>)[0, 1, 2, 3])
+        {
+            RoomPlacement placement = new("r", 2, 5, rotation) { CellsX = 2, CellsY = 3 };
+            RoomTransform transform = new(placement, 256);
+            foreach (MapPoint p in (ReadOnlySpan<MapPoint>)[new(0, 0), new(16, 240), new(500, 7), new(-3, 700)])
+            {
+                Vec3 world = transform.Apply(new Vec3(p.X, p.Y, 0));
+                Assert.Equal(new Map2dPoint((int)world.X, (int)world.Y), LevelMapBuilder.Turn(p, placement, 256));
+            }
+        }
     }
 
     // ---- the level file -----------------------------------------------------------------------
