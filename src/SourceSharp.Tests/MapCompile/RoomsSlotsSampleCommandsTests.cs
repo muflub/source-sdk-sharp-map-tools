@@ -81,7 +81,7 @@ public sealed class RoomsSlotsSampleCommandsTests
 
         Nav3dReader nav = Nav3dReader.Open(Bytes(fs, "/slots/out/slots.nav3d"));
         (int[] component, int count) = Nav3dWalk.Components(nav, Nav3dWalker.Player);
-        Assert.Equal(1, component.Where((c, l) => Nav3dWalk.IsStand(nav, Nav3dWalker.Player, l)).Distinct().Count());
+        Assert.Single(component.Where((c, l) => Nav3dWalk.IsStand(nav, Nav3dWalker.Player, l)).Distinct());
         Assert.True(count >= 1);
         RoomNavHeightsTests.AssertSameAsFlattened(flat, level, nav, [.. level.Placed.SelectMany(p => Covered(level, p))]);
 
