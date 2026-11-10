@@ -93,6 +93,13 @@ public sealed record BspNavOptions
     /// (<c>ssmap nav3d -playspace off</c>).
     /// </summary>
     public bool PlaySpace { get; init; } = true;
+
+    /// <summary>
+    /// Where the build reports its phases' times and each cell's
+    /// (<see cref="NavBuildTimer"/>), or null to time nothing. It never
+    /// changes the file.
+    /// </summary>
+    public NavBuildTimer? Timer { get; init; }
 }
 
 /// <summary>What <see cref="LevelNavFromBsp.Build"/> made: the navigation, and what it could not read.</summary>
@@ -235,6 +242,8 @@ public static class LevelNavFromBsp
             Ladders = ClimbVolumes(bsp, entities.Brushes),
             Warnings = [.. entities.Warnings, .. propWarnings],
         };
+        NavBuildTimer? timer = options.Timer;
+        timer?.Mark("geometry");
 
         // The grid: voxel-aligned at the world's low corner, cells across,
         // one column of voxels up the whole map.
@@ -251,6 +260,7 @@ public static class LevelNavFromBsp
         // grid's lines stay where the world's corner puts them: whole cells
         // and whole voxels are dropped, never shifted.
         NavPlaySpace? space = options.PlaySpace ? NavPlayableSpace.Find(bsp) : null;
+        timer?.Mark("play space");
         if (space?.Bounds is { } play)
         {
             double margin = PlayMarginVoxels * voxel;
@@ -279,15 +289,20 @@ public static class LevelNavFromBsp
             overhangIndex[overhang[i]] = i;
         }
 
+        timer?.Mark("tree");
+
         CellBuild?[] built = new CellBuild?[columns * rows];
         ParallelOptions parallel = new() { MaxDegreeOfParallelism = options.MaxDegree, CancellationToken = cancellationToken };
         int done = 0;
         System.Threading.Tasks.Parallel.For(0, built.Length, parallel, c =>
         {
+            long started = timer is null ? 0 : System.Diagnostics.Stopwatch.GetTimestamp();
             NavRegion region = new(ox + ((c % columns) * cell), oy + ((c / columns) * cell), oz, n, n, nz, voxel);
             built[c] = BuildCell(geometry, region, settings, options.Reach, tree, space, overhangIndex, cancellationToken);
+            timer?.Cell(c, System.Diagnostics.Stopwatch.GetElapsedTime(started));
             options.Progress?.Invoke(Interlocked.Increment(ref done), built.Length);
         });
+        timer?.Mark("cells");
 
         return new BspNavResult(
             Stitch(built, geometry, overhang, settings, options, columns, rows, n, nz, new Vec3((float)ox, (float)oy, (float)oz), binding, cancellationToken),
@@ -474,11 +489,13 @@ public static class LevelNavFromBsp
             run.ZLo, run.Height, run.Key.Flags, run.Key.Cost, offsets[run.Key.PlayerRecord], offsets[run.Key.NpcRecord],
             run.Key.PlayerFloorZ, run.Key.NpcFloorZ))];
         uint[] starts = [.. columnStarts];
+        options.Timer?.Mark("stitch");
         List<Nav3dJump> jumps = roots.Any(r => r >= 0)
             ? LevelNavLinker.FindJumps(
                 new LevelNavLinker.Grid(columns, rows, n, settings.VoxelSize, roots, starts, leaves, levelRecords, offsets),
                 settings.StepHeight, settings.JumpHeight, settings.JumpDistance, cancellationToken)
             : [];
+        options.Timer?.Mark("jumps");
 
         float cellSize = options.CellSize;
         uint CellOf(Box bounds)
@@ -488,7 +505,7 @@ public static class LevelNavFromBsp
             return (uint)((cy * columns) + cx);
         }
 
-        return new Nav3dLevel
+        Nav3dLevel level = new()
         {
             CellSize = cellSize,
             VoxelSize = settings.VoxelSize,
@@ -513,6 +530,8 @@ public static class LevelNavFromBsp
             Jumps = jumps,
             Bsp = binding,
         };
+        options.Timer?.Mark("level");
+        return level;
     }
 
     /// <summary>A cell's record with its overhanging brushes renumbered into the level's list (the map is ascending, so the list stays sorted).</summary>
