@@ -493,7 +493,7 @@ public static class LevelNavFromBsp
         List<Nav3dJump> jumps = roots.Any(r => r >= 0)
             ? LevelNavLinker.FindJumps(
                 new LevelNavLinker.Grid(columns, rows, n, settings.VoxelSize, roots, starts, leaves, levelRecords, offsets),
-                settings.StepHeight, settings.JumpHeight, settings.JumpDistance, cancellationToken)
+                settings.StepHeight, settings.JumpHeight, settings.JumpDistance, options.MaxDegree, LevelNavLinker.JumpChunk, cancellationToken)
             : [];
         options.Timer?.Mark("jumps");
 

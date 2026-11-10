@@ -634,94 +634,154 @@ public static class LevelNavLinker
     /// The jump links of a stitched grid, for both classes: see the type's
     /// remarks for the rule. Sorted by leaf pair, then rise.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    internal static List<Nav3dJump> FindJumps(Grid grid, float stepHeight, float jumpHeight, float jumpDistance, CancellationToken cancellationToken)
+    internal static List<Nav3dJump> FindJumps(Grid grid, float stepHeight, float jumpHeight, float jumpDistance, CancellationToken cancellationToken) =>
+        FindJumps(grid, stepHeight, jumpHeight, jumpDistance, 1, JumpChunk, cancellationToken);
+
+    /// <summary>How many take-off leaves one task of the jump search takes.</summary>
+    internal const int JumpChunk = 4096;
+
+    /// <summary>
+    /// The jump links of a stitched grid, searched on up to
+    /// <paramref name="maxDegree"/> threads: the same list at any degree and
+    /// any chunk.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The search runs over the take-off leaves in chunks of
+    /// <paramref name="chunk"/>, each chunk on one thread in leaf order, and
+    /// writes what it finds as a list of sightings: the link's key, the
+    /// class's bit, the direction and the columns, in the order a search of
+    /// the chunk alone meets them. The sightings are then replayed chunk by
+    /// chunk, in order, into one table by the rule a single search applies as
+    /// it goes (a link's direction and columns are those of its first
+    /// sighting, its classes those of all), so the table is the one a single
+    /// search over every leaf builds, entry for entry.
+    /// </para>
+    /// <para>
+    /// Whether a leaf is blocked for a class is looked up once per leaf
+    /// before the search (<see cref="Grid.PrepareBlocked"/>), by the same
+    /// lookup the search made each time it asked.
+    /// </para>
+    /// </remarks>
+    internal static List<Nav3dJump> FindJumps(
+        Grid grid, float stepHeight, float jumpHeight, float jumpDistance, int maxDegree, int chunk, CancellationToken cancellationToken)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxDegree, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(chunk, 1);
         double s = grid.VoxelSize;
         int reach = (int)Math.Floor((jumpDistance / s) + 1e-9);
-        SortedDictionary<(uint A, uint B, float Rise), (byte Mask, Nav3dDirection Direction, byte Columns)> found = [];
-        for (int leaf = 0; leaf < grid.Leaves.Length; leaf++)
+        ParallelOptions parallel = new() { MaxDegreeOfParallelism = maxDegree, CancellationToken = cancellationToken };
+        grid.PrepareBlocked(parallel);
+        int chunks = (int)((grid.Leaves.Length + (long)chunk - 1) / chunk);
+        List<Sighting>?[] sightings = new List<Sighting>?[chunks];
+        System.Threading.Tasks.Parallel.For(0, chunks, parallel, k =>
         {
-            if ((leaf & 1023) == 0)
+            List<Sighting> seen = [];
+            int end = (int)Math.Min(grid.Leaves.Length, ((long)k + 1) * chunk);
+            for (int leaf = (int)((long)k * chunk); leaf < end; leaf++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if ((leaf & 1023) == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                TakeOff(grid, leaf, reach, stepHeight, jumpHeight, seen);
             }
 
-            (int gx, int gy) = grid.LevelColumn(leaf);
-            for (int c = 0; c < 2; c++)
+            sightings[k] = seen;
+        });
+
+        SortedDictionary<(uint A, uint B, float Rise), (byte Mask, Nav3dDirection Direction, byte Columns)> found = [];
+        foreach (List<Sighting>? seen in sightings)
+        {
+            foreach (Sighting sighting in seen!)
             {
-                Nav3dClipClass clipClass = (Nav3dClipClass)c;
-                Nav3dLeaf from = grid.Leaves[leaf];
-                if (!from.IsWalkable(clipClass))
-                {
-                    continue;
-                }
-
-                float fa = from.FloorZ(clipClass);
-                for (int d = 0; d < 4 && reach > 0; d++)
-                {
-                    (int dx, int dy) = d switch { 0 => (1, 0), 1 => (0, 1), 2 => (-1, 0), _ => (0, -1) };
-                    for (int k = 1; k <= reach; k++)
-                    {
-                        int column = grid.Column(gx + (k * dx), gy + (k * dy));
-                        if (column < 0)
-                        {
-                            break;
-                        }
-
-                        for (int other = (int)grid.ColumnStarts[column]; other < grid.ColumnStarts[column + 1]; other++)
-                        {
-                            Nav3dLeaf to = grid.Leaves[other];
-                            if (!to.IsWalkable(clipClass))
-                            {
-                                continue;
-                            }
-
-                            float fb = to.FloorZ(clipClass);
-                            float rise = fb - fa;
-                            if (Math.Abs(rise) > jumpHeight || (k == 1 && Math.Abs(rise) <= stepHeight))
-                            {
-                                continue;
-                            }
-
-                            // The higher floor's standing voxel: the jumper
-                            // passes there, so every column from the take-off
-                            // to the landing must be open at it.
-                            int top = fa >= fb ? from.ZLo : to.ZLo;
-                            if (!grid.Open(grid.Column(gx, gy), from.ZLo, top, clipClass)
-                                || !grid.Open(column, to.ZLo, top, clipClass))
-                            {
-                                continue;
-                            }
-
-                            bool gap = true;
-                            for (int j = 1; j < k && gap; j++)
-                            {
-                                int between = grid.Column(gx + (j * dx), gy + (j * dy));
-                                gap = between >= 0 && grid.Open(between, top, top, clipClass)
-                                    && !grid.FloorNear(between, clipClass, Math.Min(fa, fb) - stepHeight, Math.Max(fa, fb) + stepHeight);
-                            }
-
-                            if (!gap)
-                            {
-                                continue;
-                            }
-
-                            (uint a, uint b, float r, Nav3dDirection direction) = leaf < other
-                                ? ((uint)leaf, (uint)other, rise, (Nav3dDirection)d)
-                                : ((uint)other, (uint)leaf, -rise, (Nav3dDirection)((d + 2) % 4));
-                            byte bit = (byte)(1 << c);
-                            found[(a, b, r)] = found.TryGetValue((a, b, r), out var seen)
-                                ? seen with { Mask = (byte)(seen.Mask | bit) }
-                                : (bit, direction, (byte)k);
-                        }
-                    }
-                }
+                (uint, uint, float) key = (sighting.A, sighting.B, sighting.Rise);
+                found[key] = found.TryGetValue(key, out var was)
+                    ? was with { Mask = (byte)(was.Mask | sighting.Bit) }
+                    : (sighting.Bit, sighting.Direction, sighting.Columns);
             }
         }
 
         return [.. found.Select(f => new Nav3dJump(f.Key.A, f.Key.B, f.Key.Rise, f.Value.Mask, f.Value.Direction, f.Value.Columns))];
     }
+
+    /// <summary>Every jump from one leaf, for both classes, as sightings in the order the search meets them.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static void TakeOff(Grid grid, int leaf, int reach, float stepHeight, float jumpHeight, List<Sighting> seen)
+    {
+        (int gx, int gy) = grid.LevelColumn(leaf);
+        for (int c = 0; c < 2; c++)
+        {
+            Nav3dClipClass clipClass = (Nav3dClipClass)c;
+            Nav3dLeaf from = grid.Leaves[leaf];
+            if (!from.IsWalkable(clipClass))
+            {
+                continue;
+            }
+
+            float fa = from.FloorZ(clipClass);
+            for (int d = 0; d < 4 && reach > 0; d++)
+            {
+                (int dx, int dy) = d switch { 0 => (1, 0), 1 => (0, 1), 2 => (-1, 0), _ => (0, -1) };
+                for (int k = 1; k <= reach; k++)
+                {
+                    int column = grid.Column(gx + (k * dx), gy + (k * dy));
+                    if (column < 0)
+                    {
+                        break;
+                    }
+
+                    for (int other = (int)grid.ColumnStarts[column]; other < grid.ColumnStarts[column + 1]; other++)
+                    {
+                        Nav3dLeaf to = grid.Leaves[other];
+                        if (!to.IsWalkable(clipClass))
+                        {
+                            continue;
+                        }
+
+                        float fb = to.FloorZ(clipClass);
+                        float rise = fb - fa;
+                        if (Math.Abs(rise) > jumpHeight || (k == 1 && Math.Abs(rise) <= stepHeight))
+                        {
+                            continue;
+                        }
+
+                        // The higher floor's standing voxel: the jumper
+                        // passes there, so every column from the take-off
+                        // to the landing must be open at it.
+                        int top = fa >= fb ? from.ZLo : to.ZLo;
+                        if (!grid.Open(grid.Column(gx, gy), from.ZLo, top, clipClass)
+                            || !grid.Open(column, to.ZLo, top, clipClass))
+                        {
+                            continue;
+                        }
+
+                        bool gap = true;
+                        for (int j = 1; j < k && gap; j++)
+                        {
+                            int between = grid.Column(gx + (j * dx), gy + (j * dy));
+                            gap = between >= 0 && grid.Open(between, top, top, clipClass)
+                                && !grid.FloorNear(between, clipClass, Math.Min(fa, fb) - stepHeight, Math.Max(fa, fb) + stepHeight);
+                        }
+
+                        if (!gap)
+                        {
+                            continue;
+                        }
+
+                        (uint a, uint b, float r, Nav3dDirection direction) = leaf < other
+                            ? ((uint)leaf, (uint)other, rise, (Nav3dDirection)d)
+                            : ((uint)other, (uint)leaf, -rise, (Nav3dDirection)((d + 2) % 4));
+                        seen.Add(new Sighting(a, b, r, (byte)(1 << c), direction, (byte)k));
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>One sighting of a jump link: its key, the class that can make it, and the direction and columns it was seen with.</summary>
+    private readonly record struct Sighting(uint A, uint B, float Rise, byte Bit, Nav3dDirection Direction, byte Columns);
 
     /// <summary>The stitched grid as the jump search reads it.</summary>
     internal sealed record Grid(
@@ -755,16 +815,48 @@ public static class LevelNavLinker
             return (((cell % Columns) * n) + (within % n), ((cell / Columns) * n) + (within / n));
         }
 
+        /// <summary>Each leaf's blocked classes, bit 0 the player and bit 1 the NPC; built by <see cref="PrepareBlocked"/>.</summary>
+        private byte[]? _blocked;
+
+        /// <summary>
+        /// Looks up once, for every leaf, whether its record for each class is
+        /// the blocked record: the lookup <see cref="Open"/> would make for the
+        /// leaf at every height it asks about.
+        /// </summary>
+        /// <param name="parallel">The threads to look on.</param>
+        public void PrepareBlocked(ParallelOptions parallel)
+        {
+            if (_blocked is not null)
+            {
+                return;
+            }
+
+            byte[] blocked = new byte[Leaves.Length];
+            System.Threading.Tasks.Parallel.For(0, (Leaves.Length + JumpChunk - 1) / JumpChunk, parallel, k =>
+            {
+                int end = Math.Min(Leaves.Length, (k + 1) * JumpChunk);
+                for (int l = k * JumpChunk; l < end; l++)
+                {
+                    Nav3dLeaf leaf = Leaves[l];
+                    blocked[l] = (byte)((_recordOf[leaf.Clearance(Nav3dClipClass.Player)] == NavRecordTable.BlockedIndex ? 1 : 0)
+                        | (_recordOf[leaf.Clearance(Nav3dClipClass.Npc)] == NavRecordTable.BlockedIndex ? 2 : 0));
+                }
+            });
+            _blocked = blocked;
+        }
+
         /// <summary>Whether every voxel of a column from one height to another is free for a class.</summary>
         public bool Open(int column, int from, int to, Nav3dClipClass clipClass)
         {
+            byte[] blocked = _blocked ?? throw new InvalidOperationException("the grid's blocked leaves are looked up first.");
+            int bit = clipClass == Nav3dClipClass.Npc ? 2 : 1;
             for (int z = Math.Min(from, to); z <= Math.Max(from, to); z++)
             {
                 bool free = false;
                 for (int l = (int)ColumnStarts[column]; l < ColumnStarts[column + 1] && !free; l++)
                 {
                     Nav3dLeaf leaf = Leaves[l];
-                    free = z >= leaf.ZLo && z <= leaf.ZHi && _recordOf[leaf.Clearance(clipClass)] != NavRecordTable.BlockedIndex;
+                    free = z >= leaf.ZLo && z <= leaf.ZHi && (blocked[l] & bit) == 0;
                 }
 
                 if (!free)
