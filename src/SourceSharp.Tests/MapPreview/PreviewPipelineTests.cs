@@ -33,19 +33,53 @@ public class PreviewPipelineTests
     private static readonly PreviewTestMaps.TestEntity Blue = new("info_player_teamspawn", [("origin", "384 384 16"), ("angles", "0 225 0"), ("TeamNum", "3")]);
     private static readonly PreviewTestMaps.TestEntity Barrel = new("prop_dynamic", [("origin", "256 256 0"), ("model", "models/lost.mdl")]);
 
-    private static PreviewSpawn Spawn(int team, float x) => new("info_player_teamspawn", team, new Vec3(x, 0, 0), 0);
+    private static PreviewSpawn Spawn(int team, float x, float yaw = 0, string name = "") => new("info_player_teamspawn", team, new Vec3(x, 0, 0), yaw, name);
 
+    /// <summary>
+    /// Every team is shown first; then spawns far from those shown, not ones
+    /// a step along the same row (which show the same view again).
+    /// </summary>
     [Fact]
-    public void SpawnsArePickedOnePerTeamFirst()
+    public void SpawnsArePickedOnePerTeamFirstThenFarApart()
     {
-        PreviewSpawn[] spawns = [Spawn(2, 0), Spawn(2, 1), Spawn(2, 2), Spawn(3, 3)];
+        PreviewSpawn[] spawns = [Spawn(2, 0), Spawn(2, 64), Spawn(2, 600), Spawn(2, 2000), Spawn(3, 3)];
 
         IReadOnlyList<PreviewSpawn> two = CameraPlanner.PickSpawns(spawns, 2);
-        IReadOnlyList<PreviewSpawn> three = CameraPlanner.PickSpawns(spawns, 3);
+        IReadOnlyList<PreviewSpawn> four = CameraPlanner.PickSpawns(spawns, 4);
+        IReadOnlyList<PreviewSpawn> all = CameraPlanner.PickSpawns(spawns, 10);
 
         Assert.Equal([0f, 3f], two.Select(s => s.Origin.X));
-        Assert.Equal([0f, 3f, 1f], three.Select(s => s.Origin.X));
+        Assert.Equal([0f, 3f, 2000f, 600f], four.Select(s => s.Origin.X));
+        Assert.Equal([0f, 3f, 2000f, 600f], all.Select(s => s.Origin.X));
         Assert.Empty(CameraPlanner.PickSpawns([], 4));
+    }
+
+    /// <summary>
+    /// A named group of spawns (a map's arrivals from another level) gets a
+    /// view of its own before the cap is spent elsewhere, and a spawn beside
+    /// a shown one but facing away gets one too. A tf2 town once got four
+    /// views of one row of sixteen spawns and none of its eight arrivals.
+    /// </summary>
+    [Fact]
+    public void ANamedGroupAndASpawnFacingAwayGetTheirOwnViews()
+    {
+        PreviewSpawn[] spawns = [Spawn(0, 0), Spawn(0, 64), Spawn(0, 128), Spawn(0, 192), Spawn(0, 2000, 180, "arrival"), Spawn(0, 2064, 180, "arrival"), Spawn(0, 32, 170)];
+
+        IReadOnlyList<PreviewSpawn> picked = CameraPlanner.PickSpawns(spawns, 4);
+
+        Assert.Equal([(0f, ""), (2000f, "arrival"), (32f, "")], picked.Select(s => (s.Origin.X, s.Name)));
+    }
+
+    [Fact]
+    public async Task ANamedSpawnsViewSaysItsName()
+    {
+        PreviewTestMaps.TestEntity named = new("info_player_teamspawn", [("origin", "200 200 16"), ("TeamNum", "2"), ("targetname", "arrival")]);
+        PreviewScene scene = BspSceneBuilder.Build(await PreviewTestMaps.RoomAsync(true, named));
+
+        PlannedView view = CameraPlanner.Plan(scene, CameraPlanOptions.Default).Single(p => p.Camera.Kind == CameraKind.Spawn);
+
+        Assert.Equal("arrival", Assert.Single(scene.Spawns).Name);
+        Assert.StartsWith("spawn info_player_teamspawn \"arrival\" red at", view.Camera.Description, StringComparison.Ordinal);
     }
 
     [Fact]

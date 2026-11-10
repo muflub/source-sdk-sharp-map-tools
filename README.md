@@ -599,7 +599,10 @@ gets:
 
 The views are an overview straight down with everything above the highest
 spawn plus 200 units cut away (so roofs do not hide interiors), an
-isometric view, a player's-eye view from one spawn per team, then each
+isometric view, player's-eye views from up to four spawns (one per team
+first, then one per named group of spawns, such as arrivals from another
+level, then spawns far from those shown; a spawn a few steps along the
+same row facing the same way adds no view), then each
 `-camera`: a position, Source angles (pitch positive down), an optional
 horizontal field of view and an optional label. Every view is labelled; the
 orthographic ones get a scale bar and the others a wireframe figure the size

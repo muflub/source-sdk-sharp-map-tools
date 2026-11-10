@@ -241,7 +241,7 @@ public static class BspSceneBuilder
             if (SpawnClasses.Contains(entity.ClassName))
             {
                 int team = int.TryParse(entity.Get("TeamNum"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int t) ? t : 0;
-                spawns.Add(new PreviewSpawn(entity.ClassName, team, ParseVector(entity.Get("origin")), ParseVector(entity.Get("angles")).Y));
+                spawns.Add(new PreviewSpawn(entity.ClassName, team, ParseVector(entity.Get("origin")), ParseVector(entity.Get("angles")).Y, entity.Get("targetname") ?? string.Empty));
             }
         }
 

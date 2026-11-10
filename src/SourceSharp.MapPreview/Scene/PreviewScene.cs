@@ -132,7 +132,8 @@ public sealed record PreviewProp(string Model, Vec3 Origin, Vec3 Angles, int Ski
 /// <param name="Team">The team number (TF2 <c>TeamNum</c>: 2 red, 3 blue), or 0 for none.</param>
 /// <param name="Origin">The spawn's origin, at the player's feet.</param>
 /// <param name="Yaw">The facing, in degrees.</param>
-public readonly record struct PreviewSpawn(string ClassName, int Team, Vec3 Origin, float Yaw);
+/// <param name="Name">Its targetname, empty when it has none: spawns that share one form a group (the arrivals from another level, say).</param>
+public readonly record struct PreviewSpawn(string ClassName, int Team, Vec3 Origin, float Yaw, string Name = "");
 
 /// <summary>
 /// Everything a preview draws, in one immutable, renderer-agnostic form: built
