@@ -292,28 +292,53 @@ public static class NavClearanceBuilder
         if (!(scratch.LowestTop > above))
         {
             double lowest = double.PositiveInfinity;
-            lowest = Keep(scratch.Axial, above, lowest, static c => c.Top);
-            lowest = Keep(scratch.Sloped, above, lowest, static c => c.MaxZ);
-            lowest = Keep(scratch.Overhang, above, lowest, static c => c.MaxZ);
+            lowest = Keep(scratch.Axial, above, lowest, default(CandidateTop));
+            lowest = Keep(scratch.Sloped, above, lowest, default(SlopedTop));
+            lowest = Keep(scratch.Overhang, above, lowest, default(OverhangTop));
             scratch.LowestTop = lowest;
         }
 
-        static double Keep<T>(List<T> list, double above, double lowest, Func<T, double> top)
+        // The top is read through a struct, so each list's loop calls it
+        // directly rather than through a delegate.
+        static double Keep<T, TTop>(List<T> list, double above, double lowest, TTop top)
+            where TTop : struct, ITop<T>
         {
+            Span<T> items = CollectionsMarshal.AsSpan(list);
             int kept = 0;
-            for (int i = 0; i < list.Count; i++)
+            for (int i = 0; i < items.Length; i++)
             {
-                double t = top(list[i]);
+                double t = top.Of(items[i]);
                 if (t > above)
                 {
                     lowest = Math.Min(lowest, t);
-                    list[kept++] = list[i];
+                    items[kept++] = items[i];
                 }
             }
 
             list.RemoveRange(kept, list.Count - kept);
             return lowest;
         }
+    }
+
+    /// <summary>How <see cref="DropBelow"/> reads an entry's top.</summary>
+    private interface ITop<T>
+    {
+        double Of(in T item);
+    }
+
+    private readonly struct CandidateTop : ITop<Candidate>
+    {
+        public double Of(in Candidate item) => item.Top;
+    }
+
+    private readonly struct SlopedTop : ITop<SlopedFloor>
+    {
+        public double Of(in SlopedFloor item) => item.MaxZ;
+    }
+
+    private readonly struct OverhangTop : ITop<OverhangSolid>
+    {
+        public double Of(in OverhangSolid item) => item.MaxZ;
     }
 
     /// <summary>Whether a brush of a list overlaps a voxel.</summary>

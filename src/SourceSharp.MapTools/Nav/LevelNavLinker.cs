@@ -792,6 +792,7 @@ public static class LevelNavLinker
         private readonly Dictionary<uint, int> _recordOf = Enumerable.Range(0, Offsets.Length).ToDictionary(r => Offsets[r], r => r);
 
         /// <summary>A level voxel column's index, or -1 outside the grid or in an empty cell.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public int Column(int gx, int gy)
         {
             int n = CellVoxels;
@@ -805,6 +806,7 @@ public static class LevelNavLinker
         }
 
         /// <summary>A leaf's level voxel column coordinates.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public (int X, int Y) LevelColumn(int leaf)
         {
             int n = CellVoxels;
@@ -845,6 +847,7 @@ public static class LevelNavLinker
         }
 
         /// <summary>Whether every voxel of a column from one height to another is free for a class.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public bool Open(int column, int from, int to, Nav3dClipClass clipClass)
         {
             byte[] blocked = _blocked ?? throw new InvalidOperationException("the grid's blocked leaves are looked up first.");
@@ -868,6 +871,7 @@ public static class LevelNavLinker
         }
 
         /// <summary>Whether a column has a walkable floor for a class within a height range.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public bool FloorNear(int column, Nav3dClipClass clipClass, float lo, float hi)
         {
             for (int l = (int)ColumnStarts[column]; l < ColumnStarts[column + 1]; l++)
