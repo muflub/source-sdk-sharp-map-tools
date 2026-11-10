@@ -471,7 +471,9 @@ internal static class RoomNameAnalysis
 
                 if (RoomNeeds.IsKey(pair.Key))
                 {
-                    needs.Add((e, p, large is null ? CheckNeeds(room, entity, className, value) : CheckLargeNeeds(large, entity, className, value)));
+                    needs.Add((e, p, large is not null ? CheckLargeNeeds(large, entity, className, value)
+                        : definition is { Kit.Slots: > 1 } ? CheckSlotNeeds(definition, entity, className, value)
+                        : CheckNeeds(room, entity, className, value)));
                     continue;
                 }
 
@@ -732,6 +734,28 @@ internal static class RoomNameAnalysis
         }
 
         _ = CheckNeeds(room, entity, className, string.Join(",", parsed.Select(n => (n.Negated ? "!" : string.Empty) + "joined_east")));
+        return parsed;
+    }
+
+    /// <summary>
+    /// A one-cell room's <c>room_needs</c> under a kit of several door slots
+    /// (17.8 stage 9): a condition may name one of its sockets,
+    /// <c>joined_&lt;socket&gt;</c> (<c>joined_east_a</c>), as well as
+    /// everything a one-cell room's may (a side's <c>joined_east</c> then
+    /// holds when any door on that side is joined). The other rules are a
+    /// one-cell room's.
+    /// </summary>
+    private static List<RoomNeed> CheckSlotNeeds(RoomDefinition definition, LevelEntity entity, string className, string value)
+    {
+        if (!RoomNeeds.TryParse(value, definition.Sockets, out List<RoomNeed> parsed, out string? unknown))
+        {
+            throw new RoomLintException(
+                $"room {definition.Name}: entity {entity.Id} ({className}) room_needs \"{value}\": unknown direction or socket \"{unknown}\";"
+                + " use east, west, north, south, a diagonal, or joined_ with a side or a socket (joined_east_a), optionally negated with !.");
+        }
+
+        _ = CheckNeeds(definition.Name, entity, className, string.Join(",", parsed.Select(n =>
+            (n.Negated ? "!" : string.Empty) + (n.Socket >= 0 ? "joined_east" : (n.Joined ? "joined_" : string.Empty) + RoomDirections.Name(n.Direction)))));
         return parsed;
     }
 

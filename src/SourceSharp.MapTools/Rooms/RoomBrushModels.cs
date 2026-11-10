@@ -769,7 +769,7 @@ internal sealed class RoomBrushModels
 
         // The naming rule checked the key on the VMF before the compile
         // (RoomNameAnalysis.CheckVmf), with its own message.
-        if (!RoomNeeds.TryParse(value, definition.IsLarge ? definition.Sockets : null, out List<RoomNeed> parsed, out string? unknown))
+        if (!RoomNeeds.TryParse(value, definition.IsLarge || definition.Kit.Slots > 1 ? definition.Sockets : null, out List<RoomNeed> parsed, out string? unknown))
         {
             throw new RoomLintException(
                 $"room {room}: entity {id} ({className}) room_needs \"{value}\": unknown direction \"{unknown}\";"
