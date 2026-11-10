@@ -1,0 +1,13 @@
+# the rooms multi-cell sample level turned 270 degrees
+# the grid's first line is the north row; each line runs west to east; + is a cell the room to its south-west covers
+library: ../rooms.vmf
+rows: 7
+columns: 5
+grid:
+  - [+,         +,       +,           ~,       ~]
+  - [+,         +,       +,           hub@270, ~]
+  - [court@270, +,       +,           ~,       ~]
+  - [~,         hub@270, ~,           ~,       ~]
+  - [+,         +,       gallery@270, +,       hub@270]
+  - [hall@270,  +,       +,           +,       ~]
+  - [hub@270,   hub@270, atrium@270,  +,       hub@270]

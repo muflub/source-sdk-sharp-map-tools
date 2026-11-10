@@ -1,0 +1,11 @@
+"GameInfo"
+{
+	game	"Rooms multi-cell sample"
+	FileSystem
+	{
+		SearchPaths
+		{
+			game	|gameinfo_path|.
+		}
+	}
+}
