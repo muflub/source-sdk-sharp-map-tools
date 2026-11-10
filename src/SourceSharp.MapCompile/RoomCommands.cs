@@ -965,6 +965,17 @@ public static partial class RoomCommands
                     names);
             }
 
+            // The generator lines rooms up by the walls their doors are on,
+            // one door per cell edge; a kit of several door slots would need
+            // it to match slots too, so such a library is left out, plainly.
+            if (definitions.FirstOrDefault(d => d.Kit.Slots > 1) is { } slotted)
+            {
+                await output.WriteLineAsync(
+                    $"ssmap layout: the door kit has door_slots {slotted.Kit.Slots}; the generator lines rooms up at one door per cell edge,"
+                    + " so it lays out libraries of one door slot only. Write a level of slot rooms by hand.").ConfigureAwait(false);
+                return ExitFailed;
+            }
+
             if (sequenceText is not null)
             {
                 foreach (LevelGrid made in LevelGenerator.GenerateSequence(definitions, options, sequence, baseName!, library, budget, roles, distance))
@@ -1528,12 +1539,13 @@ public static partial class RoomCommands
                 Box plug = RoomLinter.SealBox(definition, socket, cell);
                 Vec3 mins = room.Corner + plug.Mins;
                 Vec3 maxs = room.Corner + plug.Maxs;
-                string wall = RoomLibraryVmf.DefaultSocketName(definition.IsLarge, socket.Facing, socket.Offset);
+                string wall = RoomLibraryVmf.DefaultSocketName(definition.IsLarge, socket.Facing, socket.Offset, definition.Kit.Slots, socket.Slot);
                 string name = socket.Name == wall ? wall : $"{wall} \"{socket.Name}\"";
                 text.Append(CultureInfo.InvariantCulture,
                     $"  {name}: ({Num(mins)}) to ({Num(maxs)}), "
                     + $"{Num(definition.Kit.Width)} wide x {Num(definition.Kit.Height)} high x {Num(definition.Kit.Depth)} deep"
-                    + $"{(definition.Kit.Sill == DoorSill.Floor ? ", on the floor" : string.Empty)}\n");
+                    + $"{(definition.Kit.Sill == DoorSill.Floor ? ", on the floor" : string.Empty)}"
+                    + $"{(definition.Kit.Slots != 1 ? $", slot {socket.Slot + 1} of {definition.Kit.Slots}" : string.Empty)}\n");
             }
         }
 
