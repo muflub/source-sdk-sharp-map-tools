@@ -1456,6 +1456,24 @@ public sealed class RoomCommandsTests
         Assert.Equal("  east: (240, 80, 16) to (256, 176, 144), 96 wide x 128 high x 16 deep, on the floor", lines[2]);
     }
 
+    /// <summary>
+    /// A room larger than one cell lists its footprint's box and cells, and
+    /// each door by its cell edge (<c>east0</c>, <c>west1</c>, ...).
+    /// </summary>
+    [Fact]
+    public async Task ALargerRoomIsListedWithItsFootprint()
+    {
+        InMemoryFileSystem fs = Game(MultiCellHarness.Hall);
+        using StringWriter output = new();
+
+        Assert.Equal(Program.ExitSuccess, await RoomCommands.RunRoomsAsync(fs, ["/game/maps/rooms.vmf"], output));
+
+        string[] lines = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal("hall: cell at (0, 0, 0), 512 x 512 x 256, 2 x 2 cells, 4 door(s)", lines[1]);
+        Assert.Equal("  east0: (496, 80, 16) to (512, 176, 240), 96 wide x 224 high x 16 deep", lines[2]);
+        Assert.Equal("  west1: (0, 336, 16) to (16, 432, 240), 96 wide x 224 high x 16 deep", lines[3]);
+    }
+
     /// <summary>Anything but one library path is a usage error.</summary>
     [Theory]
     [InlineData("")]

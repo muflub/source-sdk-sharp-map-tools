@@ -192,22 +192,44 @@ public readonly record struct SocketKit(float Width, float Height, float Depth)
 }
 
 /// <summary>
-/// One opening in a room's shell, on one cell face.
+/// One opening in a room's shell, on one cell edge of its perimeter.
 /// </summary>
-/// <param name="Facing">Which cell face the opening is in, room-local.</param>
+/// <param name="Facing">Which side of the room the opening is in, room-local.</param>
 /// <param name="Name">The socket's name, unique in the room.</param>
 /// <remarks>
+/// <para>
 /// In a room library a socket is found from its door plug
 /// (<see cref="RoomLibraryVmf"/>): a world brush filling the kit's plug box
-/// on a wall makes that wall a socket. That the plug really is the kit's
-/// trigger-surfaced hardware, and that the room holds no other, is the
-/// linter's job, see <see cref="RoomLinter"/>.
+/// at one cell edge of the room's perimeter makes that edge a socket. That
+/// the plug really is the kit's trigger-surfaced hardware, and that the room
+/// holds no other, is the linter's job, see <see cref="RoomLinter"/>.
+/// </para>
+/// <para>
+/// <b>A socket's place is (face, offset).</b> A room of one cell has one
+/// cell edge per face, so its sockets are told apart by their face alone
+/// and every offset is 0. A room larger than one cell (the rooms design,
+/// 17.8) has one cell edge per cell along each face, and
+/// <see cref="Offset"/> counts them from the room's own south (on its east
+/// and west faces) or west (on its north and south faces). Everything per
+/// socket (the plug box, the joints, the door graph, navigation's door
+/// points, the level map's doors) is keyed by the socket, not by its face,
+/// and its place comes from one function (<see cref="RoomLinter.SealBox"/>),
+/// so a further position along an edge would be one more field here.
+/// </para>
 /// </remarks>
 public readonly record struct RoomSocket(RoomFacing Facing, string Name)
 {
+    /// <summary>
+    /// The cell edge of its face the socket is on: 0 for a room of one cell,
+    /// and 0 to the face's length in cells less one for a larger room,
+    /// counted from the room's own south (east and west faces) or west
+    /// (north and south faces).
+    /// </summary>
+    public int Offset { get; init; }
+
     /// <summary>Validates the socket.</summary>
     /// <exception cref="ArgumentException">The name is blank.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">The facing is not one of four.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The facing is not one of four, or the offset is negative.</exception>
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(Name))
@@ -219,11 +241,37 @@ public readonly record struct RoomSocket(RoomFacing Facing, string Name)
         {
             throw new ArgumentOutOfRangeException(nameof(Facing), Facing, "A room has four cell faces.");
         }
+
+        if (Offset < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(Offset), Offset, "A socket's cell offset counts from 0.");
+        }
+    }
+
+    /// <summary>
+    /// The socket as messages print it: its facing and name, with its offset
+    /// only when it is not 0, so a one-cell room's socket prints as it did
+    /// before sockets had offsets.
+    /// </summary>
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("Facing = ");
+        builder.Append(Facing.ToString());
+        builder.Append(", Name = ");
+        builder.Append(Name);
+        if (Offset != 0)
+        {
+            builder.Append(", Offset = ");
+            builder.Append(Offset);
+        }
+
+        return true;
     }
 }
 
 /// <summary>
-/// One room of a library: a sealed box built to occupy exactly one grid cell.
+/// One room of a library: a sealed box built to occupy one grid cell, or a
+/// rectangle of them (<see cref="CellsX"/> by <see cref="CellsY"/>).
 /// </summary>
 /// <param name="Name">The room's name, unique in its library file.</param>
 /// <param name="CellSize">The edge the box is built for; a whole-cell placement.</param>
@@ -276,19 +324,73 @@ public sealed record RoomDefinition(string Name, float CellSize, SocketKit Kit, 
     public float Height { get; init; } = CellSize;
 
     /// <summary>
-    /// Whether the room is shaped: taller or lower than its cell. A shaped
-    /// room carries the pack's <c>SHAP</c> section (<see cref="RoomShape"/>),
-    /// and a pack holding one is written at version 5 (<see cref="RoomPack"/>);
-    /// a cube room is what it always was, to the byte.
+    /// The most cells a room may cover along either of its axes: a guard, as
+    /// a level's own grid has one (<see cref="LevelYaml.MaxCells"/>), so a
+    /// mistyped footprint is refused rather than compiled.
     /// </summary>
-    public bool IsShaped => Height != CellSize;
+    public const int MaxFootprint = 16;
 
     /// <summary>
-    /// The room's box, room-local: <c>[0, c] × [0, c] × [0, h]</c>. What the
-    /// split, the lint, the prop and furniture cell rules and navigation hold
-    /// the room to; the cube <c>[0, c]³</c> for a room that is not shaped.
+    /// How many cells the room covers along its own +x: its <c>info_room</c>'s
+    /// <c>room_footprint</c> (the rooms design, 17.8), 1 by default.
     /// </summary>
-    public Box Bounds => new(Vec3.Zero, new Vec3(CellSize, CellSize, Height));
+    /// <remarks>
+    /// An init property with the one-cell default, like <see cref="Height"/>,
+    /// so every room that does not ask is the definition it always was.
+    /// </remarks>
+    public int CellsX { get; init; } = 1;
+
+    /// <summary>How many cells the room covers along its own +y, 1 by default (<see cref="CellsX"/>).</summary>
+    public int CellsY { get; init; } = 1;
+
+    /// <summary>
+    /// Whether the room covers more than one cell (17.8): its tree is
+    /// compiled to split at every cell face, and the link routes each cell
+    /// it covers to that cell's subtree.
+    /// </summary>
+    public bool IsLarge => CellsX != 1 || CellsY != 1;
+
+    /// <summary>Whether the room's height is its own: taller or lower than its cell.</summary>
+    public bool HasOwnHeight => Height != CellSize;
+
+    /// <summary>
+    /// Whether the room is shaped: taller or lower than its cell, or larger
+    /// than one cell. A shaped room carries the pack's <c>SHAP</c> section
+    /// (<see cref="RoomShape"/>), and a pack holding one is written at
+    /// version 5, or 6 for a larger room (<see cref="RoomPack"/>); a cube
+    /// room is what it always was, to the byte.
+    /// </summary>
+    public bool IsShaped => HasOwnHeight || IsLarge;
+
+    /// <summary>
+    /// The room's box, room-local: <c>[0, W·c] × [0, D·c] × [0, h]</c>. What
+    /// the split, the lint, the prop and furniture cell rules and navigation
+    /// hold the room to; the cube <c>[0, c]³</c> for a room that is not
+    /// shaped.
+    /// </summary>
+    public Box Bounds => new(Vec3.Zero, new Vec3(SpanX, SpanY, Height));
+
+    /// <summary>The footprint's extent along the room's own +x, in units: the cell size for a room of one cell.</summary>
+    public float SpanX => CellsX == 1 ? CellSize : CellsX * CellSize;
+
+    /// <summary>The footprint's extent along the room's own +y, in units.</summary>
+    public float SpanY => CellsY == 1 ? CellSize : CellsY * CellSize;
+
+    /// <summary>How many cell edges a face has: the footprint's length along it.</summary>
+    /// <param name="facing">The face.</param>
+    /// <returns><see cref="CellsY"/> on the east and west faces, <see cref="CellsX"/> on the north and south.</returns>
+    public int EdgesOn(RoomFacing facing) => facing is RoomFacing.PositiveX or RoomFacing.NegativeX ? CellsY : CellsX;
+
+    /// <summary>The room-local cell a socket stands in: the cell inside the footprint whose edge it is on.</summary>
+    /// <param name="socket">The socket.</param>
+    /// <returns>The cell, 0-based from the room's south-west.</returns>
+    public (int X, int Y) CellOf(RoomSocket socket) => socket.Facing switch
+    {
+        RoomFacing.PositiveX => (CellsX - 1, socket.Offset),
+        RoomFacing.NegativeX => (0, socket.Offset),
+        RoomFacing.PositiveY => (socket.Offset, CellsY - 1),
+        _ => (socket.Offset, 0),
+    };
 
     /// <summary>Validates the definition.</summary>
     /// <exception cref="ArgumentException">The name is blank or two sockets share a face.</exception>
@@ -305,18 +407,36 @@ public sealed record RoomDefinition(string Name, float CellSize, SocketKit Kit, 
 
         RoomNumbers.RequirePositiveFinite(CellSize, nameof(CellSize));
         Kit.Validate();
-        if (IsShaped && HeightProblem(Height, Kit) is { } problem)
+        if (HasOwnHeight && HeightProblem(Height, Kit) is { } problem)
         {
             throw new ArgumentOutOfRangeException(nameof(Height), Height, $"room {Name}: room_height {problem}");
         }
-        HashSet<RoomFacing> seen = [];
+
+        if (CellsX < 1 || CellsX > MaxFootprint || CellsY < 1 || CellsY > MaxFootprint)
+        {
+            throw new ArgumentOutOfRangeException(nameof(CellsX), (CellsX, CellsY),
+                string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                    $"room {Name}: a footprint of {CellsX} x {CellsY} cells; a room covers 1 to {MaxFootprint} cells each way."));
+        }
+
+        HashSet<(RoomFacing, int)> seen = [];
         foreach (RoomSocket socket in Sockets)
         {
             socket.Validate();
-            if (!seen.Add(socket.Facing))
+            if (socket.Offset >= EdgesOn(socket.Facing))
+            {
+                throw new ArgumentOutOfRangeException(nameof(Sockets), socket.Offset,
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                        $"socket \"{socket.Name}\" is at cell {socket.Offset} of a face {EdgesOn(socket.Facing)} cell(s) long."));
+            }
+
+            if (!seen.Add((socket.Facing, socket.Offset)))
             {
                 throw new ArgumentException(
-                    string.Concat("Two sockets on the same face: ", socket.Facing.ToString(), "."),
+                    IsLarge
+                        ? string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                            $"Two sockets at one cell edge: {socket.Facing} at cell {socket.Offset}.")
+                        : string.Concat("Two sockets on the same face: ", socket.Facing.ToString(), "."),
                     nameof(Sockets));
             }
         }

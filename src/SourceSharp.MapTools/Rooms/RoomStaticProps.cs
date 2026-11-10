@@ -664,12 +664,13 @@ internal sealed class RoomStaticProps
     private static async Task<Box> CheckCellAsync(
         RoomDefinition definition, RoomProp prop, string model, IStaticPropHull hull, StaticProp record, CancellationToken cancellationToken)
     {
-        // The room's box (17.6): the cell in x and y, the room's height in z.
-        float cell = definition.CellSize;
+        // The room's box (17.6, 17.8): its footprint in x and y, the room's
+        // height in z.
+        float spanX = definition.SpanX, spanY = definition.SpanY;
         float top = definition.Height;
         (Vec3 mins, Vec3 maxs) = await hull.GetAabbAsync(record.Origin, record.Angles, cancellationToken).ConfigureAwait(false);
         float reach = Math.Max(
-            Math.Max(Math.Max(-mins.X, maxs.X - cell), Math.Max(-mins.Y, maxs.Y - cell)),
+            Math.Max(Math.Max(-mins.X, maxs.X - spanX), Math.Max(-mins.Y, maxs.Y - spanY)),
             Math.Max(-mins.Z, maxs.Z - top));
         Box bounds = new(mins, maxs);
         if (reach <= RoomLinter.CellEpsilon)
@@ -737,14 +738,15 @@ internal sealed class RoomStaticProps
                     continue;
                 }
 
-                regions.Add([Beyond(a, s, s > 0 ? (a == 2 ? definition.Height : cell) + e : -e)]);
+                regions.Add([Beyond(a, s, s > 0 ? (a == 2 ? definition.Height : a == 0 ? definition.SpanX : definition.SpanY) + e : -e)]);
             }
         }
 
         // Beyond the socket's face: past the doorway's depth, and beside the
         // opening in the two axes of the face.
-        (Vec3 Normal, float Dist) past = Beyond(axis, sign, sign > 0 ? cell + e : -e);
-        regions.Add([Beyond(axis, sign, sign > 0 ? cell + depth + e : -depth - e)]);
+        float face = axis == 0 ? definition.SpanX : definition.SpanY;
+        (Vec3 Normal, float Dist) past = Beyond(axis, sign, sign > 0 ? face + e : -e);
+        regions.Add([Beyond(axis, sign, sign > 0 ? face + depth + e : -depth - e)]);
         for (int a = 0; a < 3; a++)
         {
             if (a == axis)

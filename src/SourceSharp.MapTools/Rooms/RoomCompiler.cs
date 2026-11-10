@@ -235,8 +235,13 @@ public static class RoomCompiler
         IReadOnlyList<RoomPropSource> props = RoomStaticProps.Sources(map.Entities);
         RoomStaticProps.RefuseTexelLighting(definition.Name, props);
 
-        // The compile. A room that leaks is not a room.
-        VbspResult vbsp = await Vbsp.CompileAsync(map, context, cancellationToken).ConfigureAwait(false);
+        // The compile. A room that leaks is not a room. A room larger than
+        // one cell compiles on cell-sized blocks (RoomCellTree), so its tree
+        // splits at every cell face first; a room of one cell compiles as
+        // any map does.
+        VbspResult vbsp = definition.IsLarge
+            ? await Vbsp.CompileRoomAsync(map, context, LargeBlockSize(definition), cancellationToken).ConfigureAwait(false)
+            : await Vbsp.CompileAsync(map, context, cancellationToken).ConfigureAwait(false);
         if (vbsp.Bsp is null || vbsp.Portals is null)
         {
             throw new RoomLintException(
@@ -249,6 +254,7 @@ public static class RoomCompiler
         // interior never escapes the cell.
         IReadOnlyList<Box> seals = SealBoxes(definition);
         RoomLintReport lint = RoomLinter.CheckCompiled(definition, vbsp.Bsp, seals, leaked: false);
+        RoomCellTree? cellTree = RoomCellTree.Derive(definition, vbsp.Bsp);
 
         // The vvis half: the room's PVS with its doors shut.
         //
@@ -340,7 +346,21 @@ public static class RoomCompiler
             Displacements = displacements,
             DetailProps = detailProps,
             MapView = mapView,
+            CellTree = cellTree,
         };
+    }
+
+    /// <summary>
+    /// The block size a larger room compiles on: its cell size, which must be
+    /// a whole number of units (vbsp's blocks are), refused otherwise.
+    /// </summary>
+    private static int LargeBlockSize(RoomDefinition definition)
+    {
+        int size = (int)definition.CellSize;
+        return size == definition.CellSize && size >= 1
+            ? size
+            : throw new RoomLintException(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"room {definition.Name}: a room of {definition.CellsX} x {definition.CellsY} cells compiles on blocks of its cell size, so the cell size {definition.CellSize:0.###} must be a whole number of units."));
     }
 
     /// <summary>The kit's plug boxes for every socket, room-local, in socket order.</summary>
@@ -372,6 +392,16 @@ public static class RoomCompiler
     /// the key even when the geometry is identical — over-missing, which the
     /// plan's §10a accepts in exchange for never serving a stale room.
     /// </remarks>
+    /// <summary>
+    /// A larger room's footprint and socket offsets in the compile's claimed
+    /// key, or nothing for a room of one cell, whose key is what it was.
+    /// </summary>
+    internal static string FootprintText(RoomDefinition definition) =>
+        definition.IsLarge
+            ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"|f{definition.CellsX}x{definition.CellsY}:")
+                + string.Join(",", definition.Sockets.Select(s => s.Offset.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+            : string.Empty;
+
     internal static string SillText(SocketKit kit) => kit.Sill == DoorSill.Floor ? ",floor" : string.Empty;
 
     private static IReadOnlyList<string> InputKeysOf(VmfDocument document, RoomDefinition definition, VbspContext context)
@@ -383,7 +413,8 @@ public static class RoomCompiler
             + definition.Kit.Height.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ","
             + definition.Kit.Depth.ToString("R", System.Globalization.CultureInfo.InvariantCulture)
             + SillText(definition.Kit)
-            + (definition.IsShaped ? "|h" + definition.Height.ToString("R", System.Globalization.CultureInfo.InvariantCulture) : string.Empty);
+            + (definition.HasOwnHeight ? "|h" + definition.Height.ToString("R", System.Globalization.CultureInfo.InvariantCulture) : string.Empty)
+            + FootprintText(definition);
         _ = context; // context-dependent keys (options, content revisions) join at the cache layer, §10a.
         return [model, claimed];
     }

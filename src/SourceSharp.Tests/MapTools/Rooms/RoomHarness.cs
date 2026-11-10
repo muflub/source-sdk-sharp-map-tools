@@ -187,10 +187,15 @@ internal static class RoomHarness
         world.AddKey("classname", "worldspawn");
         library.Chunks.Add(world);
         List<VmfChunk> entities = [];
+        float x = 0;
         for (int i = 0; i < rooms.Length; i++)
         {
             RoomDefinition room = rooms[i];
-            Vec3 corner = new(i * (room.CellSize + LibraryGap), 0, 0);
+
+            // Rooms of one cell stand a cell and a gap apart, as they always
+            // did; a larger room takes its footprint's width.
+            Vec3 corner = new(x, 0, 0);
+            x = corner.X + room.SpanX + LibraryGap;
             QuarterTurn move = QuarterTurn.Translation(corner);
             VmfDocument model = BuildRoomModel(room);
             foreach (VmfChunk solid in model.GetChunk(MapFileLoader.WorldChunk)!.GetChunks(MapFileLoader.SolidChunk))
@@ -244,16 +249,21 @@ internal static class RoomHarness
             marker.AddKey(RoomLibraryVmf.DoorSillKey, RoomLibraryVmf.DoorSillFloor);
         }
 
-        if (room.IsShaped)
+        if (room.HasOwnHeight)
         {
             marker.AddKey(RoomLibraryVmf.RoomHeightKey, VmfPlacement.Format(room.Height));
+        }
+
+        if (room.IsLarge)
+        {
+            marker.AddKey(RoomLibraryVmf.RoomFootprintKey, string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{room.CellsX} {room.CellsY}"));
         }
 
         // A socket named other than its wall is named on the marker, as an
         // author would; the default name needs no key.
         foreach (RoomSocket socket in room.Sockets)
         {
-            string wall = RoomLibraryVmf.WallName(socket.Facing);
+            string wall = RoomLibraryVmf.DefaultSocketName(room.IsLarge, socket.Facing, socket.Offset);
             if (socket.Name != wall)
             {
                 marker.AddKey(RoomLibraryVmf.SocketKeyPrefix + wall, socket.Name);

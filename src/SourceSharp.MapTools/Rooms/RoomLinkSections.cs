@@ -416,6 +416,49 @@ internal static class RoomLinkSections
     }
 
     /// <summary>
+    /// <see cref="Open"/> for a section with more than one revision this
+    /// build reads: the reader after the revision, and the revision itself,
+    /// for the caller to choose its layout by.
+    /// </summary>
+    /// <param name="section">The section's bytes, or null.</param>
+    /// <param name="room">The room, for messages.</param>
+    /// <param name="tag">The section's tag, for messages.</param>
+    /// <param name="revision">The section's revision, or 0 without a section.</param>
+    /// <returns>The reader, or null without a section.</returns>
+    internal static Reader? OpenAnyRevision(ArraySegment<byte>? section, string room, string tag, out int revision)
+    {
+        revision = 0;
+        if (section is not { } bytes)
+        {
+            return null;
+        }
+
+        if (bytes.Count < HeaderBytes)
+        {
+            throw new LinkException($"room pack entry \"{room}\": its \"{tag}\" section is truncated.");
+        }
+
+        byte codec = bytes[0];
+        long length = BinaryPrimitives.ReadInt64BigEndian(bytes.AsSpan(1));
+        ArraySegment<byte> body = bytes[HeaderBytes..];
+        ArraySegment<byte> payload = (RoomLinkCodec)codec switch
+        {
+            RoomLinkCodec.None => body,
+            RoomLinkCodec.Deflate or RoomLinkCodec.Brotli => Decompress((RoomLinkCodec)codec, body, length, room, tag),
+            _ => throw new LinkException($"room {room}: section {tag} uses codec {codec}, which this build does not read."),
+        };
+
+        if (payload.Count != length)
+        {
+            throw new LinkException($"room {room}: section {tag} decodes to {payload.Count} bytes, not the {length} it records.");
+        }
+
+        Reader reader = new(payload, room, tag);
+        revision = reader.Int();
+        return reader;
+    }
+
+    /// <summary>
     /// A compressed payload, decoded into at most <paramref name="length"/>
     /// bytes (the length the section records, which also bounds what a
     /// lying section can make the reader allocate); what it decodes to is

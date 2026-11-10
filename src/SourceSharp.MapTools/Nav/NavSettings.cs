@@ -249,7 +249,7 @@ public sealed record NavSettings
     {
         ArgumentNullException.ThrowIfNull(definition);
         int n = CellVoxels(definition.CellSize);
-        if (!definition.IsShaped)
+        if (!definition.HasOwnHeight)
         {
             return n;
         }

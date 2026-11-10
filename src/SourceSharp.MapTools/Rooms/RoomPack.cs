@@ -119,7 +119,7 @@ public sealed record RoomPackItem(string Name, ReadOnlyMemory<byte> Room)
         // A shaped room's shape (17.6), right after the counts: the link
         // reads it before the room's container is checked. A cube room gets
         // none, so its entry is what it was before heights.
-        IReadOnlyList<RoomPackSectionData> shape = RoomShape.ToSection(room.Definition) is { } shaped ? [shaped] : [];
+        IReadOnlyList<RoomPackSectionData> shape = RoomShape.ToSection(room.Definition, room.CellTreeOfCompile) is { } shaped ? [shaped] : [];
 
         // The static props, when the room has any, right after the counts:
         // the link reads them for every placement whatever its turn (the
@@ -490,10 +490,26 @@ public static class RoomPack
 
     /// <summary>
     /// The newest pack version this build writes and reads: the version of a
-    /// pack holding a shaped room (<see cref="RoomShape"/>; <see cref="RoomPack"/>'s
-    /// remarks on versions).
+    /// pack holding a room larger than one cell (the rooms design, 17.8 and
+    /// 17.11; <see cref="RoomShape"/>, <see cref="RoomPack"/>'s remarks on
+    /// versions).
     /// </summary>
-    public const int Version = 5;
+    /// <remarks>
+    /// A build that reads only version 5 would read a larger room's
+    /// <c>SHAP</c> section, find a revision it does not read and refuse the
+    /// room; but it would do so room by room, and a pack whose larger rooms
+    /// a level does not place would link as if nothing were there. The
+    /// version says what the pack holds before any room is read, so such a
+    /// build refuses the pack itself.
+    /// </remarks>
+    public const int Version = 6;
+
+    /// <summary>
+    /// The version of a pack holding a room of its own height and none
+    /// larger than one cell: version 5, as heights wrote it, so such a pack
+    /// keeps its bytes.
+    /// </summary>
+    public const int ShapedVersion = 5;
 
     /// <summary>
     /// The version a pack of cube rooms is written at: version 4, as before
@@ -620,12 +636,14 @@ public static class RoomPack
             indexEnd += 4 + names[i].Length + 4 + ((long)sections[i].Count * SectionBytes);
         }
 
-        // Version 5 only for a pack holding a shaped room; a pack of cubes
-        // keeps version 4 and its bytes (the remarks on versions).
+        // Version 6 only for a pack holding a room larger than one cell,
+        // version 5 for one holding a room of its own height, and a pack of
+        // cubes keeps version 4 and its bytes (the remarks on versions).
         bool shaped = sections.Any(room => room.Any(section => section.Tag == RoomShape.SectionTag));
+        bool large = shaped && sections.Any(room => room.Any(RoomShape.IsLarge));
         using MemoryStream header = new((int)Math.Min(indexEnd, int.MaxValue));
         header.Write(Encoding.ASCII.GetBytes(Magic));
-        WriteInt32(header, shaped ? Version : CubeVersion);
+        WriteInt32(header, large ? Version : shaped ? ShapedVersion : CubeVersion);
         WriteInt32(header, librarySections.Count);
         WriteInt32(header, rooms.Count);
         long offset = indexEnd;
@@ -942,11 +960,11 @@ public static class RoomPack
                 // Only a version 5 pack holds shaped rooms: a shape in an
                 // older one was not written by any build that wrote that
                 // version, so the pack is damaged.
-                if (index.Version < Version)
+                if (index.Version < ShapedVersion)
                 {
                     throw new LinkException(
                         $"room pack entry \"{name}\" has a \"{RoomShape.SectionTag}\" section in a version {index.Version} pack;"
-                        + $" only a version {Version} pack holds shaped rooms, so the pack is damaged; recompile the library with ssmap room.");
+                        + $" only a version {ShapedVersion} pack holds shaped rooms, so the pack is damaged; recompile the library with ssmap room.");
                 }
 
                 wanted.Add((name, shape));
@@ -1107,6 +1125,15 @@ public static class RoomPack
             using MemoryStream container = new(bytes.Array!, bytes.Offset, bytes.Count, writable: false);
             RoomObject room;
             RoomShapeData? shape = RoomShape.Read(Section(name, RoomShape.SectionTag), name);
+            if (shape?.Cells is not null && index.Version < Version)
+            {
+                // A larger room's shape in a pack of an older version was not
+                // written by any build that wrote that version.
+                throw new LinkException(
+                    $"room pack entry \"{name}\" covers several cells in a version {index.Version} pack;"
+                    + $" only a version {Version} pack holds rooms larger than one cell, so the pack is damaged; recompile the library with ssmap room.");
+            }
+
             try
             {
                 room = await RoomObjectStore.LoadShapedAsync(container, shape, cancellationToken).ConfigureAwait(false);

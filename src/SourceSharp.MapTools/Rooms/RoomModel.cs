@@ -160,31 +160,24 @@ public static class RoomModel
     private static List<VmfChunk> RoomSolids(RoomDefinition definition, string shell, HashSet<string>? jointed)
     {
         List<VmfChunk> solids = [];
-        float cell = definition.CellSize;
+        float spanX = definition.SpanX;
+        float spanY = definition.SpanY;
         float top = definition.Height;
         float wall = definition.Kit.Depth;
         int id = 1_000_000;
 
         // The floor at z = 0 and the ceiling at the room's own height (the
-        // cell size for a cube); the doors below stay where a cube room's are.
-        solids.Add(Slab(shell, (0, 0, 0), (cell, cell, wall), id++));
-        solids.Add(Slab(shell, (0, 0, top - wall), (cell, cell, top), id++));
+        // cell size for a cube), each one slab over the whole footprint; the
+        // doors below stay where a cube room's are.
+        solids.Add(Slab(shell, (0, 0, 0), (spanX, spanY, wall), id++));
+        solids.Add(Slab(shell, (0, 0, top - wall), (spanX, spanY, top), id++));
 
         foreach (RoomFacing facing in Enum.GetValues<RoomFacing>())
         {
-            RoomSocket? socket = null;
-            foreach (RoomSocket s in definition.Sockets)
+            List<RoomSocket> onFace = [.. definition.Sockets.Where(s => s.Facing == facing).OrderBy(s => s.Offset)];
+            foreach ((float, float, float, float) band in WallBands(definition, facing, onFace))
             {
-                if (s.Facing == facing)
-                {
-                    socket = s;
-                }
-            }
-
-            foreach ((float, float, float, float) band in WallBands(definition, socket))
-            {
-                (Vec3 mins, Vec3 maxs) = WallBox(facing, cell, wall, band);
-                _ = mins.X;
+                (Vec3 mins, Vec3 maxs) = WallBox(facing, spanX, spanY, wall, band);
                 solids.Add(Slab(shell, mins, maxs, id++));
             }
         }
@@ -196,7 +189,7 @@ public static class RoomModel
                 continue;
             }
 
-            Box seal = RoomLinter.SealBox(definition, socket, cell);
+            Box seal = RoomLinter.SealBox(definition, socket, definition.CellSize);
             solids.Add(Slab(PlugMaterial, seal.Mins, seal.Maxs, id++));
         }
 
@@ -204,45 +197,68 @@ public static class RoomModel
     }
 
     /// <summary>
-    /// The bands of one cell face: a solid face is one band; a face with a
-    /// socket is the full-height strips left and right of the opening, the
-    /// lintel above it, and a sill below it when the opening does not reach
-    /// the floor. The opening itself is the kit rectangle exactly, placed as
-    /// on a cube room's face; a taller room's lintel reaches its own ceiling.
+    /// The bands of one face: a solid face is one band; a face with sockets
+    /// is the full-height strips between and beside the openings, then the
+    /// lintel above each opening and a sill below it when it does not reach
+    /// the floor. Each opening is the kit rectangle exactly, placed at its
+    /// cell edge as on a cube room's face; a taller room's lintels reach its
+    /// own ceiling. A face of one cell with one socket gives the bands it
+    /// always gave, in the same order.
     /// </summary>
-    private static List<(float, float, float, float)> WallBands(RoomDefinition definition, RoomSocket? socket)
+    private static List<(float, float, float, float)> WallBands(RoomDefinition definition, RoomFacing facing, List<RoomSocket> sockets)
     {
         float cell = definition.CellSize;
         float top = definition.Height;
-        if (socket is null)
+        float length = facing is RoomFacing.PositiveX or RoomFacing.NegativeX ? definition.SpanY : definition.SpanX;
+        if (sockets.Count == 0)
         {
-            return [(0f, 0f, cell, top)];
+            return [(0f, 0f, length, top)];
         }
 
         (float u0, _, float u1, _) = definition.Kit.OpeningUnit(cell);
-        float a0 = u0 * cell;
-        float a1 = u1 * cell;
         (float b0, float b1) = definition.Kit.OpeningZ(cell);
+        List<(float A0, float A1)> openings = [];
+        foreach (RoomSocket socket in sockets)
+        {
+            float a0 = u0 * cell;
+            float a1 = u1 * cell;
+            if (socket.Offset != 0)
+            {
+                a0 += socket.Offset * cell;
+                a1 += socket.Offset * cell;
+            }
+
+            openings.Add((a0, a1));
+        }
 
         List<(float, float, float, float)> bands = [];
-        if (a0 > 0.001f)
+        float from = 0f;
+        foreach ((float a0, float a1) in openings)
         {
-            bands.Add((0f, 0f, a0, top));
+            if (a0 > from + 0.001f)
+            {
+                bands.Add((from, 0f, a0, top));
+            }
+
+            from = a1;
         }
 
-        if (a1 < cell - 0.001f)
+        if (from < length - 0.001f)
         {
-            bands.Add((a1, 0f, cell, top));
+            bands.Add((from, 0f, length, top));
         }
 
-        if (b1 < top - 0.001f)
+        foreach ((float a0, float a1) in openings)
         {
-            bands.Add((a0, b1, a1, top));
-        }
+            if (b1 < top - 0.001f)
+            {
+                bands.Add((a0, b1, a1, top));
+            }
 
-        if (b0 > 0.001f)
-        {
-            bands.Add((a0, 0f, a1, b0));
+            if (b0 > 0.001f)
+            {
+                bands.Add((a0, 0f, a1, b0));
+            }
         }
 
         return bands;
@@ -251,18 +267,20 @@ public static class RoomModel
     /// <summary>
     /// The wall slab's box for a face. <c>(a0,b0)-(a1,b1)</c> is the band in
     /// face coordinates: <c>a</c> runs along the face, <c>b</c> up, both within
-    /// <c>[0,cell]</c> along and <c>[0,height]</c> up; the slab spans the wall's thickness inside the cell.
+    /// the face's length along and <c>[0,height]</c> up; the slab spans the
+    /// wall's thickness inside the footprint, whose far sides are
+    /// <paramref name="spanX"/> and <paramref name="spanY"/>.
     /// </summary>
-    private static (Vec3 Mins, Vec3 Maxs) WallBox(RoomFacing facing, float cell, float wall, (float, float, float, float) band)
+    private static (Vec3 Mins, Vec3 Maxs) WallBox(RoomFacing facing, float spanX, float spanY, float wall, (float, float, float, float) band)
     {
         (float a0, float b0, float a1, float b1) = band;
         return facing switch
         {
             // X-facing wall: `a` runs along y, `b` up z.
-            RoomFacing.PositiveX => (new Vec3(cell - wall, a0, b0), new Vec3(cell, a1, b1)),
+            RoomFacing.PositiveX => (new Vec3(spanX - wall, a0, b0), new Vec3(spanX, a1, b1)),
             RoomFacing.NegativeX => (new Vec3(0, a0, b0), new Vec3(wall, a1, b1)),
             // Y-facing wall: `a` runs along x, `b` up z.
-            RoomFacing.PositiveY => (new Vec3(a0, cell - wall, b0), new Vec3(a1, cell, b1)),
+            RoomFacing.PositiveY => (new Vec3(a0, spanY - wall, b0), new Vec3(a1, spanY, b1)),
             RoomFacing.NegativeY => (new Vec3(a0, 0, b0), new Vec3(a1, wall, b1)),
             _ => throw new ArgumentOutOfRangeException(nameof(facing), facing, "Unknown facing."),
         };

@@ -266,9 +266,8 @@ internal sealed class RoomTransit
         float half = PlayerHull.Width / 2;
         Vec3 at = arrival.Origin;
         Box hull = new(new Vec3(at.X - half, at.Y - half, at.Z), new Vec3(at.X + half, at.Y + half, at.Z + PlayerHull.Height));
-        float cell = definition.CellSize;
         bool inCell = hull.Mins.X >= -Slack && hull.Mins.Y >= -Slack && hull.Mins.Z >= -Slack
-            && hull.Maxs.X <= cell + Slack && hull.Maxs.Y <= cell + Slack && hull.Maxs.Z <= definition.Height + Slack;
+            && hull.Maxs.X <= definition.SpanX + Slack && hull.Maxs.Y <= definition.SpanY + Slack && hull.Maxs.Z <= definition.Height + Slack;
         if (!inCell || Blocked(room, hull, Slack))
         {
             throw new RoomLintException(string.Create(CultureInfo.InvariantCulture,

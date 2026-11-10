@@ -211,10 +211,23 @@ public static class RoomCacheKey
 
         // A room's own height (17.6), folded only for a shaped room, so a
         // cube room keeps the key, and the cache row, it always had.
-        if (definition.IsShaped)
+        if (definition.HasOwnHeight)
         {
             fold.Text("height");
             fold.Float(definition.Height);
+        }
+
+        // A larger room's footprint and its sockets' cell offsets (17.8),
+        // folded only for such a room, so every room of one cell keeps its key.
+        if (definition.IsLarge)
+        {
+            fold.Text("footprint");
+            fold.Int(definition.CellsX);
+            fold.Int(definition.CellsY);
+            foreach (RoomSocket socket in definition.Sockets)
+            {
+                fold.Int(socket.Offset);
+            }
         }
 
         return fold.Finish();

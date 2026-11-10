@@ -1498,7 +1498,8 @@ public static partial class RoomCommands
             // (room_height), the cell's otherwise, so a cube room's line is
             // the one it always was.
             text.Append(CultureInfo.InvariantCulture,
-                $"{definition.Name}: cell at ({Num(room.Corner)}), {Num(cell)} x {Num(cell)} x {Num(definition.Height)}, "
+                $"{definition.Name}: cell at ({Num(room.Corner)}), {Num(definition.SpanX)} x {Num(definition.SpanY)} x {Num(definition.Height)}, "
+                + $"{(definition.IsLarge ? $"{definition.CellsX} x {definition.CellsY} cells, " : string.Empty)}"
                 + $"{definition.Sockets.Count} door(s){role}\n");
             if (counts is not null)
             {
@@ -1527,7 +1528,7 @@ public static partial class RoomCommands
                 Box plug = RoomLinter.SealBox(definition, socket, cell);
                 Vec3 mins = room.Corner + plug.Mins;
                 Vec3 maxs = room.Corner + plug.Maxs;
-                string wall = RoomLibraryVmf.WallName(socket.Facing);
+                string wall = RoomLibraryVmf.DefaultSocketName(definition.IsLarge, socket.Facing, socket.Offset);
                 string name = socket.Name == wall ? wall : $"{wall} \"{socket.Name}\"";
                 text.Append(CultureInfo.InvariantCulture,
                     $"  {name}: ({Num(mins)}) to ({Num(maxs)}), "

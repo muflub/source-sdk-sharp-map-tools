@@ -609,7 +609,10 @@ public static class RoomLinter
         throw new RoomLintException(
             $"rule {(int)RoomRule.BrushesInsideOwnCells} ({nameof(RoomRule.BrushesInsideOwnCells)}):"
             + $" a {what} of room {definition.Name} crosses a cell face outside the socket kit:"
-            + $" mins ({Fmt(box.Mins)}) maxs ({Fmt(box.Maxs)}) against the cell 0..{cell:0.###}"
+            + (definition.IsLarge
+                ? string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                    $" mins ({Fmt(box.Mins)}) maxs ({Fmt(box.Maxs)}) against the footprint 0..{definition.SpanX:0.###} by 0..{definition.SpanY:0.###}")
+                : $" mins ({Fmt(box.Mins)}) maxs ({Fmt(box.Maxs)}) against the cell 0..{cell:0.###}")
             + (definition.IsShaped ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $", 0..{definition.Height:0.###} tall.") : "."));
     }
 
@@ -647,15 +650,29 @@ public static class RoomLinter
         // wall — which is what keeps a legal assembly sealed before any door is
         // hung. Its height is the kit's opening as the kit stands it
         // (SocketKit.OpeningZ: centred, or on the floor).
+        //
+        // A larger room's socket is at one cell edge of its face: the opening
+        // is a one-cell room's moved along the face by whole cells, and the
+        // face itself is the footprint's far side. A one-cell room adds and
+        // multiplies nothing, so its plug boxes are the bits they always were.
         float nu0 = u0 * cell;
         float nu1 = u1 * cell;
+        if (socket.Offset != 0)
+        {
+            float along = socket.Offset * cell;
+            nu0 += along;
+            nu1 += along;
+        }
+
         (float nv0, float nv1) = definition.Kit.OpeningZ(cell);
+        float east = definition.CellsX == 1 ? cell : definition.CellsX * cell;
+        float north = definition.CellsY == 1 ? cell : definition.CellsY * cell;
 
         return socket.Facing switch
         {
-            RoomFacing.PositiveX => new Box(new Vec3(cell - depth, nu0, nv0), new Vec3(cell, nu1, nv1)),
+            RoomFacing.PositiveX => new Box(new Vec3(east - depth, nu0, nv0), new Vec3(east, nu1, nv1)),
             RoomFacing.NegativeX => new Box(new Vec3(0, nu0, nv0), new Vec3(depth, nu1, nv1)),
-            RoomFacing.PositiveY => new Box(new Vec3(nu0, cell - depth, nv0), new Vec3(nu1, cell, nv1)),
+            RoomFacing.PositiveY => new Box(new Vec3(nu0, north - depth, nv0), new Vec3(nu1, north, nv1)),
             RoomFacing.NegativeY => new Box(new Vec3(nu0, 0, nv0), new Vec3(nu1, depth, nv1)),
             _ => throw new ArgumentOutOfRangeException(nameof(socket), socket, "Unknown facing."),
         };

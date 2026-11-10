@@ -297,7 +297,14 @@ public static class RoomObjectStore
         RoomDefinition definition = new(
             roomName, cellSize.Value, kit.Value, sockets);
 
-        definition.Validate();
+        // A larger room's container lists its sockets without their cell
+        // edges, which its shape section gives; it is held to its rules once
+        // they are applied (RoomShape.Apply validates it).
+        if (shape?.Cells is null)
+        {
+            definition.Validate();
+        }
+
         definition = RoomShape.Apply(shape, definition);
 
         BspData bsp = ParseBspBlob(bspBlob);
@@ -334,12 +341,22 @@ public static class RoomObjectStore
         // §10a: keys rebuild in RoomCompiler's format from the persisted strings,
         // so "same keys ⇒ same room bytes" keeps meaning the same thing here.
         string claimed = "room:" + roomName + "|" + CellText(definition.CellSize) + "|" + KitText(definition.Kit)
-            + (definition.IsShaped ? "|h" + CellText(definition.Height) : string.Empty);
+            + (definition.HasOwnHeight ? "|h" + CellText(definition.Height) : string.Empty)
+            + RoomCompiler.FootprintText(definition);
         IReadOnlyList<string> inputKeys = sourceHash is null
             ? [claimed]
             : ["vmf:" + sourceHash, claimed];
 
-        return new RoomObject(definition, bsp, vis, lint, inputKeys);
+        // A larger room's cell tree is walked from its compile, and held to
+        // what its pack recorded: a section and a container written apart.
+        RoomCellTree? cells = RoomCellTree.Derive(definition, bsp);
+        if (shape?.Cells is { } recorded && cells is not null
+            && (!recorded.Roots.SequenceEqual(cells.Roots) || !recorded.BlockNodes.SequenceEqual(cells.BlockNodes)))
+        {
+            throw new LinkException($"its \"{RoomShape.SectionTag}\" section's cell roots are not its compile's; the section and the container were written apart.");
+        }
+
+        return new RoomObject(definition, bsp, vis, lint, inputKeys) { CellTree = cells };
     }
 
     /// <summary>The manifest section's JSON, key order fixed so the bytes are stable.</summary>

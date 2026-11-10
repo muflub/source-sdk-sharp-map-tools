@@ -121,6 +121,59 @@ public static class BlockGrid
         return new BspBlockGrid(xl, yl, xh, yh);
     }
 
+    /// <summary>
+    /// The grid for a compile whose blocks are <paramref name="blockSize"/>
+    /// units square rather than <see cref="BlockSize"/>: stock's four tests
+    /// of <see cref="Clamp"/> over the whole world's range in such blocks.
+    /// </summary>
+    /// <param name="mapMins">The map's bounds.</param>
+    /// <param name="mapMaxs">The map's bounds.</param>
+    /// <param name="blockSize">The block's edge, in whole units.</param>
+    /// <returns>The grid to compile, in blocks of that size.</returns>
+    /// <remarks>
+    /// <para>
+    /// Not a stock option: the room compile asks for it for a room larger
+    /// than one cell (the rooms design, 17.8), with the cell size as the
+    /// block, so that the room's tree splits at every cell face before
+    /// anything else and the link can route each cell the room covers to
+    /// that cell's own subtree. <c>ssmap vbsp</c> never reaches it, so stock
+    /// output does not move.
+    /// </para>
+    /// <para>
+    /// The world's range in blocks is <c>floor(−16384 / b)</c> to
+    /// <c>ceil(16384 / b) − 1</c>, which for <see cref="BlockSize"/> is
+    /// stock's <c>−16</c> to <c>15</c>.
+    /// </para>
+    /// </remarks>
+    public static BspBlockGrid ClampSized(Vec3 mapMins, Vec3 mapMaxs, int blockSize)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(blockSize, 1);
+        int low = (int)Math.Floor((double)GeometryEpsilons.MinCoordInteger / blockSize);
+        int high = (int)Math.Ceiling((double)GeometryEpsilons.MaxCoordInteger / blockSize) - 1;
+        int xl = low, yl = low, xh = high, yh = high;
+        if ((double)xh * blockSize > mapMaxs[0])
+        {
+            xh = (int)Math.Floor(mapMaxs[0] / (double)blockSize);
+        }
+
+        if ((double)(xl + 1) * blockSize < mapMins[0])
+        {
+            xl = (int)Math.Floor(mapMins[0] / (double)blockSize);
+        }
+
+        if ((double)yh * blockSize > mapMaxs[1])
+        {
+            yh = (int)Math.Floor(mapMaxs[1] / (double)blockSize);
+        }
+
+        if ((double)(yl + 1) * blockSize < mapMins[1])
+        {
+            yl = (int)Math.Floor(mapMins[1] / (double)blockSize);
+        }
+
+        return new BspBlockGrid(Math.Max(xl, low), Math.Max(yl, low), Math.Min(xh, high), Math.Min(yh, high));
+    }
+
     /// <summary>The world-space box one block covers.</summary>
     /// <param name="blockX">The block's X coordinate.</param>
     /// <param name="blockY">The block's Y coordinate.</param>
@@ -130,12 +183,16 @@ public static class BlockGrid
     /// Full height in Z, so a brush is never clipped
     /// vertically by the grid.
     /// </remarks>
-    public static void BlockBounds(int blockX, int blockY, out Vec3 mins, out Vec3 maxs)
+    public static void BlockBounds(int blockX, int blockY, out Vec3 mins, out Vec3 maxs) =>
+        BlockBounds(blockX, blockY, BlockSize, out mins, out maxs);
+
+    /// <summary>The box one block of the given size covers (<see cref="ClampSized"/>).</summary>
+    internal static void BlockBounds(int blockX, int blockY, int blockSize, out Vec3 mins, out Vec3 maxs)
     {
         mins = new Vec3(
-            blockX * BlockSize, blockY * BlockSize, GeometryEpsilons.MinCoordInteger);
+            blockX * blockSize, blockY * blockSize, GeometryEpsilons.MinCoordInteger);
         maxs = new Vec3(
-            (blockX + 1) * BlockSize, (blockY + 1) * BlockSize, GeometryEpsilons.MaxCoordInteger);
+            (blockX + 1) * blockSize, (blockY + 1) * blockSize, GeometryEpsilons.MaxCoordInteger);
     }
 
     /// <summary>
@@ -172,11 +229,20 @@ public static class BlockGrid
         BspBuildContext context,
         int blockX,
         int blockY,
+        out BlockBuildStatistics statistics) =>
+        ProcessBlock(context, blockX, blockY, BlockSize, out statistics);
+
+    /// <summary><see cref="ProcessBlock(BspBuildContext, int, int, out BlockBuildStatistics)"/> on blocks of the given size.</summary>
+    internal static BspNode ProcessBlock(
+        BspBuildContext context,
+        int blockX,
+        int blockY,
+        int blockSize,
         out BlockBuildStatistics statistics)
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        BlockBounds(blockX, blockY, out Vec3 mins, out Vec3 maxs);
+        BlockBounds(blockX, blockY, blockSize, out Vec3 mins, out Vec3 maxs);
 
         BspBrush? brushes = BrushCsg.MakeBspBrushList(
             context, context.BrushStart, context.BrushEnd, mins, maxs, DetailScreen.NoDetail);
@@ -295,14 +361,30 @@ public static class BlockGrid
         int xl,
         int yl,
         int xh,
-        int yh)
+        int yh) =>
+        BuildBlockTree(context, blocks, xl, yl, xh, yh, BlockSize, BlockMin - 1);
+
+    /// <summary>
+    /// <see cref="BuildBlockTree(BspBuildContext, BspNode?[,], int, int, int, int)"/>
+    /// on blocks of the given size, the array indexed from
+    /// <paramref name="origin"/> (block <c>origin</c> at index 0 on both axes).
+    /// </summary>
+    internal static BspNode BuildBlockTree(
+        BspBuildContext context,
+        BspNode?[,] blocks,
+        int xl,
+        int yl,
+        int xh,
+        int yh,
+        int blockSize,
+        int origin)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(blocks);
 
         if (xl == xh && yl == yh)
         {
-            BspNode? block = blocks[xl - BlockMin + 1, yl - BlockMin + 1];
+            BspNode? block = blocks[xl - origin, yl - origin];
             if (block is not null)
             {
                 return block;
@@ -319,16 +401,16 @@ public static class BlockGrid
         if (xh - xl > yh - yl)
         {
             int mid = xl + ((xh - xl) / 2) + 1;
-            node.PlaneNumber = context.Planes.Find(new Vec3(1f, 0f, 0f), mid * BlockSize);
-            node.Children[0] = BuildBlockTree(context, blocks, mid, yl, xh, yh);
-            node.Children[1] = BuildBlockTree(context, blocks, xl, yl, mid - 1, yh);
+            node.PlaneNumber = context.Planes.Find(new Vec3(1f, 0f, 0f), mid * blockSize);
+            node.Children[0] = BuildBlockTree(context, blocks, mid, yl, xh, yh, blockSize, origin);
+            node.Children[1] = BuildBlockTree(context, blocks, xl, yl, mid - 1, yh, blockSize, origin);
         }
         else
         {
             int mid = yl + ((yh - yl) / 2) + 1;
-            node.PlaneNumber = context.Planes.Find(new Vec3(0f, 1f, 0f), mid * BlockSize);
-            node.Children[0] = BuildBlockTree(context, blocks, xl, mid, xh, yh);
-            node.Children[1] = BuildBlockTree(context, blocks, xl, yl, xh, mid - 1);
+            node.PlaneNumber = context.Planes.Find(new Vec3(0f, 1f, 0f), mid * blockSize);
+            node.Children[0] = BuildBlockTree(context, blocks, xl, mid, xh, yh, blockSize, origin);
+            node.Children[1] = BuildBlockTree(context, blocks, xl, yl, xh, mid - 1, blockSize, origin);
         }
 
         return node;
@@ -378,6 +460,28 @@ public static class BlockGrid
         out IReadOnlyList<BlockBuildStatistics> statistics)
     {
         ArgumentNullException.ThrowIfNull(context);
+        return BuildWorldPass(context, grid, mapMins, mapMaxs, BlockSize, out statistics);
+    }
+
+    /// <summary>
+    /// <see cref="BuildWorldPass(BspBuildContext, BspBlockGrid, Vec3, Vec3, out IReadOnlyList{BlockBuildStatistics})"/>
+    /// on blocks of the given size (<see cref="ClampSized"/>): stock's at
+    /// <see cref="BlockSize"/>, the same blocks, order and stitching at any
+    /// other, compiled one block after another.
+    /// </summary>
+    internal static BspTree BuildWorldPass(
+        BspBuildContext context,
+        BspBlockGrid grid,
+        Vec3 mapMins,
+        Vec3 mapMaxs,
+        int blockSize,
+        out IReadOnlyList<BlockBuildStatistics> statistics)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (blockSize != BlockSize)
+        {
+            return BuildSizedWorldPass(context, grid, mapMins, mapMaxs, blockSize, out statistics);
+        }
 
         BspNode?[,] blocks = new BspNode?[BlockSpace + 2, BlockSpace + 2];
         List<BlockBuildStatistics> records = [];
@@ -412,5 +516,37 @@ public static class BlockGrid
 
         statistics = records;
         return tree;
+    }
+
+    /// <summary>The world pass over blocks of another size than stock's, sequentially, the array indexed from the grid's ring.</summary>
+    private static BspTree BuildSizedWorldPass(
+        BspBuildContext context,
+        BspBlockGrid grid,
+        Vec3 mapMins,
+        Vec3 mapMaxs,
+        int blockSize,
+        out IReadOnlyList<BlockBuildStatistics> statistics)
+    {
+        int origin = Math.Min(grid.MinX, grid.MinY) - 1;
+        int extent = Math.Max(grid.MaxX, grid.MaxY) - origin + 2;
+        BspNode?[,] blocks = new BspNode?[extent, extent];
+        List<BlockBuildStatistics> records = [];
+        int count = (grid.MaxX - grid.MinX + 1) * (grid.MaxY - grid.MinY + 1);
+        for (int blockNumber = 0; blockNumber < count; blockNumber++)
+        {
+            int blockY = grid.MinY + (blockNumber / (grid.MaxX - grid.MinX + 1));
+            int blockX = grid.MinX + (blockNumber % (grid.MaxX - grid.MinX + 1));
+            BspNode head = ProcessBlock(context, blockX, blockY, blockSize, out BlockBuildStatistics record);
+            blocks[blockX - origin, blockY - origin] = head;
+            records.Add(record);
+        }
+
+        statistics = records;
+        return new BspTree
+        {
+            HeadNode = BuildBlockTree(context, blocks, grid.MinX - 1, grid.MinY - 1, grid.MaxX + 1, grid.MaxY + 1, blockSize, origin),
+            Mins = new Vec3(grid.MinX * blockSize, grid.MinY * blockSize, mapMins[2] - 8f),
+            Maxs = new Vec3((grid.MaxX + 1) * blockSize, (grid.MaxY + 1) * blockSize, mapMaxs[2] + 8f),
+        };
     }
 }
