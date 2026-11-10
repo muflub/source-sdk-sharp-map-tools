@@ -5340,7 +5340,13 @@ written:
   such a face would never be drawn. A brush crossing the face is fine (its
   cut sides are no faces); only a visible side in the plane is refused,
   naming it. A cell an author filled solid may share one solid leaf with
-  its neighbours.
+  its neighbours. A door plug with solid behind it (such a cell's plug, or
+  a fill pushed against any room's wall) is refused when the room
+  compiles, naming the socket and its plug box: the door would open into
+  a wall, and the link used to refuse only the level that joined it, with
+  no cause given ("faces no open leaf"). The author removes the plug or
+  opens the space behind it; a corridor through the fill from the plug is
+  fine, and links as the level flattens.
 - **Storage.** `SHAP` revision 2 holds the footprint, each socket's
   room-local cell and a position along its edge (always 0, kept for doors
   at several positions), the cell roots and the block nodes; the loader

@@ -71,6 +71,73 @@ public sealed class MultiCellLinkTests
     }
 
     /// <summary>
+    /// A cell the author filled solid with door plugs on its edges is
+    /// refused when the room compiles, naming the first plug: with solid
+    /// behind it the door would open into a wall, and any level that joined
+    /// it was refused at the link, which named no cause.
+    /// </summary>
+    [Fact]
+    public async Task APlugInACellFilledSolidIsRefusedAtTheRoom()
+    {
+        VmfDocument library = RoomHarness.LibraryVmf(Hall, Hub);
+        library.GetChunk("world")!.Children.Add(RoomModel.Slab(RoomHarness.Plain, new Vec3(240, 16, 16), new Vec3(496, 272, 240), 6100));
+        RoomLintException refused = await Assert.ThrowsAsync<RoomLintException>(() => RoomPropHarness.CompileAsync(library));
+        Assert.Contains("room hall: its east0 door plug (496 80 16)-(512 176 240) faces no open space of the room", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("Remove the plug (a wall needs none) or open the space behind it.", refused.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A cell filled solid but for a corridor from its plug: the 2 x 2 hall
+    /// (east0, west1, north0) with its south-east cell filled from inside
+    /// its walls to past its internal faces, a corridor left from the east0
+    /// plug west into the south-west cell. Hubs all round join every door,
+    /// so the link carves the plug into the corridor at each turn: the
+    /// linked map and the flattened compile hold every sample alike, the
+    /// doorway and corridor open and the fill solid in both, a line from the
+    /// hub along the corridor into the south-west cell clear in both, the
+    /// top tree reaching every node once, every open leaf in its nodes'
+    /// bounds, and the map passing the loader checks.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Rotations))]
+    public async Task APlugCarvedIntoAFilledCellsCorridorLinksAsItFlattens(int rotation)
+    {
+        RoomDefinition hall = Large("hall", 2, 2, (RoomFacing.PositiveX, 0), (RoomFacing.NegativeX, 1), (RoomFacing.PositiveY, 0));
+        VmfDocument library = RoomHarness.LibraryVmf(hall, Hub);
+        VmfChunk world = library.GetChunk("world")!;
+        world.Children.Add(RoomModel.Slab(RoomHarness.Plain, new Vec3(240, 16, 16), new Vec3(496, 80, 240), 6100));
+        world.Children.Add(RoomModel.Slab(RoomHarness.Plain, new Vec3(240, 176, 16), new Vec3(496, 272, 240), 6101));
+        RoomLibrary rooms = await RoomPropHarness.CompileAsync(library);
+
+        LevelGrid level = RoomHeightHarness.Level("hub, hub, hub, hub", "hub, +, +, hub", $"hub, hall@{rotation}, +, hub", "hub, hub, hub, hub");
+        LevelLayout layout = RoomPropHarness.Layout(rooms, level);
+        RoomInstance placed = layout.Rooms.Single(r => r.Placement.Room == "hall");
+        Assert.Contains(placed.Joints, j => j.Socket == "east0");
+        LinkedLevel linked = await RoomPropHarness.LinkAsync(rooms, level);
+        BspData flat = await RoomHeightHarness.CompileFlatAsync(library, level);
+        Assert.True(RoomHeightHarness.SameSpace(linked.Bsp, flat, level) > 0);
+        Assert.Null(RoomHeightHarness.BoundsProblem(linked.Bsp));
+        Assert.Equal(BspStructView.Count<DNode>(linked.Bsp[BspLump.Nodes]), ReachedOnce(linked.Bsp));
+
+        RoomTransform transform = new(placed.Placement, RoomHarness.Cell);
+        Vec3 hub = transform.Apply(new Vec3(512 + 128, 128, 60));
+        Vec3 doorway = transform.Apply(new Vec3(504, 128, 60));
+        Vec3 corridor = transform.Apply(new Vec3(368, 128, 60));
+        Vec3 southWest = transform.Apply(new Vec3(128, 128, 60));
+        Vec3 fill = transform.Apply(new Vec3(368, 224, 60));
+        foreach (BspData map in new[] { linked.Bsp, flat })
+        {
+            Assert.Equal(0, RoomHarness.LeafAt(map, doorway).Contents & (int)BrushContents.Solid);
+            Assert.Equal(0, RoomHarness.LeafAt(map, corridor).Contents & (int)BrushContents.Solid);
+            Assert.NotEqual(0, RoomHarness.LeafAt(map, fill).Contents & (int)BrushContents.Solid);
+            Assert.Equal(1f, new LevelProbe(map).Trace(hub, southWest, (int)BrushContents.Solid));
+        }
+
+        ValidationReport report = await BspValidator.CheckAsync(linked.Bsp, CancellationToken.None);
+        Assert.True(report.ErrorCount == 0, string.Join("\n", report.Diagnostics));
+    }
+
+    /// <summary>
     /// A W x D placement's transform is exact at every turn: the turn and the
     /// move done apart (<c>Translate(Rotate(p))</c>) are <c>Apply(p)</c> bit
     /// for bit; a room-local cell's centre lands in the world cell
