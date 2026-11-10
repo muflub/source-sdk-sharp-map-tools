@@ -193,6 +193,23 @@ public static class Nav3dWriter
 
     private static long Align4(long value) => (value + 3) & ~3L;
 
+    /// <summary>Checks a leaf's clearance record unless an earlier leaf's check found it sound.</summary>
+    private static void CheckRecord(Nav3dLevel level, uint offset, bool[] sound)
+    {
+        if (offset % 4 == 0 && offset < level.Clearance.Length && sound[offset / 4])
+        {
+            return;
+        }
+
+        if (offset % 4 != 0 || offset >= level.Clearance.Length
+            || Nav3dClearance.Problem(level.Clearance.AsSpan((int)offset), level.Obstacles.Count, level.Brushes.Count) is not null)
+        {
+            throw new ArgumentException($"a leaf's clearance record at {offset} is out of range or malformed.", nameof(level));
+        }
+
+        sound[offset / 4] = true;
+    }
+
     private static void Check(Nav3dLevel level)
     {
         if (!float.IsFinite(level.CellSize) || level.CellSize <= 0 || !float.IsFinite(level.VoxelSize) || level.VoxelSize <= 0)
@@ -314,6 +331,10 @@ public static class Nav3dWriter
             throw new ArgumentException("the clearance section is not a whole number of four-byte words.", nameof(level));
         }
 
+        // Leaves share records, so each record is checked once, the first
+        // time a leaf names it; a bad one is refused at that leaf, as when
+        // every leaf's were checked.
+        bool[] sound = new bool[level.Clearance.Length / 4];
         for (int l = 0, column = 0; l < level.Leaves.Length; l++)
         {
             while (level.ColumnStarts[column + 1] <= l)
@@ -327,14 +348,8 @@ public static class Nav3dWriter
                 throw new ArgumentException($"a leaf from voxel {leaf.ZLo}, {leaf.Height} high, leaves its cell.", nameof(level));
             }
 
-            foreach (uint offset in new[] { leaf.PlayerClearance, leaf.NpcClearance })
-            {
-                if (offset % 4 != 0 || offset >= level.Clearance.Length
-                    || Nav3dClearance.Problem(level.Clearance.AsSpan((int)offset), level.Obstacles.Count, level.Brushes.Count) is not null)
-                {
-                    throw new ArgumentException($"a leaf's clearance record at {offset} is out of range or malformed.", nameof(level));
-                }
-            }
+            CheckRecord(level, leaf.PlayerClearance, sound);
+            CheckRecord(level, leaf.NpcClearance, sound);
         }
 
         foreach (float[] brush in level.Brushes)
