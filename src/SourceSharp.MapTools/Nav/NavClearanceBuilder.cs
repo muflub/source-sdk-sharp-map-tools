@@ -195,6 +195,7 @@ public static class NavClearanceBuilder
         }
 
         scratch.LowestTop = double.NegativeInfinity;
+        scratch.SinceDrop = DropEvery;
         scratch.NextColumn();
 
         int below0 = -1;
@@ -279,18 +280,31 @@ public static class NavClearanceBuilder
         }
     }
 
+    /// <summary>How many voxels up a column at least go between two drops (<see cref="DropBelow"/>).</summary>
+    private const int DropEvery = 8;
+
     /// <summary>
     /// Drops from a column's lists the solids wholly below a voxel: every
     /// test of a voxel skips a solid whose top is not above the voxel's
     /// bottom (by the epsilon), and the voxels of a column only rise, so
     /// such a solid is never needed again. The lists keep their order.
     /// </summary>
+    /// <remarks>
+    /// A drop only saves the tests that would skip a solid anyway, so when it
+    /// happens changes no answer. Each drop reads the whole of every list,
+    /// and solids' tops are spread over the column's height, so a drop at
+    /// every voxel a top is passed cost more than it saved; a drop waits
+    /// until the column has risen <see cref="DropEvery"/> voxels since the
+    /// last, and the solids passed meanwhile are skipped by the tests.
+    /// </remarks>
     /// <param name="scratch">The column's lists.</param>
     /// <param name="above">The voxel's bottom plus the epsilon: a solid is kept while its top is above it.</param>
     private static void DropBelow(Scratch scratch, double above)
     {
-        if (!(scratch.LowestTop > above))
+        scratch.SinceDrop++;
+        if (!(scratch.LowestTop > above) && scratch.SinceDrop >= DropEvery)
         {
+            scratch.SinceDrop = 0;
             double lowest = double.PositiveInfinity;
             lowest = Keep(scratch.Axial, above, lowest, default(CandidateTop));
             lowest = Keep(scratch.Sloped, above, lowest, default(SlopedTop));
@@ -929,6 +943,9 @@ public static class NavClearanceBuilder
 
         /// <summary>The lowest top among the column's lists, so a voxel drops nothing until one is reached.</summary>
         public double LowestTop { get; set; } = double.NegativeInfinity;
+
+        /// <summary>How many voxels the column has risen since its last drop.</summary>
+        public int SinceDrop { get; set; }
 
         public List<Nav3dCorner> Stair { get; } = [];
 

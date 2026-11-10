@@ -171,6 +171,36 @@ public sealed class NavClearanceBuilderTests
             $"{made.Records.Count} records against {whole.Records.Count}");
     }
 
+    /// <summary>
+    /// Solids whose tops are spread up the column, one or more at every
+    /// voxel (a flight of thin steps, slanted plates and overhanging lips
+    /// at each height), are dropped from a column's lists only every few
+    /// voxels; the ones passed meanwhile are skipped by each test, so every
+    /// voxel's answer is still the direct sweep's for every agent.
+    /// </summary>
+    [Fact]
+    public void SolidsWithTopsAtEveryHeightStayExactBetweenDrops()
+    {
+        float r = MathF.Sqrt(0.5f);
+        List<NavBrush> brushes = [Floor];
+        for (int k = 0; k < 13; k++)
+        {
+            float z = 20 + (k * 16.5f);
+            brushes.Add(NavBrush.Box(new Vec3(16 + (k * 18), 8, z), new Vec3(30 + (k * 18), 40, z + 3), 1));
+            brushes.Add(NavBrush.FromPlanes([
+                (new Vec3(-r, 0, r), (-r * (100 + (k * 10))) + (r * z)), (new Vec3(1, 0, 0), 120 + (k * 10)), (new Vec3(0, 0, -1), -(z - 6)),
+                (new Vec3(0, 1, 0), 150), (new Vec3(0, -1, 0), -120)], 1)!);
+            brushes.Add(NavBrush.FromPlanes([
+                (new Vec3(0, 0, 1), z + 4), (new Vec3(1, 0, 0), 200), (new Vec3(-1, 0, 0), -(150 + (k * 4))),
+                (new Vec3(0, 1, 0), 230), (new Vec3(0, -1, 0), -200), (new Vec3(-r, 0, -r), -r * (150 + (k * 4)) - (r * (z - 2)))], 1)!);
+        }
+
+        Assert.All(brushes.Skip(1), b => Assert.NotNull(b));
+        Assert.Contains(brushes, b => b.IsOverhang && !b.IsAxial);
+        Assert.Contains(brushes, b => !b.IsOverhang && !b.IsAxial);
+        AssertExact(new NavGeometry { Brushes = brushes }, Cell);
+    }
+
     /// <summary>A solid mask that is not one flag per voxel is refused.</summary>
     [Fact]
     public void ASolidMaskOfTheWrongLengthIsRefused() =>
