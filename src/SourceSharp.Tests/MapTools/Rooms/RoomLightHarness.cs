@@ -146,7 +146,11 @@ internal static class RoomLightHarness
     /// height (the rooms design, 17.6), whose ceiling's underside is a wall
     /// depth below it.
     /// </remarks>
-    public static void SkyCeiling(VmfDocument library, int room, string material = Sky, float height = RoomHarness.Cell)
+    public static void SkyCeiling(VmfDocument library, int room, string material = Sky, float height = RoomHarness.Cell) =>
+        SkyCeiling(library, room, material, height, RoomHarness.Cell);
+
+    /// <summary><see cref="SkyCeiling(VmfDocument, int, string, float)"/> for a room <paramref name="width"/> wide along x (a room larger than one cell, the first in its library).</summary>
+    public static void SkyCeiling(VmfDocument library, int room, string material, float height, float width)
     {
         float x0 = room * (RoomHarness.Cell + RoomHarness.LibraryGap);
         float z = height - RoomHarness.WalkableKit.Depth;
@@ -156,7 +160,7 @@ internal static class RoomLightHarness
             foreach (VmfChunk side in solid.GetChunks("side"))
             {
                 Vec3[] points = Points(side.GetValue("plane")!);
-                if (points.All(p => Math.Abs(p.Z - z) < 0.01f && p.X >= x0 - 0.01f && p.X <= x0 + RoomHarness.Cell + 0.01f))
+                if (points.All(p => Math.Abs(p.Z - z) < 0.01f && p.X >= x0 - 0.01f && p.X <= x0 + width + 0.01f))
                 {
                     foreach (VmfKey key in side.Keys)
                     {
