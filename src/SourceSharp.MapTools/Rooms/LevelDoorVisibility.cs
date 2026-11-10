@@ -235,14 +235,20 @@ internal static class LevelDoorVisibility
             LevelDoorRoom room = rooms[r];
             Prepared p = prepared[r];
             int lo = room.ClusterBase;
+            // Two rooms of one cell that share a wall see each other only
+            // through a door in that wall: a line between them crosses it.
+            // A room larger than one cell reaches past its neighbour along
+            // their wall, so a line between them may go round through a
+            // third room, and the rule is not applied to it (the door
+            // flows alone decide, a superset).
             RoomPlacement at = room.Transform.Placement;
             List<(int Room, LevelDoor? Door)> neighbours = [];
             HashSet<int> seen = [];
-            foreach ((int cx, int cy, _, _) in at.Level == 0 ? at.Covered() : [])
+            foreach ((int cx, int cy, _, _) in at.Level == 0 && !at.IsLarge ? at.Covered() : [])
             {
                 foreach ((int dx, int dy) in (ReadOnlySpan<(int, int)>)[(1, 0), (-1, 0), (0, 1), (0, -1)])
                 {
-                    if (byCell.TryGetValue((cx + dx, cy + dy), out int n) && n != r && seen.Add(n))
+                    if (byCell.TryGetValue((cx + dx, cy + dy), out int n) && n != r && !rooms[n].Transform.Placement.IsLarge && seen.Add(n))
                     {
                         LevelDoor? door = null;
                         foreach (LevelDoor joint in room.Joints)

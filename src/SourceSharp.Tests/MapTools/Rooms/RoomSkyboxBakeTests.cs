@@ -79,6 +79,40 @@ public sealed class RoomSkyboxBakeTests(SkyboxLitFixture fixture) : IClassFixtur
     }
 
     /// <summary>
+    /// For a sky room larger than one cell (the rooms design, 17.8) the
+    /// skybox stands in the room's frame where a level of the room alone at
+    /// cell (0, 0) puts it at every turn: the room's turn moves it back by
+    /// its footprint, not by one cell, and the recast lands where the
+    /// level's does.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Turns))]
+    public void TheSkyboxStandsWhereTheLevelPutsALargerRoom(int turn)
+    {
+        RoomSkybox skybox = RoomSkybox.Of(fixture.Lit.Get("sky"));
+        RoomObject other = fixture.Lit.Get("other");
+        RoomObject larger = other with { Definition = other.Definition with { CellsX = 2, CellsY = 3, Sockets = [] } };
+        const float cell = RoomHarness.Cell;
+        RoomTransform room = new(new RoomPlacement("other", 0, 0, turn) { CellsX = 2, CellsY = 3 }, cell);
+        RoomTransform sky = new(new RoomPlacement("sky", 0, 0, 0) { Level = -1 }, cell);
+        Vec3 M(Vec3 world) => RoomTransform.Rotate(world - room.Apply(Vec3.Zero), (4 - turn) % 4);
+
+        VradSkybox forVrad = skybox.For(larger, turn);
+        foreach (Vec3 s in (Vec3[])[new(40, 40, 16), new(88, 200, 72), Vec3.Zero])
+        {
+            Assert.Equal(M(sky.Apply(s)), forVrad.Move(s));
+        }
+
+        SkyCamera camera = Assert.Single(forVrad.Cameras);
+        Vec3 cameraWorld = sky.Apply(RoomSkyboxHarness.Camera);
+        foreach (Vec3 q in (Vec3[])[new(16, 16, 16), new(300, 60, 120), new(500, 700, 200)])
+        {
+            Vec3 level = cameraWorld + (room.Apply(q) * camera.WorldToSky);
+            Assert.Equal(M(level), camera.Origin + (q * camera.WorldToSky));
+        }
+    }
+
+    /// <summary>
     /// The skybox lights a room's bake only when the room has a sky face
     /// under a library sun, and never the skybox's own.
     /// </summary>

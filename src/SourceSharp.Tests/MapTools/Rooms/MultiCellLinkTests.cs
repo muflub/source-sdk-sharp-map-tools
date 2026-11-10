@@ -11,9 +11,11 @@ using SourceSharp.MapFormats.Geometry;
 using SourceSharp.MapFormats.Text;
 
 using SourceSharp.MapTools.Bsp;
+using SourceSharp.MapTools.Bsp.Driver;
 using SourceSharp.MapTools.Materials;
 using SourceSharp.MapTools.Rooms;
 using SourceSharp.MapTools.Validation;
+using SourceSharp.MapTools.Vis;
 
 using Xunit;
 
@@ -166,6 +168,100 @@ public sealed class MultiCellLinkTests
             Assert.Equal(1f, probe.Trace(new Vec3(128, 256 + 128, 60), new Vec3(256 + 128, 256 + 128, 60), (int)BrushContents.Solid));
             Assert.True(probe.Trace(new Vec3(128, 128, 60), new Vec3(256 + 128, 128, 60), (int)BrushContents.Solid) < 1f);
         }
+    }
+
+    /// <summary>
+    /// The superset gate over larger rooms: the flattened level compiled and
+    /// vis'd whole, every cluster pair it sees is seen by the link, which
+    /// composes the hall's own exact vis with the door graph over its cell
+    /// edges; and the link sees across the hall's internal cell faces, from
+    /// one of its cells to the cell diagonally opposite.
+    /// </summary>
+    /// <remarks>
+    /// The two maps cut their rooms into clusters differently (the link's
+    /// larger rooms by cell, the flattened compile by its own blocks), so a
+    /// cluster of the flattened map can cover several of the link's. A line
+    /// the flattened map sees from one cluster to another runs between one
+    /// of the link's clusters under each, so the gate asks that some pair
+    /// of them see each other: every pair would ask the link to see what no
+    /// line does.
+    /// </remarks>
+    [Fact]
+    public async Task TheLinkedPvsIsASupersetOfTheFlattenedCompiles()
+    {
+        VmfDocument library = RoomHarness.LibraryVmf(Hall, Gallery, Hub);
+        RoomLibrary rooms = await RoomPropHarness.CompileAsync(library);
+        LevelGrid level = RoomHeightHarness.Level("+, +, +, hub", "gallery, hall, +, hub");
+        LinkedLevel link = await RoomPropHarness.LinkAsync(rooms, level);
+        VbspResult whole = await RoomHarness.CompileAsync(LevelFlattener.Flatten(level, library), await RoomLightHarness.ContextAsync("flat"));
+        VisResult monoVis = await RoomHarness.VisAsync(whole.Bsp!, PortalSet.FromPortalFile(whole.Portals!));
+        int[][] map = LevelLinkerTests.MapClusters(whole.Bsp!, link.Bsp);
+        int pairs = 0;
+        for (int from = 0; from < monoVis.ClusterCount; from++)
+        {
+            for (int to = 0; to < monoVis.ClusterCount; to++)
+            {
+                if (!monoVis.CanSee(from, to) || map[from].Length == 0 || map[to].Length == 0)
+                {
+                    continue;
+                }
+
+                Assert.True(
+                    map[from].Any(a => map[to].Any(b => link.Vis.CanSee(a, b))),
+                    $"the flattened compile sees {from} {Where(whole.Bsp!, from)} -> {to} {Where(whole.Bsp!, to)}; the link sees none of its pairs");
+                pairs++;
+            }
+        }
+
+        Assert.True(pairs > 0);
+        int sw = RoomHarness.LeafAt(link.Bsp, new Vec3(256 + 100, 100, 60)).Cluster;
+        int ne = RoomHarness.LeafAt(link.Bsp, new Vec3(512 + 150, 256 + 150, 60)).Cluster;
+        Assert.True(sw >= 0 && ne >= 0 && sw != ne && link.Vis.CanSee(sw, ne));
+    }
+
+    /// <summary>
+    /// A room of one cell beside a larger room, sharing a wall with no door
+    /// in it, may still see into it round through a third room: the hub at
+    /// (2, 1) sees the hall through the hub at (2, 0), whose doors meet both.
+    /// The two-rooms-one-wall rule, sound for rooms of one cell, would drop
+    /// that line; the flattened compile sees it, and so must the link.
+    /// </summary>
+    [Fact]
+    public async Task ARoomSeesALargerNeighbourRoundThroughAThird()
+    {
+        VmfDocument library = RoomHarness.LibraryVmf(Hall, Hub);
+        RoomLibrary rooms = await RoomPropHarness.CompileAsync(library);
+        LevelGrid level = RoomHeightHarness.Level("+, +, hub", "hall, +, hub");
+        LinkedLevel link = await RoomPropHarness.LinkAsync(rooms, level);
+        VbspResult whole = await RoomHarness.CompileAsync(LevelFlattener.Flatten(level, library), await RoomLightHarness.ContextAsync("flat"));
+        VisResult monoVis = await RoomHarness.VisAsync(whole.Bsp!, PortalSet.FromPortalFile(whole.Portals!));
+        int[][] map = LevelLinkerTests.MapClusters(whole.Bsp!, link.Bsp);
+        int north = RoomHarness.LeafAt(whole.Bsp!, new Vec3(512 + 128, 256 + 128, 60)).Cluster;
+        int checkedPairs = 0;
+        for (int to = 0; to < monoVis.ClusterCount; to++)
+        {
+            if (monoVis.CanSee(north, to) && map[to].Length > 0 && map[north].Length > 0)
+            {
+                Assert.True(map[north].Any(a => map[to].Any(b => link.Vis.CanSee(a, b))), $"{north} -> {to} {Where(whole.Bsp!, to)}");
+                checkedPairs++;
+            }
+        }
+
+        Assert.True(checkedPairs > 2);
+
+        // The rule would clear every cluster of the hall from the hub's row;
+        // the door flows through the hub at (2, 0) keep some of them.
+        int b = RoomHarness.LeafAt(link.Bsp, new Vec3(512 + 128, 256 + 128, 60)).Cluster;
+        int[] hall = [.. Enumerable.Range(0, link.Plan.Rooms[0].Room.ClusterCount)];
+        Assert.Equal("hall", link.Plan.Rooms[0].Room.Definition.Name);
+        Assert.Contains(hall, c => link.Vis.CanSee(b, c));
+    }
+
+    private static string Where(BspData bsp, int cluster)
+    {
+        DLeaf[] leaves = BspStructView.As<DLeaf>(bsp[BspLump.Leafs]).ToArray();
+        DLeaf leaf = leaves.First(l => l.Cluster == cluster);
+        return $"[{leaf.Mins[0]} {leaf.Mins[1]} {leaf.Mins[2]} .. {leaf.Maxs[0]} {leaf.Maxs[1]} {leaf.Maxs[2]}]";
     }
 
     // ---- the level file -----------------------------------------------------------------------

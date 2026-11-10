@@ -117,7 +117,7 @@ public static partial class LevelLinker
         float cellSize, RoomLighting lighting, RoomSunLayer layer, RoomSunMap map, RoomPlacement placement, DoorFaceCells?[] cells)
     {
         RoomTransform here = new(placement, cellSize);
-        RoomTransform baked = new(new RoomPlacement(placement.Room, 0, 0, placement.Rotation), cellSize);
+        RoomTransform baked = new(placement with { CellX = 0, CellY = 0 }, cellSize);
         if (here.Apply(Vec3.Zero) == baked.Apply(Vec3.Zero))
         {
             return null;

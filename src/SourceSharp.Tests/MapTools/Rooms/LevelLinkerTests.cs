@@ -716,7 +716,7 @@ public sealed class LevelLinkerTests
         return [.. clusters.Order()];
     }
 
-    private static int[][] MapClusters(BspData monolithic, BspData linked)
+    internal static int[][] MapClusters(BspData monolithic, BspData linked)
     {
         List<DLeaf> leaves = [.. BspStructView.As<DLeaf>(monolithic[BspLump.Leafs])];
         List<HashSet<int>> sets = [.. Enumerable
