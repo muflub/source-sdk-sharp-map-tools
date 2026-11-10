@@ -903,7 +903,8 @@ at the cell's low corner (least x, y and z). Its keys:
 | `door_width`, `door_height` | The door opening, centred along its wall. |
 | `door_sill` | Optional: where the door stands up its wall. `centre` (the default) centres it, so a player walks through only when `door_height` is `cell_size - 2 x wall_depth`; `floor` stands it on the floor slab at any height, so a kit may have doors lower than the room and rooms lower than their cell. Every room of a library, and every library of a level, uses one. |
 | `wall_depth` | The shell's thickness, and how deep a door plug reaches in from the cell face. |
-| `socket_east`, `socket_west`, `socket_north`, `socket_south` | Optional names for the sockets; the default is the wall's name. East is +x, north is +y. |
+| `room_footprint` | Optional: `"W D"`, the cells the room covers along its own +x and +y, 1 to 16 each (default `"1 1"`). The marker stays at the low corner; brushes may cross the room's internal cell faces freely, and only its perimeter is held to the kit. |
+| `socket_east`, `socket_west`, `socket_north`, `socket_south` | Optional names for the sockets; the default is the wall's name. East is +x, north is +y. A room larger than one cell has a socket per cell edge of its perimeter, named `east0`, `east1`, ... counted from its own south (east and west) or west (north and south), and renamed with `socket_east0` and so on; its water sockets are `water_east0` and so on. |
 
 Everything inside a cell belongs to its room. Point entities in the gaps
 are ignored, except the level-wide ones (see **Level-wide singletons**
@@ -941,7 +942,23 @@ with `ssmap room`. A library holding a room with a `room_height` of its own
 packs at version 5, which an older build refuses rather than link the room
 as a cube; a library of cube rooms packs as before. A level placing such a
 room gets a `.nav3d` of version 3, which records each cell's height; a
-level of cube rooms keeps version 2.
+level of cube rooms keeps version 2. A library holding a room larger than
+one cell packs at version 6.
+
+**Rooms larger than one cell** (`room_footprint`) are compiled on vbsp
+blocks of the cell size, so the room's tree splits at every cell face, and
+the link routes each cell the room covers to that cell's own part of the
+tree. Inside, the room is one compile: its own vis, one light bake, and
+brushes, displacements and water crossing its internal cell faces. Two
+rules come with it: a brush side may not lie exactly on an internal cell
+face with open space in front of it (the link would drop that face; let the
+brush cross the face instead), and the room's entity names name only its
+own cell (`cxry_`, the south-west cell as placed): no neighbour offsets, no
+neighbour flags, and `room_needs` names a socket, such as `joined_east0`.
+Navigation is not built for such a room yet, so its library must say
+`nav 0`. `ssmap layout` places rooms of one cell only and its header says
+how many larger rooms it left out. `samples/rooms-multicell` holds a 2 x 2,
+a 3 x 3, a 1 x 2 and a tall 2 x 2 room in a level at its four turns.
 
 A **level** is a YAML file:
 
@@ -956,8 +973,17 @@ grid:                        # the NORTH row first, as a map is drawn
 
 A cell is a room's name, optionally `@` and a rotation in degrees
 counter-clockwise seen from above (0, 90, 180 or 270), or `~` for no room.
-Joints are implicit: two sockets facing each other across a shared wall are
-joined, and every other socket is capped. Every refusal of a level file
+A room larger than one cell is written in its south-west cell as placed,
+and `+` marks every other cell it covers:
+
+```yaml
+grid:
+  - [+,    +, hub]
+  - [hall, +, hub]     # hall is 2 x 2
+```
+
+Joints are implicit: two sockets facing each other across a shared cell
+edge are joined, and every other socket is capped. Every refusal of a level file
 names its line and column.
 
 `link` links the level's rooms (read from the pack `-rooms` names, by
