@@ -127,6 +127,12 @@ public class AirborneFuzzerTests
 
         Assert.NotEmpty(air.ExplosiveOnly);
         Assert.All(air.ExplosiveOnly, n => Assert.True(reach.Nodes[n].Z > 290));
+
+        // The tower's whole top is one area, though flights landed on only
+        // parts of it: from where they landed a player walks the rest.
+        NodeGroup top = Assert.Single(air.BlastOnlyAreas);
+        Assert.Equal(air.ExplosiveOnly, top.Nodes);
+        Assert.Equal(reach.Nodes.Count(p => p.Z > 290), top.Nodes.Count);
     }
 
     [Fact]
@@ -167,10 +173,62 @@ public class AirborneFuzzerTests
     public void Tf2LaunchesCarryTheirRanges()
     {
         Assert.Equal(5, LaunchKind.Tf2.Count);
-        Assert.Equal(1000f, LaunchKind.RocketJump.MaxSpeed);
+        Assert.Equal(650f, LaunchKind.RocketJump.MaxSpeed); // the calibration measured pushes of about 430 and 615
+        Assert.Equal(289f - (1.5f * 800f / 66f), AirborneFuzzer.JumpSpeedAtPush(Soldier), 3);
         Assert.Equal(2000f, LaunchKind.StickyJump.MaxSpeed);
         Assert.False(LaunchKind.Airblast.RunningJump);
         Assert.All(LaunchKind.Tf2, l => Assert.True(l.MinSpeed <= l.MaxSpeed && l.MinElevation <= l.MaxElevation));
+    }
+
+    [Fact]
+    public void BlastOnlyFloorSpreadsAlongWalksFromWhereFlightsLand()
+    {
+        // 0 and 1 are reached on foot. A flight lands on 2; from 2 a player
+        // walks to 3 and on to 1, back into the play area; 4 is reached by
+        // nothing. Landings on reached floor or on no floor add nothing.
+        Vec3[] nodes = [new(0, 0, 0), new(64, 0, 0), new(0, 64, 100), new(64, 64, 100), new(500, 500, 0)];
+        int[][] edges = [[1], [0], [3], [1], []];
+        ReachabilityResult reach = new(nodes, edges, new Dictionary<int, bool[]> { [2] = [true, true, false, false, false] }, [0], [], []);
+
+        bool[] blastOnly = AirborneFuzzer.BlastOnly(reach, [true, true, false, false, false], [2, -1, 0, 2]);
+
+        Assert.Equal([false, false, true, true, false], blastOnly);
+    }
+
+    [Fact]
+    public void ABlastJumpGetsOutOfAShallowPitButNotADeepOne()
+    {
+        // Two pits beside a floor a spawn stands on, each walked into and not
+        // out of: one 160 deep, which rocket and sticky jumps clear, and one
+        // 1400 deep, which nothing clears.
+        NavBrush[] solids =
+        [
+            Box(-1024, -512, -64, 0, 512, 0),
+            Box(0, -512, -224, 256, 0, -160), Box(0, 0, -1464, 256, 512, -1400),
+            Box(0, -16, -1464, 256, 0, 0), Box(256, -512, -1464, 272, 512, 0),
+        ];
+        HullTraceWorld world = new(solids);
+        ReachabilityResult reach = Reachability.Analyze(world, Soldier, [new ReachSpawn(2, new Vec3(-300, 0, 0))],
+            new Vec3(-600, -480, -1450), new Vec3(240, 480, 200), ReachabilityOptions.Default with { Spacing = 64 });
+        Assert.Equal(2, reach.Traps.Count);
+
+        AirborneResult air = AirborneFuzzer.Analyze(world, Soldier, reach, AirborneOptions.Default with { Trajectories = 50, TrapFlights = 60 });
+
+        int shallow = reach.Traps[0].Sample.Z > -500 ? 0 : 1;
+        Assert.Contains("rocket_jump", air.TrapEscapes[shallow]);
+        Assert.Empty(air.TrapEscapes[1 - shallow]);
+    }
+
+    [Fact]
+    public void TrapEscapesNeedFlightsAndALimitAboveZero()
+    {
+        HullTraceWorld world = new([Floor, Box(100, -100, -300, 300, 100, -200)]);
+        ReachabilityResult reach = new(
+            [new(0, 0, 0), new(200, 0, -200)], [[1], []], new Dictionary<int, bool[]> { [2] = [true, true] }, [0], [], [new NodeGroup([1], new(200, 0, -200), new(200, 0, -200), new(200, 0, -200))]);
+
+        Assert.Empty(AirborneFuzzer.Analyze(world, Soldier, reach, AirborneOptions.Default with { Trajectories = 10, TrapFlights = 0 }).TrapEscapes[0]);
+        Assert.Empty(AirborneFuzzer.Analyze(world, Soldier, reach, AirborneOptions.Default with { Trajectories = 10, TrapLimit = 0 }).TrapEscapes[0]);
+        Assert.Single(AirborneFuzzer.Analyze(world, Soldier, reach, AirborneOptions.Default with { Trajectories = 0 }).TrapEscapes);
     }
 
     private static string Describe(AirborneResult r) =>

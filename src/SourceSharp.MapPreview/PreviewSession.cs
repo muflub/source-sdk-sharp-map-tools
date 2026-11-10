@@ -318,23 +318,29 @@ public sealed class PreviewSession
             }
         }
 
+        // The fuzz runs before the trap markers are written: it says which
+        // traps a blast jump gets out of.
+        AirborneResult? air = o.Airborne is { } airOptions
+            ? AirborneFuzzer.Analyze(world, profile, result, airOptions, cancellationToken)
+            : null;
+
         List<RegionReport> traps = [];
-        foreach (NodeGroup trap in result.Traps.OrderByDescending(t => t.Nodes.Count).ThenBy(t => t.Nodes[0]))
+        foreach (int t in Enumerable.Range(0, result.Traps.Count).OrderByDescending(t => result.Traps[t].Nodes.Count).ThenBy(t => result.Traps[t].Nodes[0]))
         {
+            NodeGroup trap = result.Traps[t];
+            IReadOnlyList<string>? escapes = air?.TrapEscapes[t];
             int number = markers.Count + 1;
-            markers.Add(new PreviewMarker(number, "trap", $"a player who gets here cannot get out ({trap.Nodes.Count} positions)", trap.Sample));
-            traps.Add(new RegionReport(trap.Nodes.Count, V(trap.Sample), V(trap.Min), V(trap.Max), number));
+            markers.Add(new PreviewMarker(number, "trap", TrapText(trap.Nodes.Count, escapes), trap.Sample));
+            traps.Add(new RegionReport(trap.Nodes.Count, V(trap.Sample), V(trap.Min), V(trap.Max), number, escapes));
         }
 
         List<RegionReport> islands = [.. result.Islands
             .OrderByDescending(g => g.Nodes.Count).ThenBy(g => g.Nodes[0]).Take(10)
             .Select(g => new RegionReport(g.Nodes.Count, V(g.Sample), V(g.Min), V(g.Max), 0))];
         Dictionary<int, int> reached = result.ReachedBy.ToDictionary(r => r.Key, r => r.Value.Count(b => b));
-        AirborneResult? air = null;
         AirborneReport? airReport = null;
-        if (o.Airborne is { } airOptions)
+        if (air is not null)
         {
-            air = AirborneFuzzer.Analyze(world, profile, result, airOptions, cancellationToken);
             List<SpotReport> problems = [];
             foreach (EventCluster spot in air.Clusters.Where(c => AirborneFuzzer.IsProblem(c.Kind)).Take(10))
             {
@@ -349,11 +355,42 @@ public sealed class PreviewSession
             }
 
             List<SpotReport> bonks = [.. air.Clusters.Where(c => !AirborneFuzzer.IsProblem(c.Kind)).Take(5).Select(c => Spot(c, world, 0))];
-            airReport = new AirborneReport(air.Trajectories, air.ExplosiveOnly.Count, problems, bonks);
+
+            // Areas only blast jumpers reach: the largest few get a marker,
+            // since a roof or a map edge a rocket jumper stands on usually
+            // wants player clip, or is a deliberate reward.
+            List<RegionReport> blastOnly = [];
+            foreach (NodeGroup area in air.BlastOnlyAreas.Take(10))
+            {
+                int number = 0;
+                if (area.Nodes.Count >= BlastOnlyMarkerNodes && blastOnly.Count(r => r.Marker > 0) < BlastOnlyMarkers)
+                {
+                    number = markers.Count + 1;
+                    markers.Add(new PreviewMarker(number, "blast_only", $"only blast jumps reach here ({area.Nodes.Count} positions)", area.Sample));
+                }
+
+                blastOnly.Add(new RegionReport(area.Nodes.Count, V(area.Sample), V(area.Min), V(area.Max), number));
+            }
+
+            airReport = new AirborneReport(air.Trajectories, air.ExplosiveOnly.Count, problems, bonks, blastOnly);
         }
 
         return (result, new MovementReport(profile.Name, result.Nodes.Count, reached, stuck, traps, islands, result.Islands.Count, airReport), air);
     }
+
+    /// <summary>How many blast-only areas get a marker.</summary>
+    private const int BlastOnlyMarkers = 3;
+
+    /// <summary>How many floor positions a blast-only area needs for a marker: smaller ones are a crate top or a sill.</summary>
+    private const int BlastOnlyMarkerNodes = 16;
+
+    /// <summary>A trap marker's text: whether blast jumps get out, when that was tried.</summary>
+    internal static string TrapText(int positions, IReadOnlyList<string>? escapes) => escapes switch
+    {
+        null => $"a player who gets here cannot get out ({positions} positions)",
+        { Count: 0 } => $"a player who gets here cannot get out, not even by blast jumping ({positions} positions)",
+        _ => $"a player who gets here cannot walk or jump out ({positions} positions); {string.Join(", ", escapes)} gets out",
+    };
 
     private static SpotReport Spot(EventCluster c, HullTraceWorld world, int marker)
     {

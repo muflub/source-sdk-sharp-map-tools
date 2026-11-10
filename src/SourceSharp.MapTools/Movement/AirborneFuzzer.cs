@@ -26,12 +26,16 @@ namespace SourceSharp.MapTools.Movement;
 public sealed record LaunchKind(string Name, float MinSpeed, float MaxSpeed, float MinElevation, float MaxElevation, float AzimuthSpread, bool RunningJump)
 {
     /// <summary>
-    /// A soldier's rocket jump. Blast knockback is damage × (48·48·82 ÷ hull
-    /// volume) × scale, capped at 1000; airborne self-damage scales by 10,
-    /// and a crouched hull counts as 55 high, so a crouched rocket jump
-    /// pushes 800 to 1000 units a second, mostly upward.
+    /// A soldier's rocket jump: the push the blast adds to the jump's own
+    /// speed. Blast knockback is damage × (48·48·82 ÷ hull volume) × scale,
+    /// capped at 1000 by the rules, but the calibration measured real ones:
+    /// a crouched rocket jump fired straight down, the strongest a single
+    /// rocket gives, leaves the ground at 885 units a second upward in all,
+    /// a push of about 615 on top of the jump; a standing one at 702, a push
+    /// of about 430. The range spans those, a little either side; a larger
+    /// push would report blast jumps getting out of pits no soldier climbs.
     /// </summary>
-    public static LaunchKind RocketJump { get; } = new("rocket_jump", 550f, 1000f, 40f, 85f, 35f, true);
+    public static LaunchKind RocketJump { get; } = new("rocket_jump", 400f, 650f, 40f, 85f, 35f, true);
 
     /// <summary>A demoman's sticky jump: one to three stickies, each push capped at 1000, so up to about 2000.</summary>
     public static LaunchKind StickyJump { get; } = new("sticky_jump", 800f, 2000f, 50f, 88f, 30f, true);
@@ -111,13 +115,33 @@ public sealed record AirborneOptions
 
     /// <summary>Gets the spot size events are gathered in, units.</summary>
     public float ClusterSize { get; init; } = 64f;
+
+    /// <summary>Gets the flights launched from inside each trap to see whether a blast jump gets out.</summary>
+    public int TrapFlights { get; init; } = 64;
+
+    /// <summary>Gets the most traps flown out of, largest first; the rest are reported with no way out tried.</summary>
+    public int TrapLimit { get; init; } = 32;
 }
 
 /// <summary>What the airborne fuzz found.</summary>
 /// <param name="Trajectories">The flights run.</param>
 /// <param name="Clusters">The spots where events gathered, most frequent first.</param>
-/// <param name="ExplosiveOnly">Floor nodes no spawn reaches on foot but a flight landed on.</param>
-public sealed record AirborneResult(int Trajectories, IReadOnlyList<EventCluster> Clusters, IReadOnlyList<int> ExplosiveOnly);
+/// <param name="ExplosiveOnly">
+/// Floor nodes no spawn reaches on foot that a blast jump does: where a
+/// flight landed, and everything a player walks or jumps to from there.
+/// </param>
+/// <param name="BlastOnlyAreas">Those nodes grouped by connection, largest first: roofs, ledges and map edges only blast jumpers get to.</param>
+/// <param name="TrapEscapes">
+/// Per trap of the reachability result, in its order, the launches whose
+/// flights from inside it landed outside it; empty when none did or the trap
+/// was beyond <see cref="AirborneOptions.TrapLimit"/>.
+/// </param>
+public sealed record AirborneResult(
+    int Trajectories,
+    IReadOnlyList<EventCluster> Clusters,
+    IReadOnlyList<int> ExplosiveOnly,
+    IReadOnlyList<NodeGroup> BlastOnlyAreas,
+    IReadOnlyList<IReadOnlyList<string>> TrapEscapes);
 
 /// <summary>
 /// Throws simulated players through the air from the floor a map's spawns
@@ -153,6 +177,20 @@ public sealed record AirborneResult(int Trajectories, IReadOnlyList<EventCluster
 /// </remarks>
 public static class AirborneFuzzer
 {
+    /// <summary>
+    /// The upward speed a flight has when its push lands: a blast jump's
+    /// push comes the tick after the jump, by when the jump's speed has lost
+    /// a tick and a half of gravity (half before the jump, the jump's own
+    /// half, and the end of the tick's).
+    /// </summary>
+    /// <param name="profile">The movement numbers.</param>
+    /// <returns>Units per second.</returns>
+    public static float JumpSpeedAtPush(MovementProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        return profile.JumpSpeed - (1.5f * profile.Gravity * PlayerMoveSim.TickInterval);
+    }
+
     /// <summary>Flies the trajectories.</summary>
     /// <param name="world">The collision.</param>
     /// <param name="profile">The movement numbers of the player flown.</param>
@@ -181,9 +219,10 @@ public static class AirborneFuzzer
         }
 
         int[] starts = [.. Enumerable.Range(0, reach.Nodes.Count).Where(i => reached[i])];
+        IReadOnlyList<string>[] noEscapes = [.. reach.Traps.Select(_ => (IReadOnlyList<string>)[])];
         if (starts.Length == 0 || o.Trajectories <= 0 || o.Launches.Count == 0)
         {
-            return new AirborneResult(0, [], []);
+            return new AirborneResult(0, [], [], [], noEscapes);
         }
 
         PlayerMoveSim sim = new(world, profile);
@@ -204,8 +243,90 @@ public static class AirborneFuzzer
             landings[t] = landed is { } p ? nodes.Nearest(p, profile.StandHeight * 0.5f) : -1;
         });
 
-        SortedSet<int> explosiveOnly = [.. landings.Where(n => n >= 0 && !reached[n])];
-        return new AirborneResult(o.Trajectories, Cluster(events, o.ClusterSize), [.. explosiveOnly]);
+        bool[] blastOnly = BlastOnly(reach, reached, landings);
+        List<NodeGroup> areas = Reachability.Islands(reach.Nodes, reach.Edges, [.. blastOnly.Select(b => !b)]);
+        areas.Sort((a, b) => b.Nodes.Count != a.Nodes.Count ? b.Nodes.Count.CompareTo(a.Nodes.Count) : a.Nodes[0].CompareTo(b.Nodes[0]));
+        IReadOnlyList<string>[] escapes = TrapEscapes(sim, reach, nodes, o, noEscapes, cancellationToken);
+        return new AirborneResult(
+            o.Trajectories, Cluster(events, o.ClusterSize), [.. Enumerable.Range(0, blastOnly.Length).Where(i => blastOnly[i])], areas, escapes);
+    }
+
+    /// <summary>
+    /// The blast tier of reachability: the floor flights landed on that no
+    /// walk or jump from a spawn reaches, and everything walks and jumps
+    /// reach from there without passing through floor reached on foot.
+    /// </summary>
+    internal static bool[] BlastOnly(ReachabilityResult reach, bool[] reached, IEnumerable<int> landings)
+    {
+        bool[] blastOnly = new bool[reach.Nodes.Count];
+        Queue<int> queue = new();
+        foreach (int n in landings)
+        {
+            if (n >= 0 && !reached[n] && !blastOnly[n])
+            {
+                blastOnly[n] = true;
+                queue.Enqueue(n);
+            }
+        }
+
+        while (queue.Count > 0)
+        {
+            foreach (int next in reach.Edges[queue.Dequeue()])
+            {
+                if (!reached[next] && !blastOnly[next])
+                {
+                    blastOnly[next] = true;
+                    queue.Enqueue(next);
+                }
+            }
+        }
+
+        return blastOnly;
+    }
+
+    /// <summary>
+    /// Whether a blast jump gets a player out of each trap: flights launched
+    /// from the trap's own floor, each launch kind in turn, and the kinds
+    /// whose flights came down on floor outside it. Each flight is seeded by
+    /// its index (numbered on from the main fuzz's), so the answer is the
+    /// same at any thread count.
+    /// </summary>
+    private static IReadOnlyList<string>[] TrapEscapes(
+        PlayerMoveSim sim, ReachabilityResult reach, NodeIndex nodes, AirborneOptions o, IReadOnlyList<string>[] none, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string>[] escapes = [.. none];
+        int[] chosen = [.. Enumerable.Range(0, reach.Traps.Count)
+            .OrderByDescending(t => reach.Traps[t].Nodes.Count).ThenBy(t => t).Take(Math.Max(0, o.TrapLimit))];
+        if (chosen.Length == 0 || o.TrapFlights <= 0)
+        {
+            return escapes;
+        }
+
+        string?[] way = new string?[chosen.Length * o.TrapFlights];
+        ParallelOptions parallel = new() { MaxDegreeOfParallelism = o.MaxDegreeOfParallelism, CancellationToken = cancellationToken };
+        HashSet<int>[] inside = [.. chosen.Select(t => new HashSet<int>(reach.Traps[t].Nodes))];
+        System.Threading.Tasks.Parallel.For(0, way.Length, parallel, k =>
+        {
+            int trap = k / o.TrapFlights;
+            IReadOnlyList<int> floor = reach.Traps[chosen[trap]].Nodes;
+            Random64 random = new(o.Seed, (ulong)o.Trajectories + (ulong)k);
+            Vec3 start = reach.Nodes[floor[random.Below(floor.Count)]];
+            LaunchKind launch = o.Launches[(k % o.TrapFlights) % o.Launches.Count];
+            float yaw = random.Between(0f, 360f);
+            float speed = random.Between(launch.MinSpeed, launch.MaxSpeed);
+            float elevation = random.Between(launch.MinElevation, launch.MaxElevation);
+            float azimuth = yaw + random.Between(-launch.AzimuthSpread, launch.AzimuthSpread);
+            (_, Vec3? landed) = Fly(sim, start, yaw, launch, speed, elevation, azimuth, o.MaxTicks);
+            int end = landed is { } p ? nodes.Nearest(p, sim.Profile.StandHeight * 0.5f) : -1;
+            way[k] = end >= 0 && !inside[trap].Contains(end) ? launch.Name : null;
+        });
+
+        for (int t = 0; t < chosen.Length; t++)
+        {
+            escapes[chosen[t]] = [.. way.Skip(t * o.TrapFlights).Take(o.TrapFlights).OfType<string>().Distinct().Order(StringComparer.Ordinal)];
+        }
+
+        return escapes;
     }
 
     /// <summary>Flies one trajectory and records its events.</summary>

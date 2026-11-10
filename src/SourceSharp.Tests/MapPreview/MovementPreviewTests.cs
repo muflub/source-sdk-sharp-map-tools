@@ -135,9 +135,11 @@ public class MovementPreviewTests
     {
         PreviewReport report = new("m", 20, [], new SceneCounts(0, 0, 0, 0, 0, 0), [], [], [],
             new PreviewChecks([], [], new LightingReport(0, 0, 0, 0, 0, false), new SkyboxReport(null, 0), [], new SortedDictionary<string, int>(),
-                new MovementReport("p", 1, new Dictionary<int, int> { [2] = 1 }, [], [], [], 0,
+                new MovementReport("p", 1, new Dictionary<int, int> { [2] = 1 }, [],
+                    [new RegionReport(5, [0, 0, 0], [0, 0, 0], [1, 1, 1], 1, ["rocket_jump"]), new RegionReport(3, [0, 0, 0], [0, 0, 0], [1, 1, 1], 2)], [], 0,
                     new AirborneReport(10, 3, [new SpotReport("edge_catch", 4, [1, 2, 3], ["rocket_jump"], [[0, 0, 0], [16, 16, 100]], 7)],
-                        [new SpotReport("ceiling_bonk", 2, [0, 0, 0], ["sticky_jump"], null, 0)]))));
+                        [new SpotReport("ceiling_bonk", 2, [0, 0, 0], ["sticky_jump"], null, 0)],
+                        [new RegionReport(40, [5, 5, 300], [0, 0, 300], [64, 64, 300], 8)]))));
 
         using JsonDocument json = JsonDocument.Parse(PreviewReportWriter.Write(report));
         JsonElement air = json.RootElement.GetProperty("checks").GetProperty("movement").GetProperty("airborne");
@@ -149,7 +151,20 @@ public class MovementPreviewTests
         JsonElement bonk = air.GetProperty("ceiling_bonks")[0];
         Assert.False(bonk.TryGetProperty("solid", out _));
         Assert.False(bonk.TryGetProperty("marker", out _));
+        JsonElement area = air.GetProperty("blast_only_areas")[0];
+        Assert.Equal(40, area.GetProperty("nodes").GetInt32());
+        Assert.Equal(8, area.GetProperty("marker").GetInt32());
+        JsonElement traps = json.RootElement.GetProperty("checks").GetProperty("movement").GetProperty("traps");
+        Assert.Equal("rocket_jump", traps[0].GetProperty("escapes")[0].GetString());
+        Assert.False(traps[1].TryGetProperty("escapes", out _));
     }
+
+    [Theory]
+    [InlineData(null, "a player who gets here cannot get out (5 positions)")]
+    [InlineData("", "a player who gets here cannot get out, not even by blast jumping (5 positions)")]
+    [InlineData("rocket_jump,sticky_jump", "a player who gets here cannot walk or jump out (5 positions); rocket_jump, sticky_jump gets out")]
+    public void ATrapMarkerSaysWhetherBlastJumpsGetOut(string? escapes, string text) =>
+        Assert.Equal(text, PreviewSession.TrapText(5, escapes?.Split(',', StringSplitOptions.RemoveEmptyEntries)));
 
     [Fact]
     public void BlastOnlyFloorIsDrawnBlue()

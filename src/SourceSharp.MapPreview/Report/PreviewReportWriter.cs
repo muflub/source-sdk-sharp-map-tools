@@ -244,6 +244,7 @@ public static class PreviewReportWriter
             w.WriteNumber("explosive_only_nodes", air.ExplosiveOnlyNodes);
             Spots(w, "problems", air.Problems);
             Spots(w, "ceiling_bonks", air.CeilingBonks);
+            Regions(w, "blast_only_areas", air.BlastOnlyAreas);
             w.WriteEndObject();
         }
 
@@ -297,6 +298,11 @@ public static class PreviewReportWriter
             if (r.Marker > 0)
             {
                 w.WriteNumber("marker", r.Marker);
+            }
+
+            if (r.Escapes is { } escapes)
+            {
+                Strings(w, "escapes", escapes);
             }
 
             w.WriteEndObject();

@@ -364,7 +364,7 @@ public static class Reachability
     }
 
     /// <summary>Unreached nodes, grouped by connection in either direction.</summary>
-    private static List<NodeGroup> Islands(List<Vec3> nodes, int[][] edges, bool[] reached)
+    internal static List<NodeGroup> Islands(IReadOnlyList<Vec3> nodes, IReadOnlyList<int[]> edges, bool[] reached)
     {
         List<int>[] undirected = new List<int>[nodes.Count];
         for (int i = 0; i < nodes.Count; i++)
@@ -538,7 +538,7 @@ public static class Reachability
         return component;
     }
 
-    private static NodeGroup Group(List<Vec3> nodes, List<int> members)
+    private static NodeGroup Group(IReadOnlyList<Vec3> nodes, List<int> members)
     {
         float minX = float.MaxValue, minY = float.MaxValue, minZ = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
         foreach (int m in members)
