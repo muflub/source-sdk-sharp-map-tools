@@ -1,6 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <IsPackable>false</IsPackable>
+    <!-- Packed for SourceSharp.MapTools' package, which depends on it (tools/pack-mapformats.sh). -->
+    <IsPackable>true</IsPackable>
+    <PackageId>SourceSharp.RoomContracts</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>SourceSharp</Authors>
+    <Description>The contract between ssmap link and the Source Sharp mod: the entities the linker writes and the room-local naming grammar. No dependencies.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
 
     <!--
       The contract between ssmap link and the Source Sharp mod: the class

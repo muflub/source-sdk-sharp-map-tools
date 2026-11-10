@@ -248,6 +248,25 @@ public sealed class LevelNavFromBspTests(BspNavMap map) : IClassFixture<BspNavMa
         Assert.All(together, r => Assert.Equal(first, Nav3dWriter.Write(r.Level)));
     }
 
+    /// <summary>
+    /// Progress is told once per cell, every count from one to the grid's
+    /// cells arriving exactly once at any degree, and the file is the same
+    /// bytes as a build told nothing.
+    /// </summary>
+    [Fact]
+    public void ProgressCountsEveryCellOnceAndChangesNothing()
+    {
+        byte[] quiet = Nav3dWriter.Write(map.Build().Level);
+        System.Collections.Concurrent.ConcurrentBag<(int Done, int Total)> told = [];
+        BspNavResult result = map.Build(new BspNavOptions { MaxDegree = 4, Progress = (done, total) => told.Add((done, total)) });
+
+        int cells = result.Level.Columns * result.Level.Rows;
+        Assert.True(cells > 1, $"the hall is {cells} cell(s)");
+        Assert.Equal(Enumerable.Range(1, cells), told.Select(t => t.Done).Order());
+        Assert.All(told, t => Assert.Equal(cells, t.Total));
+        Assert.Equal(quiet, Nav3dWriter.Write(result.Level));
+    }
+
     /// <summary>A map taller than a column holds, and a cell the voxel does not divide, are refused by name.</summary>
     [Fact]
     public void AMapTheGridCannotHoldIsRefused()

@@ -3,7 +3,23 @@
     <!-- Windings, portals, patches, transfers and KD nodes are structs in
          pooled or NativeMemory slabs addressed by (offset,count) handles. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <IsPackable>false</IsPackable>
+
+    <!--
+      Packed beside SourceSharp.MapFormats (tools/pack-mapformats.sh) for one
+      consumer: the game server builds a map's .nav3d in its own process when
+      the map has none (LevelNavFromBsp over the bytes the engine mounts,
+      NavModelBounds over its models), and restores this package from the same
+      local feed at a pinned version. Its dependencies are the two libraries
+      it references (MapFormats, RoomContracts, each its own package) and
+      YamlDotNet; MapToolsPackageTests checks exactly that. The version rule
+      is MapFormats': every drop handed over gets a new version.
+    -->
+    <IsPackable>true</IsPackable>
+    <PackageId>SourceSharp.MapTools</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>SourceSharp</Authors>
+    <Description>SourceSharp's map compile passes as a library: the .nav3d builder over a compiled map (LevelNavFromBsp), the room pipeline, and the passes they share. CPU only; no native library on the navigation path.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
 
 
     <GenerateDocumentationFile>true</GenerateDocumentationFile>

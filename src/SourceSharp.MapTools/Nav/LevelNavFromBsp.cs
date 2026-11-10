@@ -77,6 +77,14 @@ public sealed record BspNavOptions
 
     /// <summary>How many cells are built at once. The file is the same at any degree.</summary>
     public int MaxDegree { get; init; } = 1;
+
+    /// <summary>
+    /// Told the cells built so far and the cells in all, once after each cell
+    /// is built, on the thread that built it (so concurrently at a degree
+    /// above one, and a count may arrive after a higher one); null tells
+    /// nothing. It never changes the file.
+    /// </summary>
+    public Action<int, int>? Progress { get; init; }
 }
 
 /// <summary>What <see cref="LevelNavFromBsp.Build"/> made: the navigation, and what it could not read.</summary>
@@ -239,10 +247,12 @@ public static class LevelNavFromBsp
 
         CellBuild?[] built = new CellBuild?[columns * rows];
         ParallelOptions parallel = new() { MaxDegreeOfParallelism = options.MaxDegree, CancellationToken = cancellationToken };
+        int done = 0;
         System.Threading.Tasks.Parallel.For(0, built.Length, parallel, c =>
         {
             NavRegion region = new(ox + ((c % columns) * cell), oy + ((c / columns) * cell), oz, n, n, nz, voxel);
             built[c] = BuildCell(geometry, region, settings, options.Reach, tree, overhangIndex, cancellationToken);
+            options.Progress?.Invoke(Interlocked.Increment(ref done), built.Length);
         });
 
         return new BspNavResult(
