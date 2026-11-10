@@ -381,17 +381,28 @@ public static class LevelNavFromBsp
         // Which voxels lie outside the map: their centre in a solid leaf, or,
         // with a play space, in a leaf outside it (the 3D skybox, a stage no
         // spawn joins), which no player reaches and the build never voxelises.
+        // A column's centres share their x and y, so the tree is walked for
+        // the whole column at once (BspTreeView.LeavesAlong): each centre's
+        // leaf is the one LeafOf gives it.
         bool[] outside = new bool[region.SizeX * region.SizeY * region.SizeZ];
         bool anyInside = false;
+        float[] heights = new float[region.SizeZ];
+        int[] leaves = new int[region.SizeZ];
         for (int z = 0; z < region.SizeZ; z++)
         {
-            for (int y = 0; y < region.SizeY; y++)
+            NavBox v = region.Voxel(0, 0, z);
+            heights[z] = (float)((v.MinZ + v.MaxZ) / 2);
+        }
+
+        for (int y = 0; y < region.SizeY; y++)
+        {
+            for (int x = 0; x < region.SizeX; x++)
             {
-                for (int x = 0; x < region.SizeX; x++)
+                NavBox v = region.Voxel(x, y, 0);
+                tree.LeavesAlong((float)((v.MinX + v.MaxX) / 2), (float)((v.MinY + v.MaxY) / 2), heights, leaves);
+                for (int z = 0; z < region.SizeZ; z++)
                 {
-                    NavBox v = region.Voxel(x, y, z);
-                    Vec3 centre = new((float)((v.MinX + v.MaxX) / 2), (float)((v.MinY + v.MaxY) / 2), (float)((v.MinZ + v.MaxZ) / 2));
-                    int leaf = tree.LeafOf(centre);
+                    int leaf = leaves[z];
                     bool solid = (leaf >= 0 && leaf < tree.LeafContents.Length && (tree.LeafContents[leaf] & BspTreeView.ContentsSolid) != 0)
                         || (space is not null && !space.Holds(leaf));
                     outside[region.Index(x, y, z)] = solid;
