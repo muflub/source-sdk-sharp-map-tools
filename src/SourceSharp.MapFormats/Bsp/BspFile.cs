@@ -6,6 +6,8 @@
 //=============================================================================//
 
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
 
 using SourceSharp.MapFormats.Compression;
 
@@ -91,6 +93,10 @@ public static class BspFile
 
         BspLumpPlacement[] layout = new BspLumpPlacement[BspData.HeaderLumps];
 
+        // Compressed lumps are read in the loop and unpacked together after
+        // it (UnpackAll), on several threads: unpacking is most of a packed
+        // map's load, and each lump unpacks alone.
+        List<PackedLump> packed = [];
         for (int i = 0; i < BspData.HeaderLumps; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -108,6 +114,7 @@ public static class BspFile
 
             if (filelen < 0 || fileofs < 0)
             {
+                UnpackAll(bsp, packed, cancellationToken);
                 throw new InvalidBspException(
                     $"lump {i} has a negative offset or length ({fileofs}, {filelen})");
             }
@@ -127,6 +134,7 @@ public static class BspFile
 
             if (fileofs + (long)filelen > stream.Length)
             {
+                UnpackAll(bsp, packed, cancellationToken);
                 throw new InvalidBspException(
                     $"lump {i} runs past the end of the file: offset {fileofs} + length {filelen} " +
                     $"exceeds {stream.Length} bytes");
@@ -136,17 +144,19 @@ public static class BspFile
             stream.Seek(fileofs, SeekOrigin.Begin);
             await stream.ReadExactlyAsync(data, cancellationToken).ConfigureAwait(false);
 
-            // A compressed lump is unpacked here, as the engine and the
-            // reference tools unpack it on load, so everything downstream sees
-            // plain lump bytes and a save writes them plain.
+            // A compressed lump is unpacked on load, as the engine and the
+            // reference tools unpack it, so everything downstream sees plain
+            // lump bytes and a save writes them plain.
             if (uncompressedSize != 0)
             {
-                data = Unpack(data, uncompressedSize, $"lump {i}");
+                packed.Add(new PackedLump(i, data, uncompressedSize, lumpVersion));
+                continue;
             }
 
             bsp[i] = new BspLumpData(data, lumpVersion, 0);
         }
 
+        UnpackAll(bsp, packed, cancellationToken);
         bsp.SourceLayout = layout;
         ParseGameLumps(bsp);
         return bsp;
@@ -532,6 +542,69 @@ public static class BspFile
         await stream.WriteAsync(padding, cancellationToken).ConfigureAwait(false);
         return position + count;
     }
+
+    /// <summary>
+    /// Unpacks the compressed lumps read so far into their slots, several at
+    /// once, largest first; the result is the same as unpacking each in
+    /// turn, error included.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Each lump's unpacking reads only its own bytes and writes only its own
+    /// slot of the results, so the order they run in cannot change a byte.
+    /// When some fail, the one thrown is the lowest lump's, the error a
+    /// lump-by-lump load would have stopped at; and the loader drains what it
+    /// has read before it throws a later lump's header error, so that too
+    /// comes out as it would one lump at a time.
+    /// </para>
+    /// <para>
+    /// The threads are the shared pool's, and nothing outlives the call: a
+    /// cancelled load stops handing out lumps and throws.
+    /// </para>
+    /// </remarks>
+    private static void UnpackAll(BspData bsp, List<PackedLump> packed, CancellationToken cancellationToken)
+    {
+        if (packed.Count == 0)
+        {
+            return;
+        }
+
+        byte[]?[] unpacked = new byte[packed.Count][];
+        ExceptionDispatchInfo?[] failed = new ExceptionDispatchInfo?[packed.Count];
+        int[] order = [.. Enumerable.Range(0, packed.Count)];
+        Array.Sort(order, new LargestFirst(packed));
+        ParallelOptions options = new() { CancellationToken = cancellationToken };
+        Parallel.ForEach(Partitioner.Create(order, EnumerablePartitionerOptions.NoBuffering), options, k =>
+        {
+            PackedLump lump = packed[k];
+            try
+            {
+                unpacked[k] = Unpack(lump.Bytes, lump.Declared, $"lump {lump.Index}");
+            }
+            catch (Exception e)
+            {
+                failed[k] = ExceptionDispatchInfo.Capture(e);
+            }
+        });
+
+        for (int k = 0; k < packed.Count; k++)
+        {
+            failed[k]?.Throw();
+            bsp[packed[k].Index] = new BspLumpData(unpacked[k]!, packed[k].Version, 0);
+        }
+
+        packed.Clear();
+    }
+
+    /// <summary>Packed lumps by their packed size, largest first, then in slot order.</summary>
+    private sealed class LargestFirst(List<PackedLump> packed) : IComparer<int>
+    {
+        public int Compare(int a, int b) =>
+            packed[a].Bytes.Length != packed[b].Bytes.Length ? packed[b].Bytes.Length.CompareTo(packed[a].Bytes.Length) : a.CompareTo(b);
+    }
+
+    /// <summary>A compressed lump as read: its slot, its packed bytes, the size it declares unpacked, and its version.</summary>
+    private sealed record PackedLump(int Index, byte[] Bytes, int Declared, int Version);
 
     /// <summary>
     /// Unpacks one engine LZMA container and checks it against the size the

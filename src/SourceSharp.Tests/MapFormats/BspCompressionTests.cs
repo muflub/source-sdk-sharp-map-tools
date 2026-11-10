@@ -70,6 +70,62 @@ public sealed class BspCompressionTests
         Assert.Contains("does not unpack", error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Many compressed lumps, unpacked together, each land in their own slot with their own bytes, beside a plain lump.</summary>
+    [Fact]
+    public async Task ManyCompressedLumpsEachUnpackIntoTheirOwnSlot()
+    {
+        BspLump[] lumps = [BspLump.TexDataStringData, BspLump.Planes, BspLump.Vertexes, BspLump.Edges, BspLump.SurfEdges, BspLump.Leafs];
+        BspTestBuilder builder = new BspTestBuilder().Lump(BspLump.Entities, "\0"u8.ToArray());
+        foreach (BspLump lump in lumps)
+        {
+            builder.Lump(lump, Container(), Sample.Length);
+        }
+
+        BspData bsp = await LoadAsync(builder.Build());
+
+        Assert.All(lumps, lump => Assert.Equal(Sample, bsp[lump].Data.ToArray()));
+        Assert.Equal(1, bsp[BspLump.Entities].Length);
+    }
+
+    /// <summary>
+    /// When several compressed lumps fail, the lowest lump's error is the one
+    /// thrown, as a lump-by-lump load would stop at it, though the larger
+    /// broken lump after it is unpacked first.
+    /// </summary>
+    [Fact]
+    public async Task TheLowestBrokenLumpsErrorIsThrown()
+    {
+        byte[] file = new BspTestBuilder()
+            .Lump(BspLump.Planes, [1, 2, 3, 4], 100)
+            .Lump(BspLump.Vertexes, Container(), Sample.Length)
+            .Lump(BspLump.TexDataStringData, Container(), Sample.Length + 1)
+            .Build();
+
+        InvalidBspException error = await Assert.ThrowsAsync<InvalidBspException>(() => LoadAsync(file));
+        Assert.Equal($"lump {(int)BspLump.Planes} is compressed but does not unpack", error.Message.Split(':')[0]);
+    }
+
+    /// <summary>
+    /// A compressed lump that does not unpack is reported before a later
+    /// lump's header error, the order a lump-by-lump load meets them in.
+    /// </summary>
+    [Fact]
+    public async Task ABrokenCompressedLumpIsReportedBeforeALaterLumpsHeaderError()
+    {
+        byte[] file = new BspTestBuilder()
+            .Lump(BspLump.Planes, [1, 2, 3, 4], 100)
+            .Lump(BspLump.TexDataStringData, "abcd"u8.ToArray())
+            .Build();
+        BitConverter.GetBytes(1 << 20).CopyTo(file, 8 + ((int)BspLump.TexDataStringData * 16) + 4);
+
+        InvalidBspException error = await Assert.ThrowsAsync<InvalidBspException>(() => LoadAsync(file));
+        Assert.Contains("does not unpack", error.Message, StringComparison.Ordinal);
+
+        BitConverter.GetBytes(0).CopyTo(file, 8 + ((int)BspLump.Planes * 16) + 12);
+        error = await Assert.ThrowsAsync<InvalidBspException>(() => LoadAsync(file));
+        Assert.Contains("runs past the end of the file", error.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
