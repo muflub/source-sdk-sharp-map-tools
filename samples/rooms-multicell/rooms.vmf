@@ -5939,6 +5939,18 @@ entity
 entity
 {
 	"id" "538"
+	"classname" "info_player_start"
+	"origin" "1152 128 17"
+	"angles" "0 45 0"
+	editor
+	{
+		"visgroupshown" "1"
+		"visgroupautoshown" "1"
+	}
+}
+entity
+{
+	"id" "539"
 	"classname" "light"
 	"origin" "1408 320 208"
 	"_light" "255 240 220 200"
@@ -5950,7 +5962,7 @@ entity
 }
 entity
 {
-	"id" "539"
+	"id" "540"
 	"classname" "info_room"
 	"origin" "1024 0 0"
 	"name" "court"
@@ -5967,7 +5979,7 @@ entity
 }
 entity
 {
-	"id" "540"
+	"id" "541"
 	"classname" "light"
 	"origin" "2048 192 208"
 	"_light" "255 240 220 200"
@@ -5979,7 +5991,7 @@ entity
 }
 entity
 {
-	"id" "541"
+	"id" "542"
 	"classname" "info_room"
 	"origin" "1920 0 0"
 	"name" "gallery"
@@ -5996,7 +6008,7 @@ entity
 }
 entity
 {
-	"id" "542"
+	"id" "543"
 	"classname" "light"
 	"origin" "2560 192 464"
 	"_light" "255 240 220 200"
@@ -6008,7 +6020,7 @@ entity
 }
 entity
 {
-	"id" "543"
+	"id" "544"
 	"classname" "info_room"
 	"origin" "2304 0 0"
 	"name" "atrium"

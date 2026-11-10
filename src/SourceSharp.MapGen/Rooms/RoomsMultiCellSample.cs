@@ -29,7 +29,7 @@ namespace SourceSharp.MapGen.Rooms;
 /// <list type="bullet">
 /// <item><c>hub</c>: one cell, four doors, the rooms of one cell the level joins the others with.</item>
 /// <item><c>hall</c>: 2 x 2, doors at <c>east0</c>, <c>west1</c>, <c>north0</c> and <c>south1</c>, a pillar standing across both internal cell faces.</item>
-/// <item><c>court</c>: 3 x 3, a door at the middle edge of each side, a low wall across an internal cell face.</item>
+/// <item><c>court</c>: 3 x 3, a door at the middle edge of each side, a low wall across an internal cell face, and the level's player start.</item>
 /// <item><c>gallery</c>: 1 x 2, doors at each end and at the east side's north cell.</item>
 /// <item><c>atrium</c>: 2 x 2 and two cells tall (<c>room_height 512</c>), a
 /// displacement crossing the internal cell face x = 256 and a pool across
@@ -201,6 +201,16 @@ public static class RoomsMultiCellSample
             x += room.SpanX + Rooms3x3Kit.LibraryGap;
             map.WorldSolids.AddRange(Shell(room, corner));
             map.WorldSolids.AddRange(room.Extra(corner));
+
+            if (room.Name == "court")
+            {
+                // A player start, so a preview's reach (ssmap preview
+                // -movement) has somewhere to walk from.
+                VmfEntity start = new() { ClassName = "info_player_start" };
+                start.Set("origin", (corner + new Point(128, 128, 17)).ToString());
+                start.Set("angles", "0 45 0");
+                map.Entities.Add(start);
+            }
 
             VmfEntity light = new() { ClassName = "light" };
             light.Set("origin", (corner + new Point(room.SpanX / 2, room.SpanY / 2 - 64, room.Height - 48)).ToString());
