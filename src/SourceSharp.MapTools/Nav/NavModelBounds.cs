@@ -83,7 +83,11 @@ public static class NavModelBounds
     /// <param name="content">The game's content.</param>
     /// <param name="models">The model paths (<c>.mdl</c>); each one's <c>.phy</c> beside it is read.</param>
     /// <param name="cancellationToken">Cancels the reads.</param>
-    /// <returns>Each path's pieces, or null when the content has no <c>.phy</c> for it or it is not one this reads.</returns>
+    /// <returns>
+    /// Each path's pieces: empty when the content has no <c>.phy</c> for it
+    /// (the engine then makes a vphysics-solid prop non-solid), null when it
+    /// has one this does not read.
+    /// </returns>
     public static async Task<IReadOnlyDictionary<string, IReadOnlyList<NavPiece>?>> LoadPiecesAsync(
         IContentFileSystem content, IReadOnlyList<string> models, CancellationToken cancellationToken = default)
     {
@@ -96,7 +100,7 @@ public static class NavModelBounds
             if (VPath.TryCreate(Path.ChangeExtension(model, ".phy"), out VPath path))
             {
                 using IMemoryOwner<byte>? owner = await content.ReadAsync(path, cancellationToken).ConfigureAwait(false);
-                found = owner is null ? null : Pieces(owner.Memory.Span);
+                found = owner is null ? [] : Pieces(owner.Memory.Span);
             }
 
             pieces[model] = found;

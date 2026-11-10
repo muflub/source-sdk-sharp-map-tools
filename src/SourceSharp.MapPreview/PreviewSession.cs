@@ -10,6 +10,7 @@ using System.Globalization;
 using SourceSharp.MapFormats.Bsp;
 using SourceSharp.MapFormats.Bsp.Structs;
 using SourceSharp.MapFormats.Geometry;
+using SourceSharp.MapFormats.Nav;
 using SourceSharp.MapFormats.Imaging;
 using SourceSharp.MapPreview.Cameras;
 using SourceSharp.MapPreview.Materials;
@@ -301,7 +302,7 @@ public sealed class PreviewSession
             return (null, null, null);
         }
 
-        (HullTraceWorld world, _) = await HullTraceWorld.FromBspAsync(bsp, content, cancellationToken).ConfigureAwait(false);
+        (HullTraceWorld world, IReadOnlyList<string> collisionWarnings) = await HullTraceWorld.FromBspAsync(bsp, content, cancellationToken).ConfigureAwait(false);
         (Vec3 min, Vec3 max) = CameraPlanner.ContentBounds(scene);
         ReachSpawn[] spawns = [.. scene.Spawns.Select(s => new ReachSpawn(s.Team, s.Origin))];
         ReachabilityResult result = Reachability.Analyze(
@@ -313,7 +314,7 @@ public sealed class PreviewSession
             if (result.SpawnNodes[i] < 0)
             {
                 int number = markers.Count + 1;
-                markers.Add(new PreviewMarker(number, "stuck_spawn", $"spawn team {spawns[i].Team} stands on no floor", spawns[i].Origin));
+                markers.Add(new PreviewMarker(number, "stuck_spawn", StuckText(spawns[i].Team, world, profile, spawns[i].Origin, scene.Props), spawns[i].Origin));
                 stuck.Add(new RegionReport(0, V(spawns[i].Origin), V(spawns[i].Origin), V(spawns[i].Origin), number));
             }
         }
@@ -375,7 +376,7 @@ public sealed class PreviewSession
             airReport = new AirborneReport(air.Trajectories, air.ExplosiveOnly.Count, problems, bonks, blastOnly);
         }
 
-        return (result, new MovementReport(profile.Name, result.Nodes.Count, reached, stuck, traps, islands, result.Islands.Count, airReport), air);
+        return (result, new MovementReport(profile.Name, result.Nodes.Count, reached, stuck, traps, islands, result.Islands.Count, airReport, collisionWarnings), air);
     }
 
     /// <summary>How many blast-only areas get a marker.</summary>
@@ -383,6 +384,42 @@ public sealed class PreviewSession
 
     /// <summary>How many floor positions a blast-only area needs for a marker: smaller ones are a crate top or a sill.</summary>
     private const int BlastOnlyMarkerNodes = 16;
+
+    /// <summary>
+    /// A stuck spawn's marker text: why no floor position takes it. Either
+    /// the player's box starts inside something, named when it is a prop
+    /// (the prop nearest the solid it hit), or it is clear but has no floor
+    /// under it within a step.
+    /// </summary>
+    /// <param name="team">The spawn's team.</param>
+    /// <param name="world">The collision.</param>
+    /// <param name="profile">The player, for the standing box.</param>
+    /// <param name="origin">The spawn's origin.</param>
+    /// <param name="props">The map's props, to name one the box is inside.</param>
+    /// <returns>The text.</returns>
+    internal static string StuckText(int team, HullTraceWorld world, MovementProfile profile, Vec3 origin, IReadOnlyList<PreviewProp> props)
+    {
+        HullTrace inside = world.Trace(origin, origin, profile.Mins(false), profile.Maxs(false));
+        if (!inside.StartSolid || inside.Brush < 0)
+        {
+            return $"spawn team {team} has no floor under it";
+        }
+
+        // A prop's pieces lie about its origin; the prop nearest the hit
+        // solid, with its origin no more than a player's width outside it,
+        // is the one the box is in.
+        NavBrush solid = world.Solids[inside.Brush];
+        const double reach = 48;
+        PreviewProp? prop = props
+            .Where(p => p.Origin.X >= solid.MinX - reach && p.Origin.X <= solid.MaxX + reach
+                && p.Origin.Y >= solid.MinY - reach && p.Origin.Y <= solid.MaxY + reach
+                && p.Origin.Z >= solid.MinZ - reach && p.Origin.Z <= solid.MaxZ + reach)
+            .OrderBy(p => (p.Origin - origin).LengthSquared())
+            .FirstOrDefault();
+        return prop is null
+            ? $"spawn team {team} starts inside a brush"
+            : $"spawn team {team} starts inside the prop {prop.Model}";
+    }
 
     /// <summary>A trap marker's text: whether blast jumps get out, when that was tried.</summary>
     internal static string TrapText(int positions, IReadOnlyList<string>? escapes) => escapes switch

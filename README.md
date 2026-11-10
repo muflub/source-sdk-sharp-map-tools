@@ -630,9 +630,15 @@ sampled every 32 units, and walks and running crouch-jumps in eight
 directions from each say where a player ends up. The result is a reach
 tile on the sheet (green: floor every team's spawns reach; yellow: only
 some teams; grey: none; red: a trap), numbered markers for traps (places
-a player can get into but not out of) and spawns that start inside a
-solid, and a `movement` section in `index.json` with the counts, the
-traps and the largest unreached islands. The profile is a TF2 soldier
+a player can get into but not out of) and stuck spawns (the marker says
+whether the spawn starts inside a brush, inside a named prop, or has no
+floor under it), and a `movement` section in `index.json` with the counts,
+the traps and the largest unreached islands. Static props collide as the
+engine sets them up: placed solid 6 with their model's `.phy`, placed
+solid 2 as their hull box, and not at all when placed solid 6 with no
+`.phy` (the engine logs "bogus solid type" and makes them non-solid; TF2's
+mining cart, track and minehead are such models). Those props are named in
+`collision_warnings` and printed as warnings. The profile is a TF2 soldier
 for a TF2 game and the Half-Life 2 Deathmatch player otherwise; name a TF2
 class (`-movement scout`) or `hl2mp` to choose.
 

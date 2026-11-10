@@ -165,11 +165,32 @@ public static class NavFloorCheck
     /// the class, the displacements' surfaces, and the solid static props'
     /// convex pieces (or turned hull boxes).
     /// </summary>
+    /// <remarks>
+    /// A static prop collides as the engine sets it up at load. Placed
+    /// <c>solid 6</c> (vphysics) it collides with its model's <c>.phy</c>;
+    /// with no <c>.phy</c> the engine logs a "bogus solid type" map error and
+    /// makes it non-solid, so it is left out here too, with a warning, rather
+    /// than standing in as its hull box: a box there invented a spawn stuck
+    /// inside a cart players walk straight through. Placed <c>solid 2</c>
+    /// (bounding box) it is its hull box whether or not it has a <c>.phy</c>.
+    /// Any other solid type the engine also makes non-solid. When the
+    /// <c>.phy</c> is unknown (no reader given, or one this cannot read) the
+    /// hull box stands in, the closest guess.
+    /// </remarks>
     /// <param name="bsp">The map.</param>
     /// <param name="modelBounds">A model's hull by path, or null when unknown.</param>
-    /// <param name="modelPieces">A model's pieces by path, or null when unknown.</param>
+    /// <param name="modelPieces">
+    /// A model's <c>.phy</c> pieces by path: empty when the content has no
+    /// <c>.phy</c> for it, null when unknown.
+    /// </param>
     /// <param name="clipClass">Whose collision.</param>
-    /// <returns>The solids, and one warning per model the content lacks.</returns>
+    /// <returns>The solids, and one warning per model the content lacks or the engine makes non-solid.</returns>
+    /// <summary>A static prop's <c>solid</c> for its model's <c>.phy</c>.</summary>
+    internal const int SolidVPhysics = 6;
+
+    /// <summary>A static prop's <c>solid</c> for its model's hull box.</summary>
+    internal const int SolidBoundingBox = 2;
+
     internal static (IReadOnlyList<NavBrush> Solids, IReadOnlyList<string> Warnings) Collision(
         BspData bsp,
         Func<string, (Vec3 Mins, Vec3 Maxs)?>? modelBounds,
@@ -184,6 +205,7 @@ public static class NavFloorCheck
         if (NavGeometry.StaticPropLumpOf(bsp) is { } lump)
         {
             SortedDictionary<string, int> lacking = new(StringComparer.Ordinal);
+            SortedDictionary<string, int> bogus = new(StringComparer.Ordinal);
             foreach (StaticProp prop in lump.Props)
             {
                 if (prop.Solid == 0 || prop.PropType >= lump.ModelNames.Count)
@@ -192,8 +214,16 @@ public static class NavFloorCheck
                 }
 
                 string model = lump.ModelNames[prop.PropType];
-                IReadOnlyList<NavPiece>? pieces = modelPieces?.Invoke(model) is { Count: > 0 } p ? p
-                    : modelBounds?.Invoke(model) is { } hull ? [NavPiece.Box(hull.Mins, hull.Maxs)]
+                (Vec3 Mins, Vec3 Maxs)? hull = modelBounds?.Invoke(model);
+                IReadOnlyList<NavPiece>? phy = prop.Solid == SolidVPhysics ? modelPieces?.Invoke(model) : null;
+                if ((prop.Solid != SolidVPhysics && prop.Solid != SolidBoundingBox) || (phy is { Count: 0 } && hull is not null))
+                {
+                    bogus[model] = bogus.GetValueOrDefault(model) + 1;
+                    continue;
+                }
+
+                IReadOnlyList<NavPiece>? pieces = phy is { Count: > 0 } ? phy
+                    : hull is { } box ? [NavPiece.Box(box.Mins, box.Maxs)]
                     : null;
                 if (pieces is null)
                 {
@@ -213,6 +243,8 @@ public static class NavFloorCheck
 
             warnings.AddRange(lacking.Select(m => string.Create(CultureInfo.InvariantCulture,
                 $"static prop model \"{m.Key}\" has no collision the content gives, so its {m.Value} solid prop{(m.Value == 1 ? string.Empty : "s")} {(m.Value == 1 ? "is" : "are")} left out of the check.")));
+            warnings.AddRange(bogus.Select(m => string.Create(CultureInfo.InvariantCulture,
+                $"static prop model \"{m.Key}\" has no collision model for the solid type it is placed with, so the engine makes its {m.Value} prop{(m.Value == 1 ? string.Empty : "s")} non-solid (a \"bogus solid type\" map error at load); place {(m.Value == 1 ? "it" : "them")} solid 0, or clip {(m.Value == 1 ? "it" : "them")} with brushes.")));
         }
 
         return (solids, warnings);

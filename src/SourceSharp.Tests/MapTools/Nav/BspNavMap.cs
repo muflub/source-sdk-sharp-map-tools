@@ -69,7 +69,8 @@ public sealed class BspNavMap : IAsyncLifetime
         RoomPropHarness.Models().TryGetValue(model, out byte[]? bytes) ? NavModelBounds.Hull(bytes) : null;
 
     /// <summary>The map's VMF.</summary>
-    public static VmfDocument Vmf()
+    /// <param name="propSolid">The static prop's <c>solid</c> key: vphysics (6) unless a fact needs another.</param>
+    public static VmfDocument Vmf(string propSolid = "6")
     {
         VmfDocument document = new();
         VmfChunk world = new(MapFileLoader.WorldChunk);
@@ -105,7 +106,7 @@ public sealed class BspNavMap : IAsyncLifetime
         door.Children.Add(RoomModel.Slab(RoomHarness.Plain, new Vec3(400, 16, 16), new Vec3(416, 240, 240), 9002));
         document.Chunks.Add(door);
         document.Chunks.Add(Entity("prop_physics", 9003, ("targetname", "crate"), ("model", RoomPropHarness.BoxModel), ("origin", "448 128 16")));
-        document.Chunks.Add(RoomPropHarness.Prop(9004, RoomPropHarness.BoxModel, new Vec3(64, 176, 16), "0 0 0", ("solid", "6")));
+        document.Chunks.Add(RoomPropHarness.Prop(9004, RoomPropHarness.BoxModel, new Vec3(64, 176, 16), "0 0 0", ("solid", propSolid)));
         document.Chunks.Add(Entity("info_ladder", 9005, ("mins", "450 20 16"), ("maxs", "480 40 200")));
         document.Chunks.Add(Entity("func_useableladder", 9006, ("point0", "64 600 16"), ("point1", "64 600 200")));
         document.Chunks.Add(Entity("info_player_start", 9007, ("origin", "256 128 40")));

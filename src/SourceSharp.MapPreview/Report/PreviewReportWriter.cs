@@ -237,6 +237,17 @@ public static class PreviewReportWriter
         Regions(w, "traps", m.Traps);
         Regions(w, "islands", m.Islands);
         w.WriteNumber("island_count", m.IslandCount);
+        if (m.CollisionWarnings is { Count: > 0 } collision)
+        {
+            w.WriteStartArray("collision_warnings");
+            foreach (string warning in collision)
+            {
+                w.WriteStringValue(warning);
+            }
+
+            w.WriteEndArray();
+        }
+
         if (m.Airborne is { } air)
         {
             w.WriteStartObject("airborne");

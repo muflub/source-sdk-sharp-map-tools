@@ -11,10 +11,12 @@ using SourceSharp.MapCompile;
 using SourceSharp.MapFormats.Bsp;
 using SourceSharp.MapFormats.Geometry;
 using SourceSharp.MapFormats.Imaging;
+using SourceSharp.MapFormats.Nav;
 using SourceSharp.MapPreview;
 using SourceSharp.MapPreview.Overlays;
 using SourceSharp.MapPreview.Render;
 using SourceSharp.MapPreview.Report;
+using SourceSharp.MapPreview.Scene;
 using SourceSharp.MapTools.Io;
 using SourceSharp.MapTools.Movement;
 using Xunit;
@@ -157,6 +159,61 @@ public class MovementPreviewTests
         JsonElement traps = json.RootElement.GetProperty("checks").GetProperty("movement").GetProperty("traps");
         Assert.Equal("rocket_jump", traps[0].GetProperty("escapes")[0].GetString());
         Assert.False(traps[1].TryGetProperty("escapes", out _));
+    }
+
+    [Fact]
+    public void CollisionWarningsAreWrittenOnlyWhenThereAreAny()
+    {
+        static PreviewReport With(IReadOnlyList<string>? warnings) => new("m", 20, [], new SceneCounts(0, 0, 0, 0, 0, 0), [], [], [],
+            new PreviewChecks([], [], new LightingReport(0, 0, 0, 0, 0, false), new SkyboxReport(null, 0), [], new SortedDictionary<string, int>(),
+                new MovementReport("p", 1, new Dictionary<int, int>(), [], [], [], 0, null, warnings)));
+
+        using JsonDocument json = JsonDocument.Parse(PreviewReportWriter.Write(With(["static prop model \"m.mdl\" ... non-solid"])));
+        using JsonDocument none = JsonDocument.Parse(PreviewReportWriter.Write(With([])));
+        using JsonDocument absent = JsonDocument.Parse(PreviewReportWriter.Write(With(null)));
+
+        Assert.Equal("static prop model \"m.mdl\" ... non-solid",
+            json.RootElement.GetProperty("checks").GetProperty("movement").GetProperty("collision_warnings")[0].GetString());
+        Assert.False(none.RootElement.GetProperty("checks").GetProperty("movement").TryGetProperty("collision_warnings", out _));
+        Assert.False(absent.RootElement.GetProperty("checks").GetProperty("movement").TryGetProperty("collision_warnings", out _));
+    }
+
+    [Fact]
+    public async Task TheCommandLinePrintsEachCollisionWarning()
+    {
+        static PreviewReport With(MovementReport? movement) => new("m", 20, [], new SceneCounts(0, 0, 0, 0, 0, 0), [], [], [],
+            new PreviewChecks([], [], new LightingReport(0, 0, 0, 0, 0, false), new SkyboxReport(null, 0), [], new SortedDictionary<string, int>(), movement));
+        using StringWriter two = new();
+        using StringWriter none = new();
+
+        await PreviewCommand.WriteWarningsAsync(two, With(new MovementReport("p", 1, new Dictionary<int, int>(), [], [], [], 0, null, ["a", "b"])));
+        await PreviewCommand.WriteWarningsAsync(none, With(null));
+
+        Assert.Equal($"ssmap preview: warning: a{Environment.NewLine}ssmap preview: warning: b{Environment.NewLine}", two.ToString());
+        Assert.Empty(none.ToString());
+    }
+
+    /// <summary>
+    /// A stuck spawn's marker says why: no floor under a clear box, or the
+    /// box starts inside something, named when a prop stands there. The
+    /// text was once "stands on no floor" for a spawn inside an ore cart.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 0, 200, false, "spawn team 2 has no floor under it")]
+    [InlineData(0, 0, 4, false, "spawn team 2 starts inside a brush")]
+    [InlineData(0, 0, 4, true, "spawn team 2 starts inside the prop models/cart.mdl")]
+    [InlineData(400, 0, 4, true, "spawn team 2 starts inside a brush")]
+    public void AStuckSpawnSaysWhatItIsStuckIn(float x, float y, float z, bool cart, string text)
+    {
+        // A crate-sized solid at the origin and a slab far off; the cart
+        // prop, when there, stands on the crate.
+        HullTraceWorld world = new([
+            NavBrush.Box(new Vec3(-40, -40, 0), new Vec3(40, 40, 64), 1),
+            NavBrush.Box(new Vec3(360, -40, 0), new Vec3(440, 40, 64), 1),
+        ]);
+        PreviewProp[] props = cart ? [new PreviewProp("models/cart.mdl", new Vec3(8, 0, 0), Vec3.Zero, 0, -1, true)] : [];
+
+        Assert.Equal(text, PreviewSession.StuckText(2, world, MovementProfile.Tf2("soldier"), new Vec3(x, y, z), props));
     }
 
     [Theory]

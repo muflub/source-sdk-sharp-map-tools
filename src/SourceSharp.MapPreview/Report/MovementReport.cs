@@ -16,6 +16,11 @@ namespace SourceSharp.MapPreview.Report;
 /// <param name="Islands">Floor no spawn reaches, largest first (the ten largest).</param>
 /// <param name="IslandCount">How many islands there are in all.</param>
 /// <param name="Airborne">The airborne fuzz, when it ran.</param>
+/// <param name="CollisionWarnings">
+/// What the collision could not take as the engine would: a static prop
+/// model the content lacks, or one placed solid with no collision model,
+/// which the engine makes non-solid.
+/// </param>
 public sealed record MovementReport(
     string Profile,
     int Nodes,
@@ -24,7 +29,8 @@ public sealed record MovementReport(
     IReadOnlyList<RegionReport> Traps,
     IReadOnlyList<RegionReport> Islands,
     int IslandCount,
-    AirborneReport? Airborne = null);
+    AirborneReport? Airborne = null,
+    IReadOnlyList<string>? CollisionWarnings = null);
 
 /// <summary>What the airborne fuzz found.</summary>
 /// <param name="Trajectories">Flights run.</param>

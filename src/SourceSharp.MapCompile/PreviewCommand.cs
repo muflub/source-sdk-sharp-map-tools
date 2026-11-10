@@ -13,6 +13,7 @@ using SourceSharp.MapFormats.Bsp;
 using SourceSharp.MapPreview;
 using SourceSharp.MapPreview.Cameras;
 using SourceSharp.MapPreview.Render;
+using SourceSharp.MapPreview.Report;
 using SourceSharp.MapPreview.Scene;
 using SourceSharp.MapTools.Io;
 using SourceSharp.MapTools.Movement;
@@ -143,6 +144,7 @@ public static class PreviewCommand
                 return RoomCommands.ExitFailed;
             }
 
+            await WriteWarningsAsync(output, result.Report).ConfigureAwait(false);
             await output.WriteLineAsync(string.Create(
                 CultureInfo.InvariantCulture,
                 $"ssmap preview: {result.Report.Cameras.Count} views, {result.Report.Markers.Count} markers, "
@@ -151,6 +153,25 @@ public static class PreviewCommand
         }
 
         return Program.ExitSuccess;
+    }
+
+    /// <summary>
+    /// Writes the report's warnings a map's author should act on, one line
+    /// each: the collision the movement check could not take as the engine
+    /// would (a solid static prop with no collision model, which the engine
+    /// makes non-solid; a model the content lacks).
+    /// </summary>
+    /// <param name="output">Where the lines go.</param>
+    /// <param name="report">The preview's report.</param>
+    /// <returns>A task that completes when the lines are written.</returns>
+    public static async Task WriteWarningsAsync(TextWriter output, PreviewReport report)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(report);
+        foreach (string warning in report.Checks.Movement?.CollisionWarnings ?? [])
+        {
+            await output.WriteLineAsync($"ssmap preview: warning: {warning}").ConfigureAwait(false);
+        }
     }
 
     /// <summary>
