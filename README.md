@@ -580,7 +580,7 @@ first 20 places that have none, the count, and fails when there is any
 ### `preview`
 
 ```sh
-ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera "x y z pitch yaw [fov] [label]"]... [-movement [class]]
+ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera "x y z pitch yaw [fov] [label]"]... [-cameras <file>]... [-no-figure] [-movement [class]]
 ```
 
 Renders a compiled map with its textures, models and baked lighting, for an
@@ -604,10 +604,12 @@ first, then one per named group of spawns, such as arrivals from another
 level, then spawns far from those shown; a spawn a few steps along the
 same row facing the same way adds no view), then each
 `-camera`: a position, Source angles (pitch positive down), an optional
-horizontal field of view and an optional label. Every view is labelled; the
-orthographic ones get a scale bar and the others a wireframe figure the size
-of the player's hull standing in the scene (TF2's 48 x 82 for a TF2 game
-directory, else 32 x 72). Problems are drawn rather than refused: a missing
+horizontal field of view and an optional label, and each line of a
+`-cameras` file in the same form (blank lines and `#` comments skipped).
+Every view is labelled; the orthographic ones get a scale bar and the others
+a wireframe figure the size of the player's hull standing in the scene,
+ahead of the camera and right of centre (TF2's 48 x 82 for a TF2 game
+directory, else 32 x 72; `-no-figure` leaves it out). Problems are drawn rather than refused: a missing
 material is the engine's magenta checker, a missing model a magenta box,
 each with a numbered marker that `index.json` lists with its coordinates.
 

@@ -186,6 +186,19 @@ public class PreviewPipelineTests
         Assert.Contains(Annotator.HiddenMarkerColour, Enumerable.Range(0, 64 * 64).Select(i => image.Get(i % 64, i / 64)));
     }
 
+    /// <summary>
+    /// The scale figure stands a player's eye below the camera, ahead of it
+    /// and to the right of the view's centre, so a close-up's subject stays
+    /// clear; a view straight down heads along +X.
+    /// </summary>
+    [Fact]
+    public void TheScaleFigureStandsAheadAndToTheRight()
+    {
+        Assert.Equal(new Vec3(128, -64, 28), PreviewSession.FigureFeet(new Vec3(0, 0, 100), new Vec3(1, 0, 0), 72));
+        Assert.Equal(new Vec3(64, 128, 28), PreviewSession.FigureFeet(new Vec3(0, 0, 100), new Vec3(0, 0.5f, -0.5f), 72));
+        Assert.Equal(new Vec3(128, -64, 28), PreviewSession.FigureFeet(new Vec3(0, 0, 100), new Vec3(0, 0, -1), 72));
+    }
+
     [Fact]
     public void TheScaleFigureIsHiddenBehindTheScene()
     {

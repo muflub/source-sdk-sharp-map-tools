@@ -57,6 +57,12 @@ public sealed record PreviewOptions
     /// <summary>Gets the player hull width the scale figure is drawn at.</summary>
     public float PlayerWidth { get; init; } = 32f;
 
+    /// <summary>
+    /// Gets a value indicating whether perspective views get the scale
+    /// figure; false leaves close-ups of a subject clear.
+    /// </summary>
+    public bool ScaleFigure { get; init; } = true;
+
     /// <summary>Gets the player hull height the scale figure is drawn at.</summary>
     public float PlayerHeight { get; init; } = 72f;
 
@@ -215,12 +221,9 @@ public sealed class PreviewSession
             {
                 Annotator.ScaleBar(rendered.Image, view, scale);
             }
-            else
+            else if (o.ScaleFigure)
             {
-                Vec3 ahead = new Vec3(view.Forward.X, view.Forward.Y, 0);
-                float length = ahead.Length();
-                ahead = length > 0 ? ahead * (1f / length) : new Vec3(1, 0, 0);
-                Vec3 feet = planned1.Camera.Position - new Vec3(0, 0, o.Cameras.EyeHeight) + (ahead * 128f);
+                Vec3 feet = FigureFeet(planned1.Camera.Position, view.Forward, o.Cameras.EyeHeight);
                 Annotator.ScaleFigure(rendered.Image, view, rendered.Buffer, feet, o.PlayerWidth, o.PlayerHeight);
             }
 
@@ -391,6 +394,35 @@ public sealed class PreviewSession
 
     /// <summary>How many floor positions a blast-only area needs for a marker: smaller ones are a crate top or a sill.</summary>
     private const int BlastOnlyMarkerNodes = 16;
+
+    /// <summary>Where the scale figure stands in front of a perspective camera, horizontally away from it.</summary>
+    public const float FigureAhead = 128f;
+
+    /// <summary>
+    /// How far right of the view's centre line the figure stands: half the
+    /// visible half-width at <see cref="FigureAhead"/> for a 90-degree view,
+    /// so it stands beside what the view is looking at, not in front of it.
+    /// </summary>
+    public const float FigureAside = 64f;
+
+    /// <summary>
+    /// The scale figure's feet: a player's eye height below the camera,
+    /// <see cref="FigureAhead"/> along the view's horizontal heading and
+    /// <see cref="FigureAside"/> to its right (a view straight down heads
+    /// along +X).
+    /// </summary>
+    /// <param name="camera">The camera's position.</param>
+    /// <param name="forward">The view's forward direction.</param>
+    /// <param name="eyeHeight">The player's eye height.</param>
+    /// <returns>The feet.</returns>
+    internal static Vec3 FigureFeet(Vec3 camera, Vec3 forward, float eyeHeight)
+    {
+        Vec3 ahead = new(forward.X, forward.Y, 0);
+        float length = ahead.Length();
+        ahead = length > 0 ? ahead * (1f / length) : new Vec3(1, 0, 0);
+        Vec3 right = new(ahead.Y, -ahead.X, 0);
+        return camera - new Vec3(0, 0, eyeHeight) + (ahead * FigureAhead) + (right * FigureAside);
+    }
 
     /// <summary>
     /// A stuck spawn's marker text: why no floor position takes it. Either

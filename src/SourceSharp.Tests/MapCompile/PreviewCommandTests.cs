@@ -101,6 +101,65 @@ public sealed class PreviewCommandTests
         Assert.NotNull(fs.GetBytes(At("/loose/room.preview/views/01-overview.png")));
     }
 
+    /// <summary>
+    /// A camera file gives one camera per line, numbered after the ones on
+    /// the command line, skipping blank and <c>#</c> lines; a bad line or a
+    /// missing file stops the run, saying which.
+    /// </summary>
+    [Fact]
+    public async Task ACameraFileAddsItsCamerasAfterTheCommandLines()
+    {
+        InMemoryFileSystem fs = await DiskAsync("/game/maps/room.bsp", game: true);
+        fs.AddText(Rooted("/cams.txt"), "# the room\n\n100 100 64 10 45 the corner\r\n200 200 64 0 180 70\n");
+        fs.AddText(Rooted("/bad.txt"), "100 100 64 10 45\n1 2 3\n");
+        using StringWriter output = new();
+
+        int exit = await PreviewCommand.RunAsync(fs, [], ["/game/maps/room.bsp", "-camera", "50 50 64 0 0 first", "-cameras", "/cams.txt", "-size", "96x72"], output);
+        int bad = await PreviewCommand.RunAsync(fs, [], ["/game/maps/room.bsp", "-cameras", "/bad.txt"], output);
+        int missing = await PreviewCommand.RunAsync(fs, [], ["/game/maps/room.bsp", "-cameras", "/gone.txt"], output);
+
+        Assert.True(exit == Program.ExitSuccess, output.ToString());
+        using JsonDocument json = JsonDocument.Parse(fs.GetBytes(At("/game/maps/room.preview/index.json"))!);
+        string[] custom = [.. json.RootElement.GetProperty("cameras").EnumerateArray()
+            .Where(c => c.GetProperty("kind").GetString() == "custom")
+            .Select(c => c.GetProperty("id").GetString() + ": " + c.GetProperty("description").GetString())];
+        Assert.Equal(["cam1: first", "cam2: the corner", "cam3: custom at (200 200 64)"], custom);
+        Assert.Equal(Program.ExitUsage, bad);
+        Assert.Contains("line 2 is not", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(Program.ExitUsage, missing);
+        Assert.Contains("ssmap preview: " + Path.GetFullPath("/gone.txt") + ":", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ACameraFileLineThatIsNotACameraIsReportedByNumber()
+    {
+        List<PreviewCamera> cameras = [];
+
+        Assert.Null(PreviewCommand.AddCameras("# only a comment\n\n", cameras));
+        Assert.Empty(cameras);
+        Assert.Equal("line 3 is not \"x y z pitch yaw [fov] [label]\": 1 2", PreviewCommand.AddCameras("0 0 0 0 0\n#\n1 2\n", cameras));
+        Assert.Single(cameras);
+    }
+
+    /// <summary>
+    /// The scale figure is drawn on perspective views unless <c>-no-figure</c>
+    /// asks otherwise; the overview, which has a scale bar, is the same
+    /// either way.
+    /// </summary>
+    [Fact]
+    public async Task NoFigureLeavesPerspectiveViewsClear()
+    {
+        InMemoryFileSystem fs = await DiskAsync("/game/maps/room.bsp", game: true);
+        using StringWriter output = new();
+
+        int with = await PreviewCommand.RunAsync(fs, [], ["/game/maps/room.bsp", "-out", "/with", "-no-sheet", "-size", "96x72"], output);
+        int without = await PreviewCommand.RunAsync(fs, [], ["/game/maps/room.bsp", "-out", "/without", "-no-sheet", "-size", "96x72", "-no-figure"], output);
+
+        Assert.Equal((Program.ExitSuccess, Program.ExitSuccess), (with, without));
+        Assert.Equal(fs.GetBytes(At("/with/views/01-overview.png")), fs.GetBytes(At("/without/views/01-overview.png")));
+        Assert.NotEqual(fs.GetBytes(At("/with/views/03-spawn1.png")), fs.GetBytes(At("/without/views/03-spawn1.png")));
+    }
+
     [Theory]
     [InlineData]
     [InlineData("-size", "10x10", "m.bsp")]
@@ -109,6 +168,7 @@ public sealed class PreviewCommandTests
     [InlineData("-threads", "0", "m.bsp")]
     [InlineData("m.bsp", "other.bsp")]
     [InlineData("-bogus", "m.bsp")]
+    [InlineData("m.bsp", "-cameras")]
     public async Task BadArgumentsPrintTheUsage(params string[] args)
     {
         using StringWriter output = new();
