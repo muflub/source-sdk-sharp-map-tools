@@ -75,6 +75,12 @@ public sealed class NavBrush
     // along each: x, y, z, lo, hi per axis.
     private readonly double[] _edgeAxes;
 
+    // How fast a box growing sideways (NavGrowth.Sideways) widens along each
+    // plane normal and each edge axis: the rate the growth test works out
+    // per call, worked out once.
+    private readonly double[] _planeSidewaysRates;
+    private readonly double[] _edgeSidewaysRates;
+
     private NavBrush(double[] planes, double[] vertices, double[] edges, int contents)
     {
         _planes = planes;
@@ -131,6 +137,18 @@ public sealed class NavBrush
         }
 
         _edgeAxes = [.. axes];
+        NavGrowth sideways = NavGrowth.Sideways;
+        _planeSidewaysRates = new double[planes.Length / 4];
+        for (int i = 0; i < _planeSidewaysRates.Length; i++)
+        {
+            _planeSidewaysRates[i] = LowRate(planes[i * 4], planes[(i * 4) + 1], planes[(i * 4) + 2], sideways);
+        }
+
+        _edgeSidewaysRates = new double[_edgeAxes.Length / 5];
+        for (int i = 0; i < _edgeSidewaysRates.Length; i++)
+        {
+            _edgeSidewaysRates[i] = LowRate(_edgeAxes[i * 5], _edgeAxes[(i * 5) + 1], _edgeAxes[(i * 5) + 2], sideways);
+        }
     }
 
     /// <summary>The brush's <c>CONTENTS_*</c> bits.</summary>
@@ -443,7 +461,12 @@ public sealed class NavBrush
     /// </para>
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    public double GrowthThreshold(in NavBox box, in NavGrowth growth, out double contactZ)
+    public double GrowthThreshold(in NavBox box, in NavGrowth growth, out double contactZ) =>
+        growth == NavGrowth.Sideways ? SidewaysThreshold(box, out contactZ) : AnyGrowthThreshold(box, growth, out contactZ);
+
+    /// <summary><see cref="GrowthThreshold"/> for any growth, working out each axis's rates as it goes.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    internal double AnyGrowthThreshold(in NavBox box, in NavGrowth growth, out double contactZ)
     {
         double threshold = double.NegativeInfinity;
         contactZ = 0;
@@ -476,6 +499,111 @@ public sealed class NavBrush
         {
             if (Axis(_edgeAxes[i], _edgeAxes[i + 1], _edgeAxes[i + 2], _edgeAxes[i + 3], _edgeAxes[i + 4], box, growth,
                 twoSided: true, ref threshold, ref contactZ))
+            {
+                contactZ = 0;
+                return double.PositiveInfinity;
+            }
+        }
+
+        return threshold;
+    }
+
+    /// <summary>
+    /// <see cref="GrowthThreshold"/> for <see cref="NavGrowth.Sideways"/>,
+    /// the clearance builder's hot path: the same axes in the same order,
+    /// with the same arithmetic, but each plane's and edge axis's rate taken
+    /// from the brush instead of worked out per call. Sideways growth widens
+    /// a box at the same rate on its low and high sides, so one rate serves
+    /// both of an edge axis's conditions.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private double SidewaysThreshold(in NavBox box, out double contactZ)
+    {
+        NavGrowth growth = NavGrowth.Sideways;
+        double threshold = double.NegativeInfinity;
+        contactZ = 0;
+        if (Axis(1, 0, 0, MinX, MaxX, box, growth, twoSided: true, ref threshold, ref contactZ)
+            || Axis(0, 1, 0, MinY, MaxY, box, growth, twoSided: true, ref threshold, ref contactZ)
+            || Axis(0, 0, 1, MinZ, MaxZ, box, growth, twoSided: true, ref threshold, ref contactZ))
+        {
+            contactZ = 0;
+            return double.PositiveInfinity;
+        }
+
+        if (IsAxial)
+        {
+            return threshold;
+        }
+
+        double[] planes = _planes;
+        double[] planeRates = _planeSidewaysRates;
+        for (int i = 0, k = 0; i < planes.Length; i += 4, k++)
+        {
+            double ax = planes[i];
+            double ay = planes[i + 1];
+            double az = planes[i + 2];
+            double m0 = (ax >= 0 ? ax * box.MinX : ax * box.MaxX)
+                + (ay >= 0 ? ay * box.MinY : ay * box.MaxY)
+                + (az >= 0 ? az * box.MinZ : az * box.MaxZ);
+            double q = m0 + Epsilon - planes[i + 3];
+            double mu = planeRates[k];
+            if (mu > 0)
+            {
+                double limit = q / mu;
+                if (limit > threshold)
+                {
+                    threshold = limit;
+                    contactZ = az;
+                }
+            }
+            else if (q >= 0)
+            {
+                contactZ = 0;
+                return double.PositiveInfinity;
+            }
+        }
+
+        double[] axes = _edgeAxes;
+        double[] edgeRates = _edgeSidewaysRates;
+        for (int i = 0, k = 0; i < axes.Length; i += 5, k++)
+        {
+            double ax = axes[i];
+            double ay = axes[i + 1];
+            double az = axes[i + 2];
+            double rate = edgeRates[k];
+            double m0 = (ax >= 0 ? ax * box.MinX : ax * box.MaxX)
+                + (ay >= 0 ? ay * box.MinY : ay * box.MaxY)
+                + (az >= 0 ? az * box.MinZ : az * box.MaxZ);
+            double q = m0 + Epsilon - axes[i + 4];
+            if (rate > 0)
+            {
+                double limit = q / rate;
+                if (limit > threshold)
+                {
+                    threshold = limit;
+                    contactZ = az;
+                }
+            }
+            else if (q >= 0)
+            {
+                contactZ = 0;
+                return double.PositiveInfinity;
+            }
+
+            double x0 = (ax >= 0 ? ax * box.MaxX : ax * box.MinX)
+                + (ay >= 0 ? ay * box.MaxY : ay * box.MinY)
+                + (az >= 0 ? az * box.MaxZ : az * box.MinZ);
+            double q2 = axes[i + 3] + Epsilon - x0;
+            if (rate > 0)
+            {
+                double limit = q2 / rate;
+                if (limit > threshold)
+                {
+                    threshold = limit;
+                    contactZ = -az;
+                }
+            }
+            else if (q2 >= 0)
             {
                 contactZ = 0;
                 return double.PositiveInfinity;
@@ -626,6 +754,17 @@ public sealed class NavBrush
 
         return false;
     }
+
+    /// <summary>
+    /// How fast a growing box's least projection on an axis falls with
+    /// <c>t</c>, exactly as <see cref="Axis"/> works it out; for a growth
+    /// whose low and high rates match on each axis (sideways), also how fast
+    /// its greatest projection rises.
+    /// </summary>
+    private static double LowRate(double ax, double ay, double az, in NavGrowth g) =>
+        (ax >= 0 ? ax * g.MinX : -ax * g.MaxX)
+        + (ay >= 0 ? ay * g.MinY : -ay * g.MaxY)
+        + (az >= 0 ? az * g.MinZ : -az * g.MaxZ);
 
     private (double Lo, double Hi) Project(double ax, double ay, double az)
     {

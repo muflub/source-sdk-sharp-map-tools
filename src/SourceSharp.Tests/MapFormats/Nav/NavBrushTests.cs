@@ -153,6 +153,53 @@ public sealed class NavBrushTests
         }
     }
 
+    /// <summary>
+    /// Sideways growth takes its own path (each axis's rate kept on the
+    /// brush): to the bit, threshold and contact, it is the general path's
+    /// answer, for slanted brushes in every quarter turn and boxes all round
+    /// them, below, beside, above and inside, including the cases where an
+    /// axis keeps them apart at every width.
+    /// </summary>
+    [Fact]
+    public void SidewaysGrowthGivesTheGeneralAnswerToTheBit()
+    {
+        float r = MathF.Sqrt(0.5f);
+        NavBrush overhang = NavBrush.FromPlanes([
+            (new Vec3(1, 0, 0), 20f), (new Vec3(-1, 0, 0), 0f), (new Vec3(0, 1, 0), 10f), (new Vec3(0, -1, 0), 0f),
+            (new Vec3(0, 0, 1), 30f), (new Vec3(r, 0, -r), -10f * r)], 1)!;
+        float k = 1f / MathF.Sqrt(3f);
+        NavBrush corner = NavBrush.FromPlanes([
+            (new Vec3(-1, 0, 0), 0f), (new Vec3(0, -1, 0), 0f), (new Vec3(0, 0, -1), 0f), (new Vec3(k, k, k), 12f * k)], 1)!;
+        int finite = 0;
+        int infinite = 0;
+        foreach (NavBrush shape in (NavBrush[])[Wedge(), overhang, corner])
+        {
+            for (int turn = 0; turn < 4; turn++)
+            {
+                NavBrush brush = shape.Turned(turn, 20).Translated(new Vec3(0.37f, -0.21f, 0.13f));
+                for (double x = -12; x <= 32; x += 3.5)
+                {
+                    for (double y = -12; y <= 32; y += 4.25)
+                    {
+                        for (double z = -8; z <= 36; z += 5.5)
+                        {
+                            NavBox box = new(x, y, z, x + 2, y + 2, z + 1.5);
+                            double fast = brush.GrowthThreshold(box, NavGrowth.Sideways, out double fastContact);
+                            double general = brush.AnyGrowthThreshold(box, NavGrowth.Sideways, out double generalContact);
+                            Assert.True(
+                                BitConverter.DoubleToInt64Bits(fast) == BitConverter.DoubleToInt64Bits(general)
+                                    && BitConverter.DoubleToInt64Bits(fastContact) == BitConverter.DoubleToInt64Bits(generalContact),
+                                $"turn {turn}, box {box}: sideways ({fast}, {fastContact}), general ({general}, {generalContact})");
+                            _ = double.IsPositiveInfinity(fast) ? infinite++ : finite++;
+                        }
+                    }
+                }
+            }
+        }
+
+        Assert.True(finite > 1000 && infinite > 1000, $"{finite} finite and {infinite} infinite thresholds compared");
+    }
+
     [Fact]
     public void AFlatTopMetFromAboveIsContactOneAndABrushTheBoxNeverReachesIsInfinite()
     {
