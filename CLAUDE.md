@@ -273,8 +273,24 @@ updated to match.
 | collision cooking | `src/SourceSharp.MapTools/Phys/` |
 | incremental cache | `src/SourceSharp.MapTools/Compile/Cache/` and `src/SourceSharp.MapTools.Cache.Sqlite/` |
 | loader validation (`ssmap check`) | `src/SourceSharp.MapTools/Validation/` |
+| player movement, reachability, blast-jump fuzzing | `src/SourceSharp.MapTools/Movement/` |
+| movement calibration against TF2 (`ssmap movecal`) | `Movement/MovementCalibration.cs`, `tools/preview-calibrate/movement_calibrate.py`, recorded run in `src/SourceSharp.Tests/Fixtures/movement-calibration/` |
 | map preview rendering (`ssmap preview`) | `src/SourceSharp.MapPreview/` (plan: `docs/map-preview-plan.md`) |
 | the asset database (`ssassets`) | `src/SourceSharp.AssetDb/` (exporters, renderer, SQLite schema in `Database/AssetDatabase.cs`) |
+
+## Movement calibration
+
+The movement simulator follows the game's rules, and a recorded TF2 run
+holds it to them: `MovementCalibrationTests` compares every calibration lane
+with the game's log. When you change `PlayerMoveSim`, `HullTraceWorld` or a
+`MovementProfile`, that fact tells you whether the simulator still matches
+TF2. When it does not, find the rule in TF2's movement code (the Source SDK
+2013 tree has it) rather than adjusting numbers until the lane passes. To
+re-record (a new lane, a new class), run
+`tools/preview-calibrate/movement_calibrate.py` against a scratch `mod_tf`
+directory and copy the `MOVECAL_` and `setpos` lines of its console log into
+the fixture. The game must start with `+fps_max 66`: the script's `wait`
+counts frames, and the frame cap cannot change once connected.
 
 ## CI and releases
 

@@ -17,7 +17,7 @@ namespace SourceSharp.Tests.MapTools.Movement;
 /// <summary>
 /// Facts for <see cref="HullTraceWorld"/>, <see cref="PlayerMoveSim"/> and
 /// <see cref="MovementProfile"/> over hand-built worlds, with the expected
-/// numbers worked from the movement rules: a TF2 jump's 52-unit peak, the
+/// numbers worked from the movement rules: a TF2 jump's 50-unit peak, the
 /// 18-unit step, the 0.7 floor slope.
 /// </summary>
 public class PlayerMovementTests
@@ -171,7 +171,7 @@ public class PlayerMovementTests
     }
 
     [Fact]
-    public void ATf2JumpPeaksAtAboutFiftyTwoUnits()
+    public void ATf2JumpPeaksAtFiftyUnits()
     {
         PlayerMoveSim sim = Sim(Soldier, Floor());
         PlayerState state = sim.Spawn(Vec3.Zero);
@@ -183,7 +183,10 @@ public class PlayerMovementTests
             peak = Math.Max(peak, state.Origin.Z);
         }
 
-        Assert.InRange(peak, 50f, 53f); // 289² / (2 · 800) = 52.2
+        // 289 added to the half-step of gravity already taken, less the jump's
+        // own half-step: the launch tick moves at 289 - 800 / 66, which peaks
+        // at 50.0. TF2 measured 49.9 (sampled a tick at a time).
+        Assert.InRange(peak, 49.8f, 50.3f);
         Assert.True(state.OnGround);
     }
 
@@ -212,7 +215,7 @@ public class PlayerMovementTests
         }
 
         Assert.True(state.Ducked);
-        Assert.InRange(peak, 70f, 73f); // 52 plus the 20 the feet come up
+        Assert.InRange(peak, 69.8f, 70.3f); // 50 plus the 20 the feet come up
     }
 
     [Fact]
@@ -231,14 +234,57 @@ public class PlayerMovementTests
     [Fact]
     public void ATf2PlayerCrouchedOnTheGroundCannotJumpButAnHl2OneCan()
     {
+        // Crouched for longer than either game's crouch takes, then jumping.
         PlayerMoveSim tf = Sim(Soldier, Floor());
         PlayerMoveSim hl = Sim(MovementProfile.Hl2mp, Floor());
 
-        PlayerState tfState = tf.Tick(tf.Tick(tf.Spawn(Vec3.Zero), new MoveInput(0, 0, 0, false, true)), new MoveInput(0, 0, 0, true, true));
-        PlayerState hlState = hl.Tick(hl.Tick(hl.Spawn(Vec3.Zero), new MoveInput(0, 0, 0, false, true)), new MoveInput(0, 0, 0, true, true));
+        PlayerState tfState = tf.Tick(Run(tf, tf.Spawn(Vec3.Zero), new MoveInput(0, 0, 0, false, true), 30), new MoveInput(0, 0, 0, true, true));
+        PlayerState hlState = hl.Tick(Run(hl, hl.Spawn(Vec3.Zero), new MoveInput(0, 0, 0, false, true), 30), new MoveInput(0, 0, 0, true, true));
 
         Assert.True(tfState.OnGround);
         Assert.False(hlState.OnGround);
+    }
+
+    [Fact]
+    public void ACrouchOnTheGroundTakesItsTimeAndLettingGoCancelsIt()
+    {
+        // TF2's crouch takes 0.2 seconds: the press starts it, and the 14
+        // ticks of 1/66 after the press count it down, so the hull shrinks
+        // on the 15th tick.
+        PlayerMoveSim sim = Sim(Soldier, Floor());
+        PlayerState state = sim.Spawn(Vec3.Zero);
+        for (int t = 1; t <= 15; t++)
+        {
+            state = sim.Tick(state, new MoveInput(0, 0, 0, false, true));
+            Assert.Equal(t == 15, state.Ducked);
+            Assert.Equal(t < 15, state.Ducking);
+        }
+
+        PlayerState halfway = Run(sim, sim.Spawn(Vec3.Zero), new MoveInput(0, 0, 0, false, true), 5);
+        PlayerState released = sim.Tick(halfway, default);
+        Assert.False(released.Ducking);
+        Assert.False(released.Ducked);
+    }
+
+    [Fact]
+    public void AJumpDuringACrouchGoesHigherAndLandsCrouched()
+    {
+        // Jump and crouch pressed together: the crouch has only started, so
+        // the jump is allowed and sets the launch speed rather than adding to
+        // it; in the air the crouch finishes, lifting the feet. TF2 measured
+        // the feet's peak at 72.2.
+        PlayerMoveSim sim = Sim(Soldier, Floor());
+        PlayerState state = sim.Spawn(Vec3.Zero);
+        float peak = 0;
+        for (int i = 0; i < 70; i++)
+        {
+            state = sim.Tick(state, new MoveInput(0, 0, 0, true, true));
+            peak = Math.Max(peak, state.Origin.Z);
+        }
+
+        Assert.InRange(peak, 72f, 72.5f);
+        Assert.True(state.Ducked);
+        Assert.True(state.OnGround);
     }
 
     [Fact]
@@ -504,5 +550,95 @@ public class PlayerMovementTests
 
         static List<(double X, double Y, double Z, double D)> Planes(double[] b) =>
             [.. Enumerable.Range(0, b.Length / 4).Select(i => (b[i * 4], b[(i * 4) + 1], b[(i * 4) + 2], b[(i * 4) + 3]))];
+    }
+
+    [Fact]
+    public void WalkingIntoASlopeTooSteepCreepsUpItAndSlidesBack()
+    {
+        // TF2, measured: walking into a 46-degree ramp the player creeps
+        // about 20 units up it (still "standing" on the floor behind while
+        // the stepped-down ground check reaches it) and slides back to the
+        // floor in front when forward is let go. Half-Life 2's walk keeps the
+        // shorter of its two step moves and checks the ground only 2 units
+        // down, so it gets less far up.
+        static (float Peak, PlayerState End, bool Quartered) Climb(MovementProfile profile)
+        {
+            PlayerMoveSim sim = Sim(profile, Floor(), Ramp(46));
+            PlayerState state = sim.Spawn(new Vec3(-150, 0, 0));
+            float peak = 0;
+            bool quartered = false;
+            for (int t = 0; t < 300; t++)
+            {
+                state = sim.Tick(state, new MoveInput(0, 450, 0, false, false));
+                peak = Math.Max(peak, state.Origin.Z);
+                quartered |= state.SurfaceFriction < 1f;
+            }
+
+            return (peak, Run(sim, state, default, 120), quartered);
+        }
+
+        (float tfPeak, PlayerState tfEnd, bool tfQuartered) = Climb(Soldier);
+        (float hlPeak, _, _) = Climb(Soldier with { HighRoadFirst = false, GroundProbeStepsDown = false });
+
+        Assert.InRange(tfPeak, 18f, 40f);
+        Assert.True(hlPeak < tfPeak - 5f);
+        Assert.True(tfQuartered); // rising against the slope in the air, a quarter of the acceleration
+        Assert.True(tfEnd.OnGround);
+        Assert.Equal(0f, tfEnd.Origin.Z, 0.1f);
+        Assert.True(tfEnd.Origin.X < -Soldier.HalfWidth);
+        Assert.Equal(1f, tfEnd.SurfaceFriction);
+    }
+
+    [Fact]
+    public void AQuarterOfTheHullOnFlatGroundIsStanding()
+    {
+        // The hull's front edge rests on a 60-degree slope rising from x = 0
+        // and its back half is over a floor a hair below: the full hull's
+        // ground sweep meets the slope first, which is too steep, but the
+        // back quarters' own sweeps find the floor. With no floor there is
+        // nothing to stand on.
+        Vec3 feet = new(-23.5f, 0, 1);
+        PlayerState withFloor = Sim(Soldier, Floor(), Ramp(60)).Spawn(feet);
+        PlayerState withoutFloor = Sim(Soldier, Ramp(60)).Spawn(feet);
+
+        Assert.True(withFloor.OnGround);
+        Assert.False(withoutFloor.OnGround);
+        Assert.Equal(1f, withoutFloor.SurfaceFriction); // not rising
+    }
+
+    [Fact]
+    public void Tf2sGroundCheckReachesAStepDownAndHalfLifesDoesNot()
+    {
+        // Standing still with the floor suddenly 10 units below (the edge of
+        // a ledge): TF2's ground check of a player who was on the ground
+        // reaches a step further and pulls the player down onto it; Half-Life
+        // 2's reaches 2 units and lets the player fall.
+        NavBrush low = Floor(-10);
+        PlayerState overEdge = new(new Vec3(40, 0, 0.03125f), Vec3.Zero, true);
+
+        PlayerState tf = Sim(Soldier, low).Tick(overEdge, default);
+        PlayerState hl = Sim(MovementProfile.Hl2mp, low).Tick(overEdge, default);
+
+        Assert.True(tf.OnGround);
+        Assert.Equal(-10f, tf.Origin.Z, 0.1f);
+        Assert.False(hl.OnGround);
+    }
+
+    [Fact]
+    public void ASweepAlongASurfaceDoesNotMeetIt()
+    {
+        // A player resting the stop distance from a 50-degree slope, with a
+        // velocity just clipped to slide along it: in single precision it is
+        // parallel, evaluated against the plane in double it closes on the
+        // slope by about 1e-8 over the sweep. That is sliding, not a hit;
+        // counted as a hit at fraction 0 it stalled the player on every sweep.
+        CalibrationLane lane = MovementCalibration.Lanes().First(l => l.Name == "slope_50");
+        HullTraceWorld world = new([.. lane.Solids.Select(s => s.ToBrush())]);
+        Vec3 origin = new(2048f, 110.05733f, 7.2674575f);
+        Vec3 slide = new(0f, 15.023077f, 17.903807f);
+
+        HullTrace t = world.Trace(origin, origin + (slide * PlayerMoveSim.TickInterval), Mins, Maxs);
+
+        Assert.False(t.Hit);
     }
 }

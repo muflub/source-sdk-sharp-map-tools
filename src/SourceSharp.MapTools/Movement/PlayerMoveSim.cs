@@ -26,6 +26,14 @@ public readonly record struct MoveInput(float Yaw, float Forward, float Side, bo
 /// <param name="JumpHeld">Whether jump was held last tick (a jump needs a fresh press).</param>
 /// <param name="AirDucks">Crouches made since leaving the ground.</param>
 /// <param name="AirJumped">Whether the air jump (scout) has been used since leaving the ground.</param>
+/// <param name="Ducking">Whether a crouch has started on the ground and not yet finished: the hull is still the standing one.</param>
+/// <param name="DuckTime">Seconds left of that crouch.</param>
+/// <param name="SurfaceFriction">
+/// What the last ground check left acceleration and friction scaled by: 1,
+/// or a quarter while the player is rising against a surface too steep to
+/// stand on, which is what stops holding forward from walking a player up
+/// a steep slope through the air.
+/// </param>
 public readonly record struct PlayerState(
     Vec3 Origin,
     Vec3 Velocity,
@@ -33,7 +41,10 @@ public readonly record struct PlayerState(
     bool Ducked = false,
     bool JumpHeld = false,
     int AirDucks = 0,
-    bool AirJumped = false);
+    bool AirJumped = false,
+    bool Ducking = false,
+    float DuckTime = 0f,
+    float SurfaceFriction = 1f);
 
 /// <summary>A surface the player touched during a tick, with the speed it cost.</summary>
 /// <param name="Normal">The surface's normal.</param>
@@ -134,6 +145,11 @@ public sealed class PlayerMoveSim
     public PlayerState Tick(PlayerState state, MoveInput input, List<MoveContact>? contacts = null)
     {
         float dt = TickInterval;
+        if (state.Ducking)
+        {
+            state = state with { DuckTime = state.DuckTime - dt };
+        }
+
         state = Duck(state, input.Duck);
 
         // Half the gravity before the move, half after: the engine's split,
@@ -192,6 +208,14 @@ public sealed class PlayerMoveSim
         return new Vec3(Math.Clamp(v.X, -m, m), Math.Clamp(v.Y, -m, m), Math.Clamp(v.Z, -m, m));
     }
 
+    /// <summary>
+    /// The crouch. On the ground a crouch takes <see cref="MovementProfile.TimeToDuck"/>:
+    /// the press starts it, the hull stays the standing one until it ends,
+    /// and letting go before then stands back up. In the air it finishes at
+    /// once, the feet coming up and the head staying where it was, which is
+    /// also what happens to a crouch started on the ground when the player
+    /// leaves it (a crouch jump).
+    /// </summary>
     private PlayerState Duck(PlayerState s, bool duck)
     {
         float rise = Profile.StandHeight - Profile.DuckHeight;
@@ -204,14 +228,23 @@ public sealed class PlayerMoveSim
                     return s;
                 }
 
-                // In the air the feet come up and the head stays where it was.
                 Vec3 raised = s.Origin + new Vec3(0, 0, rise);
                 return World.IsStuck(raised, Profile.Mins(true), Profile.Maxs(true))
                     ? s
-                    : s with { Origin = raised, Ducked = true, AirDucks = s.AirDucks + 1 };
+                    : s with { Origin = raised, Ducked = true, Ducking = false, DuckTime = 0, AirDucks = s.AirDucks + 1 };
             }
 
-            return s with { Ducked = true };
+            if (!s.Ducking)
+            {
+                return s with { Ducking = true, DuckTime = Profile.TimeToDuck };
+            }
+
+            return s.DuckTime <= 0 ? s with { Ducked = true, Ducking = false, DuckTime = 0 } : s;
+        }
+
+        if (!duck && s.Ducking && !s.Ducked)
+        {
+            return s with { Ducking = false, DuckTime = 0 };
         }
 
         if (!duck && s.Ducked)
@@ -239,11 +272,15 @@ public sealed class PlayerMoveSim
                 return s;
             }
 
-            // The jump's own half-step of gravity: the engine finishes the
-            // tick's gravity at the jump as well as at the end of the tick, so
-            // the launch tick loses a whole step, which is what puts a TF2
-            // jump's peak at 52 units rather than 54.
-            float launch = Profile.JumpSpeed - (Profile.Gravity * 0.5f * TickInterval);
+            // The jump adds its speed to the vertical speed, which the tick's
+            // first half-step of gravity has already taken below zero, and
+            // then takes the second half-step at once (the end of the tick
+            // takes another). A jump made while a crouch is under way, or
+            // crouched where that is allowed, sets the speed instead of adding
+            // to it, so it keeps the first half-step. Measured in TF2: a
+            // standing jump peaks at 50 units, a crouch jump's feet at 72.
+            float from = s.Ducking || s.Ducked ? 0f : s.Velocity.Z;
+            float launch = from + Profile.JumpSpeed - (Profile.Gravity * 0.5f * TickInterval);
             return s with { Velocity = new Vec3(s.Velocity.X, s.Velocity.Y, launch), OnGround = false };
         }
 
@@ -269,7 +306,7 @@ public sealed class PlayerMoveSim
         }
 
         float control = speed < Profile.StopSpeed ? Profile.StopSpeed : speed;
-        float drop = control * Profile.Friction * TickInterval;
+        float drop = control * Profile.Friction * s.SurfaceFriction * TickInterval;
         float scale = Math.Max(speed - drop, 0) / speed;
         return s with { Velocity = v * scale };
     }
@@ -292,7 +329,7 @@ public sealed class PlayerMoveSim
         return (dir, Math.Min(speed, max));
     }
 
-    private static Vec3 Accelerate(Vec3 v, Vec3 dir, float wishSpeed, float aimSpeed, float accel)
+    private static Vec3 Accelerate(Vec3 v, Vec3 dir, float wishSpeed, float aimSpeed, float accel, float friction)
     {
         float current = Vec3.Dot(v, dir);
         float add = aimSpeed - current;
@@ -301,13 +338,13 @@ public sealed class PlayerMoveSim
             return v;
         }
 
-        float step = Math.Min(accel * TickInterval * wishSpeed, add);
+        float step = Math.Min(accel * TickInterval * wishSpeed * friction, add);
         return v + (dir * step);
     }
 
     private PlayerState Walk(PlayerState s, Vec3 dir, float wishSpeed, List<MoveContact>? contacts)
     {
-        Vec3 v = Accelerate(new Vec3(s.Velocity.X, s.Velocity.Y, 0), dir, wishSpeed, wishSpeed, Profile.Accelerate);
+        Vec3 v = Accelerate(new Vec3(s.Velocity.X, s.Velocity.Y, 0), dir, wishSpeed, wishSpeed, Profile.Accelerate, s.SurfaceFriction);
         v = new Vec3(v.X, v.Y, 0);
         if (v.Length() < 1f)
         {
@@ -319,45 +356,72 @@ public sealed class PlayerMoveSim
         HullTrace direct = World.Trace(s.Origin, dest, Mins(s), Maxs(s));
         if (!direct.Hit)
         {
-            return StayOnGround(s with { Origin = direct.End });
+            s = s with { Origin = direct.End };
+            return Profile.GroundProbeStepsDown ? s : StayOnGround(s);
         }
 
-        return StayOnGround(StepMove(s, contacts));
+        s = StepMove(s, contacts);
+        return Profile.GroundProbeStepsDown ? s : StayOnGround(s);
     }
 
     private PlayerState Air(PlayerState s, Vec3 dir, float wishSpeed, List<MoveContact>? contacts)
     {
-        Vec3 v = Accelerate(s.Velocity, dir, wishSpeed, Math.Min(wishSpeed, Profile.AirSpeedCap), Profile.AirAccelerate);
+        Vec3 v = Accelerate(s.Velocity, dir, wishSpeed, Math.Min(wishSpeed, Profile.AirSpeedCap), Profile.AirAccelerate, s.SurfaceFriction);
         return SlideMove(s with { Velocity = v }, contacts);
     }
 
     /// <summary>
-    /// A blocked walk: the plain slide, and the same slide lifted a step and
-    /// dropped back, keeping whichever covered more ground (the lifted one
-    /// only when it lands on standable ground).
+    /// A blocked walk. The "high road" is the slide lifted a step (and the
+    /// trace epsilon), then dropped back as far; the "low road" is the plain
+    /// slide. Half-Life 2 tries both and keeps the one that covered more
+    /// ground, unless the high road comes down on a surface too steep to
+    /// stand on or on nothing at all, when it keeps the low road. TF2 takes
+    /// the high road unless it comes down on a steep surface or did not move,
+    /// and only then the low road (<see cref="MovementProfile.HighRoadFirst"/>).
+    /// The difference shows walking into a slope too steep to stand on: TF2's
+    /// player creeps further up it before the slope wins.
     /// </summary>
     private PlayerState StepMove(PlayerState s, List<MoveContact>? contacts)
     {
-        PlayerState down = SlideMove(s, contacts);
-
         Vec3 mins = Mins(s), maxs = Maxs(s);
-        HullTrace lift = World.Trace(s.Origin, s.Origin + new Vec3(0, 0, Profile.StepHeight), mins, maxs);
-        if (lift.AllSolid || lift.StartSolid)
+        Vec3 step = new(0, 0, Profile.StepHeight + DistEpsilonUnit);
+
+        PlayerState down = default;
+        if (!Profile.HighRoadFirst)
+        {
+            down = SlideMove(s, contacts);
+        }
+
+        List<MoveContact>? upContacts = Profile.HighRoadFirst && contacts is not null ? [] : null;
+        HullTrace lift = World.Trace(s.Origin, s.Origin + step, mins, maxs);
+        PlayerState up = SlideMove(s with { Origin = lift.StartSolid || lift.AllSolid ? s.Origin : lift.End }, upContacts);
+        HullTrace drop = World.Trace(up.Origin, up.Origin - step, mins, maxs);
+        if (!drop.StartSolid && !drop.AllSolid)
+        {
+            up = up with { Origin = drop.End };
+        }
+
+        if (Profile.HighRoadFirst)
+        {
+            bool steepLanding = drop.Fraction < 1f && drop.Normal.Z < Profile.FloorNormalZ;
+            if (!steepLanding && up.Origin != s.Origin)
+            {
+                contacts?.AddRange(upContacts!);
+                return up;
+            }
+
+            return SlideMove(s, contacts);
+        }
+
+        // A drop that met nothing has no normal, which counts as too steep.
+        if (drop.Normal.Z < Profile.FloorNormalZ)
         {
             return down;
         }
 
-        PlayerState up = SlideMove(s with { Origin = lift.End }, null);
-        HullTrace drop = World.Trace(up.Origin, up.Origin - new Vec3(0, 0, Profile.StepHeight), mins, maxs);
-        if (drop.AllSolid || (drop.Hit && drop.Normal.Z < Profile.FloorNormalZ))
-        {
-            return down;
-        }
-
-        up = up with { Origin = drop.End };
         float downDist = Horizontal(down.Origin - s.Origin);
         float upDist = Horizontal(up.Origin - s.Origin);
-        if (downDist >= upDist)
+        if (downDist > upDist)
         {
             return down;
         }
@@ -497,21 +561,72 @@ public sealed class PlayerMoveSim
         return s with { Origin = origin, Velocity = velocity };
     }
 
+    /// <summary>
+    /// The ground check: a short sweep down. A floor flat enough to stand on
+    /// is ground. A surface too steep (or nothing) is ground only if one of
+    /// the hull's four quarters, swept down on its own, finds a flat one (a
+    /// player with one corner over a ledge's flat top and the rest over a
+    /// slope stands on the ledge); otherwise the player is in the air, and
+    /// while rising against it gets a quarter of the usual acceleration.
+    /// </summary>
+    /// <remarks>
+    /// With <see cref="MovementProfile.GroundProbeStepsDown"/> (TF2) a player
+    /// who was on the ground sweeps a step further, and is pulled down onto
+    /// a flat floor the sweep finds; this stands in for Half-Life 2's
+    /// separate stay-on-ground pull after a walk. Its reach is what lets a
+    /// TF2 player walking into a slope too steep to stand on keep "standing"
+    /// on the floor behind while creeping about 24 units up the slope.
+    /// </remarks>
     private PlayerState Categorize(PlayerState s)
     {
+        bool wasOnGround = s.OnGround;
+        s = s with { SurfaceFriction = 1f };
         if (s.Velocity.Z > Profile.NonJumpVelocity)
         {
             return s with { OnGround = false };
         }
 
-        HullTrace probe = World.Trace(s.Origin, s.Origin - new Vec3(0, 0, GroundProbe), Mins(s), Maxs(s));
-        bool ground = probe.Hit && !probe.AllSolid && probe.Normal.Z >= Profile.FloorNormalZ;
-        if (!ground)
+        bool extend = Profile.GroundProbeStepsDown && wasOnGround;
+        Vec3 down = new(0, 0, GroundProbe + (extend ? Profile.StepHeight : 0f));
+        Vec3 mins = Mins(s), maxs = Maxs(s);
+        HullTrace probe = World.Trace(s.Origin, s.Origin - down, mins, maxs);
+        if (probe.AllSolid)
         {
             return s with { OnGround = false };
         }
 
-        return s with { OnGround = true, Origin = probe.StartSolid ? s.Origin : probe.End };
+        // A sweep that met nothing has no normal, so it takes the steep path.
+        if (!probe.Hit || probe.Normal.Z < Profile.FloorNormalZ)
+        {
+            return QuarterFindsFloor(s.Origin, down, mins, maxs)
+                ? s with { OnGround = true }
+                : s with { OnGround = false, SurfaceFriction = s.Velocity.Z > 0 ? 0.25f : 1f };
+        }
+
+        if (extend && !probe.StartSolid && probe.Fraction > 0f && probe.Fraction < 1f
+            && MathF.Abs(s.Origin.Z - probe.End.Z) > 0.5f * DistEpsilonUnit)
+        {
+            return s with { OnGround = true, Origin = probe.End };
+        }
+
+        return s with { OnGround = true };
+    }
+
+    /// <summary>Whether any quarter of the hull, split at its centre in X and Y, finds standable floor below.</summary>
+    private bool QuarterFindsFloor(Vec3 origin, Vec3 down, Vec3 mins, Vec3 maxs)
+    {
+        for (int q = 0; q < 4; q++)
+        {
+            Vec3 lo = new(q is 1 or 3 ? 0 : mins.X, q is 1 or 2 ? 0 : mins.Y, mins.Z);
+            Vec3 hi = new(q is 1 or 3 ? maxs.X : 0, q is 1 or 2 ? maxs.Y : 0, maxs.Z);
+            HullTrace t = World.Trace(origin, origin - down, lo, hi);
+            if (t.Hit && !t.AllSolid && t.Normal.Z >= Profile.FloorNormalZ)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static float Horizontal(Vec3 v) => MathF.Sqrt((v.X * v.X) + (v.Y * v.Y));
