@@ -137,8 +137,16 @@ public static class Map2dWriter
 
         // The footprints only when a placement covers more than one cell, so
         // a level of rooms of one cell keeps its bytes.
+        // (A loop, not a lambda: a cached delegate is a static field, which
+        // the library's rule against mutable statics counts.)
+        bool larger = false;
+        foreach (Map2dRoom room in level.Rooms)
+        {
+            larger |= room.CellsX != 1 || room.CellsY != 1;
+        }
+
         byte[]? footprints = null;
-        if (level.Rooms.Any(r => r.CellsX != 1 || r.CellsY != 1))
+        if (larger)
         {
             footprints = new byte[level.Rooms.Length * Map2dFormat.FootprintBytes];
             for (int i = 0; i < level.Rooms.Length; i++)
