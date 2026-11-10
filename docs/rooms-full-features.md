@@ -6399,6 +6399,41 @@ on an internal cell face is refused; PR 20's landed note (section 13) has the de
   offers only one-cell role rooms in role cells (O30).
 - **Flatten.** `VmfPlacement` with the footprint transform; it writes each
   room's brushes once.
+- **Door slots (stage 9, built 2026-11-10).** The kit key **`door_slots`**,
+  1 (the default, every byte as before), 3 or 5: each cell edge is divided
+  into that many equal parts and a door centred in each, rounded to whole
+  units, the slots before the middle by `round((k + ½)·c/N − w/2)` and the
+  slots after it their mirror `c − low − w`; the middle slot is the
+  one-slot door. So slot `k` and slot `N − 1 − k` are each other's
+  reflection exactly, and a turn or mirror lands a slot on a slot. A kit is
+  refused when its first door leaves less than `wall_depth` to the corner,
+  with the numbers (the edge it needs is `N × (w + 2·wall_depth)`); the
+  wall between doors is then at least twice that less a unit. A socket is
+  (face, cell offset, slot), counted from the room's own south (east and
+  west walls) or west (north and south), at any subset of slots; its
+  default name is the wall's, the cell edge's in a larger room, `_` and the
+  slot's letter (`east_a`, `east0_c`), and `socket_<name>` renames one. The
+  slot count is part of the kit (rooms and libraries compared, `ssmap
+  rooms` prints `slot k of N`), written to the room container (`kit.slots`,
+  each socket's `slot`, only for a kit of several, so an older build
+  refuses the container by its unknown field), the cache key and the nav
+  section (revision 5, only for a kit of several). The layout joins two
+  sockets only where their plugs stand at the same place on the shared
+  edge, so slot `k` meets slot `k` or `N − 1 − k` as the turns have it, and
+  caps every other slot, never refusing; the link refuses a hand-made joint
+  at another slot. Everything per socket follows from its plug box: door
+  vis, door portals, furniture, `joined_<socket>`, `water_<socket>`,
+  navigation's door points and capping (the nav's door records join by the
+  layout's joint names), the level map's doors, transitions, `--flatten`.
+  `ssmap layout` lays out libraries of one slot only and says so.
+  `samples/rooms-slots` holds a room with two doors on one wall, a corridor
+  entering at a corner slot and a 2 x 2 room with every slot. Not done:
+  door light assumes a door in the middle of its edge for its bounced
+  response grid; a door three units from the corner measured near p95 0.18
+  against vrad (a centred door 0.012), so slot kits that light their doors
+  are not held to PR 10's tolerances. A door must also be at least the
+  navigation agent and a voxel wide where the grid meets it, or the nav
+  grid does not pass it.
 
 ### 17.9 The generator: several libraries, heights, large areas
 
