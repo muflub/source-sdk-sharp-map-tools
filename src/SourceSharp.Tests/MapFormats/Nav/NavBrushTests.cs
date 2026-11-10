@@ -200,6 +200,76 @@ public sealed class NavBrushTests
         Assert.True(finite > 1000 && infinite > 1000, $"{finite} finite and {infinite} infinite thresholds compared");
     }
 
+    /// <summary>
+    /// A column prepared once (<see cref="NavBrush.PrepareSidewaysColumn"/>)
+    /// answers each of its boxes with the bits the sideways growth test gives
+    /// that box: for slanted, overhanging and cornered brushes in every turn,
+    /// a box, and a prism standing on a slope, over columns beside, under,
+    /// over and inside them, at heights below, through and above, footprints
+    /// on the brushes' own coordinates included (where a gap is exactly zero).
+    /// </summary>
+    [Fact]
+    public void APreparedColumnGivesEachBoxsSidewaysAnswerToTheBit()
+    {
+        float r = MathF.Sqrt(0.5f);
+        NavBrush overhang = NavBrush.FromPlanes([
+            (new Vec3(1, 0, 0), 20f), (new Vec3(-1, 0, 0), 0f), (new Vec3(0, 1, 0), 10f), (new Vec3(0, -1, 0), 0f),
+            (new Vec3(0, 0, 1), 30f), (new Vec3(r, 0, -r), -10f * r)], 1)!;
+        float k = 1f / MathF.Sqrt(3f);
+        NavBrush corner = NavBrush.FromPlanes([
+            (new Vec3(-1, 0, 0), 0f), (new Vec3(0, -1, 0), 0f), (new Vec3(0, 0, -1), 0f), (new Vec3(k, k, k), 12f * k)], 1)!;
+        Vec3 slope = new Vec3(0.3f, -0.2f, 1f).Normalise().Normalised;
+        NavBrush prism = NavBrush.FromPlanes([
+            (slope, Vec3.Dot(slope, new Vec3(4, 4, 8))), (new Vec3(0, 0, -1), 0f),
+            (new Vec3(1, 0, 0), 12f), (new Vec3(-1, 0, 0), -2f), (new Vec3(0, 1, 0), 14f), (new Vec3(-0.6f, -0.8f, 0), -1f)], 1)!;
+        NavBrush box = NavBrush.Box(new Vec3(2, 3, 4), new Vec3(9, 8, 16), 1);
+        int finite = 0;
+        int infinite = 0;
+        int compared = 0;
+        foreach (NavBrush shape in (NavBrush[])[Wedge(), overhang, corner, prism, box])
+        {
+            for (int turn = 0; turn < 4; turn++)
+            {
+                NavBrush brush = shape.Turned(turn, 20).Translated(new Vec3(0.37f, -0.21f, 0.13f));
+                double[] prepared = new double[brush.SidewaysColumnLength];
+                double[] xs = [-12, -4.5, brush.MinX - 2, brush.MinX, 3, 9.25, brush.MaxX, 26];
+                double[] ys = [-12, brush.MinY - 2, brush.MinY, 2.5, 7.75, brush.MaxY, 30];
+                foreach (double x in xs)
+                {
+                    foreach (double y in ys)
+                    {
+                        brush.PrepareSidewaysColumn(x, y, x + 2, y + 2, prepared);
+                        for (double z = -8; z <= 36; z += 1.375)
+                        {
+                            foreach (double top in (double[])[z + 1.5, Math.Max(z + 1.5, brush.MaxZ) + 1])
+                            {
+                                NavBox voxel = new(x, y, z, x + 2, y + 2, top);
+                                double expected = brush.GrowthThreshold(voxel, NavGrowth.Sideways, out _);
+                                double actual = brush.SidewaysThreshold(prepared, z, top);
+                                Assert.True(
+                                    BitConverter.DoubleToInt64Bits(expected) == BitConverter.DoubleToInt64Bits(actual),
+                                    $"turn {turn}, box {voxel}: growth test {expected}, prepared column {actual}");
+                                _ = double.IsPositiveInfinity(expected) ? infinite++ : finite++;
+                                compared++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Assert.True(finite > 2000 && infinite > 2000, $"{finite} finite and {infinite} infinite thresholds compared");
+    }
+
+    /// <summary>A prepared column needs room for all of its numbers.</summary>
+    [Fact]
+    public void APreparedColumnTooShortIsRefused()
+    {
+        NavBrush wedge = Wedge();
+        Assert.True(wedge.SidewaysColumnLength > 1);
+        Assert.Throws<ArgumentOutOfRangeException>(() => wedge.PrepareSidewaysColumn(0, 0, 1, 1, new double[wedge.SidewaysColumnLength - 1]));
+    }
+
     [Fact]
     public void AFlatTopMetFromAboveIsContactOneAndABrushTheBoxNeverReachesIsInfinite()
     {

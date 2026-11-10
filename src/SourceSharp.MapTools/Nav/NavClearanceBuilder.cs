@@ -91,7 +91,7 @@ public static class NavClearanceBuilder
         }
 
         Prepared prepared = new(geometry);
-        Scratch scratch = new();
+        Scratch scratch = new(prepared.Brushes.Length);
         NavVoxelKey[] keys = new NavVoxelKey[region.SizeX * region.SizeY * region.SizeZ];
         for (int y = 0; y < region.SizeY; y++)
         {
@@ -156,6 +156,7 @@ public static class NavClearanceBuilder
         }
 
         scratch.LowestTop = double.NegativeInfinity;
+        scratch.NextColumn();
 
         int below0 = -1;
         int below1 = -1;
@@ -435,7 +436,7 @@ public static class NavClearanceBuilder
                     continue;
                 }
 
-                if (SlopedCorner(p.Brushes[f.Brush], voxel) is { } candidate)
+                if (SlopedCornerInColumn(p.Brushes[f.Brush], f.Brush, scratch, voxel) is { } candidate)
                 {
                     int at = pending.Count;
                     pending.Add(default);
@@ -565,6 +566,20 @@ public static class NavClearanceBuilder
     {
         NavBox tall = voxel with { MaxZ = Math.Max(voxel.MaxZ, brush.MaxZ) + 1 };
         double threshold = brush.GrowthThreshold(tall, NavGrowth.Sideways, out _);
+        return double.IsPositiveInfinity(threshold)
+            ? null
+            : new Candidate(double.IsNegativeInfinity(threshold) ? double.NegativeInfinity : threshold - E, brush.MinZ, brush.MaxZ, 0);
+    }
+
+    /// <summary>
+    /// <see cref="SlopedCorner"/> for a sloped solid of the column's lists:
+    /// the same corner, with the parts of the growth test that are the same
+    /// for every voxel of the column worked out once per column, the first
+    /// time the brush is asked about there (<see cref="NavBrush.PrepareSidewaysColumn"/>).
+    /// </summary>
+    private static Candidate? SlopedCornerInColumn(NavBrush brush, int index, Scratch scratch, in NavBox voxel)
+    {
+        double threshold = brush.SidewaysThreshold(scratch.ColumnOf(brush, index, voxel), voxel.MinZ, Math.Max(voxel.MaxZ, brush.MaxZ) + 1);
         return double.IsPositiveInfinity(threshold)
             ? null
             : new Candidate(double.IsNegativeInfinity(threshold) ? double.NegativeInfinity : threshold - E, brush.MinZ, brush.MaxZ, 0);
@@ -736,8 +751,44 @@ public static class NavClearanceBuilder
     }
 
     /// <summary>The build's reusable lists: one set per build, so a column allocates nothing per voxel.</summary>
-    private sealed class Scratch
+    private sealed class Scratch(int brushes)
     {
+        // Each sloped solid's column numbers (NavBrush.PrepareSidewaysColumn),
+        // worked out the first time a voxel of the column asks: the column
+        // they were worked out in, and where they start in the pool.
+        private readonly int[] preparedIn = new int[brushes];
+        private readonly int[] preparedAt = new int[brushes];
+        private double[] pool = new double[256];
+        private int poolUsed;
+        private int column;
+
+        /// <summary>Starts a new column: every solid's numbers are worked out again when asked.</summary>
+        public void NextColumn()
+        {
+            column++;
+            poolUsed = 0;
+        }
+
+        /// <summary>A solid's numbers for the column a voxel is in, worked out on the column's first ask.</summary>
+        public ReadOnlySpan<double> ColumnOf(NavBrush brush, int index, in NavBox voxel)
+        {
+            int length = brush.SidewaysColumnLength;
+            if (preparedIn[index] != column)
+            {
+                if (poolUsed + length > pool.Length)
+                {
+                    Array.Resize(ref pool, Math.Max(poolUsed + length, pool.Length * 2));
+                }
+
+                brush.PrepareSidewaysColumn(voxel.MinX, voxel.MinY, voxel.MaxX, voxel.MaxY, pool.AsSpan(poolUsed, length));
+                preparedIn[index] = column;
+                preparedAt[index] = poolUsed;
+                poolUsed += length;
+            }
+
+            return pool.AsSpan(preparedAt[index], length);
+        }
+
         public List<Candidate> Axial { get; } = [];
 
         public List<Candidate> Merged { get; } = [];

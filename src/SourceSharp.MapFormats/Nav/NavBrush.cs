@@ -81,6 +81,12 @@ public sealed class NavBrush
     private readonly double[] _planeSidewaysRates;
     private readonly double[] _edgeSidewaysRates;
 
+    // The planes and edge axes whose normal has a z part: the only ones
+    // whose projection of a column's voxels changes from voxel to voxel
+    // (PrepareSidewaysColumn).
+    private readonly int[] _zPlanes;
+    private readonly int[] _zEdges;
+
     private NavBrush(double[] planes, double[] vertices, double[] edges, int contents)
     {
         _planes = planes;
@@ -149,6 +155,9 @@ public sealed class NavBrush
         {
             _edgeSidewaysRates[i] = LowRate(_edgeAxes[i * 5], _edgeAxes[(i * 5) + 1], _edgeAxes[(i * 5) + 2], sideways);
         }
+
+        _zPlanes = [.. Enumerable.Range(0, planes.Length / 4).Where(k => planes[(k * 4) + 2] != 0)];
+        _zEdges = [.. Enumerable.Range(0, _edgeAxes.Length / 5).Where(k => _edgeAxes[(k * 5) + 2] != 0)];
     }
 
     /// <summary>The brush's <c>CONTENTS_*</c> bits.</summary>
@@ -606,6 +615,186 @@ public sealed class NavBrush
             else if (q2 >= 0)
             {
                 contactZ = 0;
+                return double.PositiveInfinity;
+            }
+        }
+
+        return threshold;
+    }
+
+    /// <summary>How many numbers <see cref="PrepareSidewaysColumn"/> writes for this brush.</summary>
+    public int SidewaysColumnLength => 1 + _zPlanes.Length + (2 * _zEdges.Length);
+
+    /// <summary>
+    /// Works out, for a column of boxes that share one footprint, the part of
+    /// the sideways growth test (<see cref="GrowthThreshold"/> with
+    /// <see cref="NavGrowth.Sideways"/>) that does not depend on the boxes'
+    /// heights, so <see cref="SidewaysThreshold(ReadOnlySpan{double}, double, double)"/>
+    /// finishes it for each box with the z terms alone.
+    /// </summary>
+    /// <param name="minX">The footprint's low x.</param>
+    /// <param name="minY">The footprint's low y.</param>
+    /// <param name="maxX">The footprint's high x.</param>
+    /// <param name="maxY">The footprint's high y.</param>
+    /// <param name="prepared">Where the numbers go: <see cref="SidewaysColumnLength"/> of them.</param>
+    /// <remarks>
+    /// <para>
+    /// The test projects the box on each axis as a sum of three terms, x
+    /// part plus y part, then plus z part, in that order. The first sum is
+    /// the same for every box of the column, so it is kept here and only the
+    /// z part is added per box: the same operations on the same values, so
+    /// the same bits.
+    /// </para>
+    /// <para>
+    /// An axis with no z part (the box's x and y axes, the vertical faces,
+    /// the edge axes crossed with the z axis) gives the same limit for every
+    /// box of the column: its z term is a zero, which can change only the
+    /// sign of a zero sum, and the epsilon added next takes that away. Those
+    /// limits are folded here into the first number, the largest of them, or
+    /// plus infinity when one of them separates the column from the brush
+    /// for every width. The threshold is the largest limit over all axes, or
+    /// plus infinity when any axis separates, so splitting the axes into
+    /// these two groups changes nothing.
+    /// </para>
+    /// </remarks>
+    public void PrepareSidewaysColumn(double minX, double minY, double maxX, double maxY, Span<double> prepared)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(prepared.Length, SidewaysColumnLength, nameof(prepared));
+        NavBox box = new(minX, minY, 0, maxX, maxY, 0);
+        NavGrowth growth = NavGrowth.Sideways;
+        double threshold = double.NegativeInfinity;
+        double contactZ = 0;
+        prepared[0] = double.PositiveInfinity;
+        if (Axis(1, 0, 0, MinX, MaxX, box, growth, twoSided: true, ref threshold, ref contactZ)
+            || Axis(0, 1, 0, MinY, MaxY, box, growth, twoSided: true, ref threshold, ref contactZ))
+        {
+            return;
+        }
+
+        if (!IsAxial)
+        {
+            double[] planes = _planes;
+            for (int i = 0, k = 0; i < planes.Length; i += 4, k++)
+            {
+                if (planes[i + 2] == 0
+                    && Axis(planes[i], planes[i + 1], planes[i + 2], double.NegativeInfinity, planes[i + 3], box, growth,
+                        twoSided: false, ref threshold, ref contactZ))
+                {
+                    return;
+                }
+            }
+
+            double[] axes = _edgeAxes;
+            for (int i = 0; i < axes.Length; i += 5)
+            {
+                if (axes[i + 2] == 0
+                    && Axis(axes[i], axes[i + 1], axes[i + 2], axes[i + 3], axes[i + 4], box, growth, twoSided: true, ref threshold, ref contactZ))
+                {
+                    return;
+                }
+            }
+
+            int at = 1;
+            foreach (int k in _zPlanes)
+            {
+                double ax = planes[k * 4];
+                double ay = planes[(k * 4) + 1];
+                prepared[at++] = (ax >= 0 ? ax * minX : ax * maxX) + (ay >= 0 ? ay * minY : ay * maxY);
+            }
+
+            foreach (int k in _zEdges)
+            {
+                double ax = axes[k * 5];
+                double ay = axes[(k * 5) + 1];
+                prepared[at++] = (ax >= 0 ? ax * minX : ax * maxX) + (ay >= 0 ? ay * minY : ay * maxY);
+                prepared[at++] = (ax >= 0 ? ax * maxX : ax * minX) + (ay >= 0 ? ay * maxY : ay * minY);
+            }
+        }
+
+        prepared[0] = threshold;
+    }
+
+    /// <summary>
+    /// <see cref="GrowthThreshold"/> for <see cref="NavGrowth.Sideways"/> of a
+    /// box in a column <see cref="PrepareSidewaysColumn"/> prepared: the same
+    /// threshold, bit for bit, from the box's heights alone.
+    /// </summary>
+    /// <param name="prepared">The column's numbers.</param>
+    /// <param name="minZ">The box's low z.</param>
+    /// <param name="maxZ">The box's high z.</param>
+    /// <returns>The threshold, as <see cref="GrowthThreshold"/> answers it.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    public double SidewaysThreshold(ReadOnlySpan<double> prepared, double minZ, double maxZ)
+    {
+        double threshold = prepared[0];
+        if (double.IsPositiveInfinity(threshold))
+        {
+            return threshold;
+        }
+
+        // The box's z axis grows at no rate, so it separates outright or
+        // never. Its projections are the box's heights plus a zero x and y
+        // part, which can change only the sign of a zero; the comparisons
+        // with zero below give the same answers either way.
+        if (minZ + Epsilon - MaxZ >= 0 || MinZ + Epsilon - maxZ >= 0)
+        {
+            return double.PositiveInfinity;
+        }
+
+        if (IsAxial)
+        {
+            return threshold;
+        }
+
+        double[] planes = _planes;
+        double[] planeRates = _planeSidewaysRates;
+        int at = 1;
+        foreach (int k in _zPlanes)
+        {
+            double az = planes[(k * 4) + 2];
+            double m0 = prepared[at++] + (az >= 0 ? az * minZ : az * maxZ);
+            double q = m0 + Epsilon - planes[(k * 4) + 3];
+            double mu = planeRates[k];
+            if (mu > 0)
+            {
+                double limit = q / mu;
+                if (limit > threshold)
+                {
+                    threshold = limit;
+                }
+            }
+            else if (q >= 0)
+            {
+                return double.PositiveInfinity;
+            }
+        }
+
+        double[] axes = _edgeAxes;
+        double[] edgeRates = _edgeSidewaysRates;
+        foreach (int k in _zEdges)
+        {
+            double az = axes[(k * 5) + 2];
+            double rate = edgeRates[k];
+            double m0 = prepared[at++] + (az >= 0 ? az * minZ : az * maxZ);
+            double q = m0 + Epsilon - axes[(k * 5) + 4];
+            double x0 = prepared[at++] + (az >= 0 ? az * maxZ : az * minZ);
+            double q2 = axes[(k * 5) + 3] + Epsilon - x0;
+            if (rate > 0)
+            {
+                double limit = q / rate;
+                if (limit > threshold)
+                {
+                    threshold = limit;
+                }
+
+                limit = q2 / rate;
+                if (limit > threshold)
+                {
+                    threshold = limit;
+                }
+            }
+            else if (q >= 0 || q2 >= 0)
+            {
                 return double.PositiveInfinity;
             }
         }
