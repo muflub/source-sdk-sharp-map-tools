@@ -85,6 +85,14 @@ public sealed record BspNavOptions
     /// nothing. It never changes the file.
     /// </summary>
     public Action<int, int>? Progress { get; init; }
+
+    /// <summary>
+    /// Whether the build keeps to the space a player can reach (<see cref="NavPlayableSpace"/>):
+    /// the grid to its bounds, and every voxel outside its leaves (a 3D skybox, a summary stage,
+    /// sealed space no spawn joins) solid. On by default; off builds the whole world, as before
+    /// (<c>ssmap nav3d -playspace off</c>).
+    /// </summary>
+    public bool PlaySpace { get; init; } = true;
 }
 
 /// <summary>What <see cref="LevelNavFromBsp.Build"/> made: the navigation, and what it could not read.</summary>
@@ -141,6 +149,13 @@ public sealed record BspNavResult(Nav3dLevel Level, IReadOnlyList<string> Warnin
 /// </remarks>
 public static class LevelNavFromBsp
 {
+    /// <summary>
+    /// How many voxels the grid keeps around the play space's bounds: the
+    /// floor under its lowest leaf and the solid over its highest are in the
+    /// grid, so a floor at the bottom of the play space stands on something.
+    /// </summary>
+    public const int PlayMarginVoxels = 2;
+
     /// <summary>The model paths whose hulls a build of this map asks for: its obstacle props', then its solid static props'.</summary>
     /// <param name="bsp">The map.</param>
     /// <returns>The paths, distinct.</returns>
@@ -228,13 +243,32 @@ public static class LevelNavFromBsp
         double oy = Math.Floor(world.Mins.Y / voxel) * voxel;
         double oz = Math.Floor(world.Mins.Z / voxel) * voxel;
         double cell = options.CellSize;
-        int columns = Math.Max(1, (int)Math.Ceiling((world.Maxs.X - ox) / cell));
-        int rows = Math.Max(1, (int)Math.Ceiling((world.Maxs.Y - oy) / cell));
-        int nz = Math.Max(1, (int)Math.Ceiling((world.Maxs.Z - oz) / voxel));
+        (double topX, double topY, double topZ) = (world.Maxs.X, world.Maxs.Y, world.Maxs.Z);
+
+        // Where a player can be, when the map says (NavPlayableSpace): the
+        // grid keeps to it, give or take a margin, so a 3D skybox far above
+        // or below the play space does not set the column's height. The
+        // grid's lines stay where the world's corner puts them: whole cells
+        // and whole voxels are dropped, never shifted.
+        NavPlaySpace? space = options.PlaySpace ? NavPlayableSpace.Find(bsp) : null;
+        if (space?.Bounds is { } play)
+        {
+            double margin = PlayMarginVoxels * voxel;
+            ox += Math.Max(0, Math.Floor((play.Mins.X - margin - ox) / cell)) * cell;
+            oy += Math.Max(0, Math.Floor((play.Mins.Y - margin - oy) / cell)) * cell;
+            oz += Math.Max(0, Math.Floor((play.Mins.Z - margin - oz) / voxel)) * voxel;
+            topX = Math.Min(topX, play.Maxs.X + margin);
+            topY = Math.Min(topY, play.Maxs.Y + margin);
+            topZ = Math.Min(topZ, play.Maxs.Z + margin);
+        }
+
+        int columns = Math.Max(1, (int)Math.Ceiling((topX - ox) / cell));
+        int rows = Math.Max(1, (int)Math.Ceiling((topY - oy) / cell));
+        int nz = Math.Max(1, (int)Math.Ceiling((topZ - oz) / voxel));
         if (nz > Nav3dFormat.MaxColumnVoxels)
         {
             throw new NavBuildException(string.Create(CultureInfo.InvariantCulture,
-                $"the map is {world.Maxs.Z - oz:0.##} units tall, {nz} voxels of {voxel:0.##}; a .nav3d column holds at most {Nav3dFormat.MaxColumnVoxels}: build it with a larger voxel."));
+                $"the map is {topZ - oz:0.##} units tall, {nz} voxels of {voxel:0.##}; a .nav3d column holds at most {Nav3dFormat.MaxColumnVoxels}: build it with a larger voxel."));
         }
 
         BspTreeView tree = BspTreeView.FromBsp(bsp);
@@ -251,7 +285,7 @@ public static class LevelNavFromBsp
         System.Threading.Tasks.Parallel.For(0, built.Length, parallel, c =>
         {
             NavRegion region = new(ox + ((c % columns) * cell), oy + ((c / columns) * cell), oz, n, n, nz, voxel);
-            built[c] = BuildCell(geometry, region, settings, options.Reach, tree, overhangIndex, cancellationToken);
+            built[c] = BuildCell(geometry, region, settings, options.Reach, tree, space, overhangIndex, cancellationToken);
             options.Progress?.Invoke(Interlocked.Increment(ref done), built.Length);
         });
 
@@ -315,10 +349,12 @@ public static class LevelNavFromBsp
 
     /// <summary>One cell: its columns, its own records, and its overhanging brushes' places in the level's list; null when it is outside throughout.</summary>
     private static CellBuild? BuildCell(
-        NavGeometry geometry, NavRegion region, NavSettings settings, double reach, BspTreeView tree,
+        NavGeometry geometry, NavRegion region, NavSettings settings, double reach, BspTreeView tree, NavPlaySpace? space,
         Dictionary<NavBrush, int> overhangIndex, CancellationToken cancellationToken)
     {
-        // Which voxels lie outside the map: their centre in a solid leaf.
+        // Which voxels lie outside the map: their centre in a solid leaf, or,
+        // with a play space, in a leaf outside it (the 3D skybox, a stage no
+        // spawn joins), which no player reaches and the build never voxelises.
         bool[] outside = new bool[region.SizeX * region.SizeY * region.SizeZ];
         bool anyInside = false;
         for (int z = 0; z < region.SizeZ; z++)
@@ -330,7 +366,8 @@ public static class LevelNavFromBsp
                     NavBox v = region.Voxel(x, y, z);
                     Vec3 centre = new((float)((v.MinX + v.MaxX) / 2), (float)((v.MinY + v.MaxY) / 2), (float)((v.MinZ + v.MaxZ) / 2));
                     int leaf = tree.LeafOf(centre);
-                    bool solid = leaf >= 0 && leaf < tree.LeafContents.Length && (tree.LeafContents[leaf] & BspTreeView.ContentsSolid) != 0;
+                    bool solid = (leaf >= 0 && leaf < tree.LeafContents.Length && (tree.LeafContents[leaf] & BspTreeView.ContentsSolid) != 0)
+                        || (space is not null && !space.Holds(leaf));
                     outside[region.Index(x, y, z)] = solid;
                     anyInside |= !solid;
                 }

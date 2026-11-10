@@ -663,12 +663,15 @@ public static class Program
               map2d <map.bsp> [-level <level.yaml>] [-out <file.map2d>] [-svg]
                                                       a compiled map's level map overlay,
                                                       cut into the level's cells with -level
-              nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <c>] [-voxel <n>] [-threads <n>] [-check]
+              nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <c>] [-voxel <n>] [-threads <n>] [-playspace on|off] [-check]
                                                       a compiled map's 3D navigation (.nav3d),
                                                       bound to the map's bytes; -game for
                                                       the props' model hulls; -check reads
                                                       the built file instead and fails on a
-                                                      place to stand with no ground under it
+                                                      place to stand with no ground under it;
+                                                      -playspace off voxelises the whole world
+                                                      (the 3D skybox too), not just the space
+                                                      the spawns join
               preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-movement [class]] [-airborne <n>]
                                                       renders a compiled map with its textures,
                                                       models and baked lighting: a labelled
