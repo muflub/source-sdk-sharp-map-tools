@@ -2038,6 +2038,15 @@ can land before the rest of this section (it is part of PR 2 in section
 13, which introduces the `.roomnav` file for them); until navigation exists
 the link writes them to the `.nav3d` sidecar on their own.
 
+`ssmap room` checks each point where the agents it applies to stand: in
+the voxel holding it, or, when its floor's top lies inside that voxel (a
+kit whose `wall_depth` is not a whole number of voxels, such as
+`wall_depth 8` under `nav_voxel_size 16`), in the open voxel above, where
+the grid stands agents on that floor and records its height (the door
+points stand on the same floor). A point sunk below the floor's top or
+inside a solid is still refused, naming its voxel. The stored point is the
+author's position either way, so no level's bytes move.
+
 ---
 
 ## 11. Transition rooms and the level spawn

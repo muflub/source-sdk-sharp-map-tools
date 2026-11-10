@@ -507,17 +507,18 @@ public static class RoomNavBuilder
                 }
 
                 NavAgentSpec agent = settings.Agents[a];
-                if (!Fits(grid, overhang, x, y, z, agent))
+                int at = OnFloorInside(grid, overhang, x, y, z, agent, poi.Origin.Z) ? z + 1 : z;
+                if (!Fits(grid, overhang, x, y, at, agent))
                 {
                     throw new RoomLintException(
-                        $"{who} is where agent \"{agent.Name}\" does not fit (voxel {x} {y} {z} is blocked for it);"
+                        $"{who} is where agent \"{agent.Name}\" does not fit (voxel {x} {y} {at} is blocked for it);"
                         + " a point of interest stands where the agents it applies to can stand.");
                 }
 
-                if (arrival && !Standing(grid, overhang, x, y, z, agent))
+                if (arrival && !Standing(grid, overhang, x, y, at, agent))
                 {
                     throw new RoomLintException(
-                        $"{who} is an arrival point off the floor (voxel {x} {y} {z} has no floor under it); a player arrives standing.");
+                        $"{who} is an arrival point off the floor (voxel {x} {y} {at} has no floor under it); a player arrives standing.");
                 }
             }
 
@@ -526,6 +527,46 @@ public static class RoomNavBuilder
 
         return placed;
     }
+
+    /// <summary>
+    /// Whether a point stands on a floor whose top lies inside its voxel
+    /// <paramref name="z"/>: that voxel blocked for the agent, the one above
+    /// it open, grounded for the agent's class, on a floor recorded within
+    /// voxel <paramref name="z"/> and no higher than the point. The grid
+    /// stands an agent on such a floor in the voxel above it, with the
+    /// floor's height, so the point is checked there.
+    /// </summary>
+    /// <remarks>
+    /// A kit whose wall depth is not a whole number of voxels (wall_depth 8
+    /// under nav_voxel_size 16) puts every floor's top inside a voxel: the
+    /// floor slab fills z 0 to 8, the voxel from 0 to 16 is blocked, and the
+    /// agents stand in the voxel from 16 on a floor recorded at 8, as the
+    /// door points do. A point placed on that floor, at z 8, is in the
+    /// blocked voxel by its height alone; this is the voxel the grid stands
+    /// it in. A floor on a voxel face (wall_depth 16) never takes this path:
+    /// a point on it is in the open voxel above already.
+    /// </remarks>
+    private static bool OnFloorInside(NavGrid grid, IReadOnlyList<NavBrush> overhang, int x, int y, int z, NavAgentSpec agent, float pointZ)
+    {
+        if (z + 1 >= grid.Region.SizeZ || Fits(grid, overhang, x, y, z, agent) || !Fits(grid, overhang, x, y, z + 1, agent))
+        {
+            return false;
+        }
+
+        NavVoxelKey above = grid[x, y, z + 1];
+        bool player = agent.ClipClass == Nav3dClipClass.Player;
+        if ((above.Flags & (player ? Nav3dLeafFlags.GroundedPlayer : Nav3dLeafFlags.GroundedNpc)) == 0)
+        {
+            return false;
+        }
+
+        double floor = player ? above.PlayerFloorZ : above.NpcFloorZ;
+        double bottom = grid.Region.OriginZ + (z * grid.Region.VoxelSize);
+        return floor > bottom && floor <= pointZ + FloorTolerance;
+    }
+
+    /// <summary>How far below a recorded floor a point may stand and still be on it: the brush's float top against the author's typed height.</summary>
+    private const double FloorTolerance = 0.125;
 
     /// <summary>Whether an agent stands in a voxel: it fits, and the floor under it is walkable or the voxel under it too tight for it.</summary>
     private static bool Standing(NavGrid grid, IReadOnlyList<NavBrush> overhang, int x, int y, int z, NavAgentSpec agent)

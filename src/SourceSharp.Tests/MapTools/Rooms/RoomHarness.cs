@@ -91,7 +91,7 @@ internal static class RoomHarness
     /// </summary>
     public static VmfDocument BuildRoomModel(RoomDefinition definition, string shell = Plain, string plug = Trigger)
     {
-        VmfDocument document = RoomModel.Build(definition, Kit.Depth, shell);
+        VmfDocument document = RoomModel.Build(definition, definition.Kit.Depth, shell);
         foreach (VmfChunk chunk in document.Chunks)
         {
             RenumberMaterials(chunk, RoomModel.PlugMaterial, plug);
