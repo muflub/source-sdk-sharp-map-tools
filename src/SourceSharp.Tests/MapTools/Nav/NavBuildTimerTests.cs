@@ -59,9 +59,11 @@ public sealed class NavBuildTimerTests(BspNavMap map) : IClassFixture<BspNavMap>
         timer.Cell(2, TimeSpan.FromMilliseconds(7));
         Assert.Equal((9, TimeSpan.FromMilliseconds(20)), timer.SlowestCell);
         Assert.Equal(TimeSpan.FromMilliseconds(32), timer.CellWork);
+        Assert.Equal([(4, TimeSpan.FromMilliseconds(5)), (9, TimeSpan.FromMilliseconds(20)), (2, TimeSpan.FromMilliseconds(7))], timer.CellTimes);
 
         System.Threading.Tasks.Parallel.For(0, 1000, i => timer.Cell(100 + i, TimeSpan.FromTicks(1)));
         Assert.Equal(1003, timer.Cells);
+        Assert.Equal(1003, timer.CellTimes.Count);
         Assert.Equal(TimeSpan.FromMilliseconds(32) + TimeSpan.FromTicks(1000), timer.CellWork);
     }
 
@@ -73,7 +75,9 @@ public sealed class NavBuildTimerTests(BspNavMap map) : IClassFixture<BspNavMap>
         NavBuildTimer timer = new();
         BspNavResult result = map.Build(new BspNavOptions { MaxDegree = 4, Timer = timer });
 
-        Assert.Equal(["geometry", "play space", "tree", "cells", "stitch", "jumps", "level"], timer.Phases.Select(p => p.Name));
+        Assert.Equal(
+            ["brushes", "props", "displacements", "geometry", "play space", "tree", "cells", "stitch", "jumps", "level"],
+            timer.Phases.Select(p => p.Name));
         Assert.Equal(result.Level.Columns * result.Level.Rows, timer.Cells);
         Assert.InRange(timer.SlowestCell.Index, 0, timer.Cells - 1);
         Assert.Equal(quiet, Nav3dWriter.Write(result.Level));

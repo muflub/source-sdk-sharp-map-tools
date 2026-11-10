@@ -573,7 +573,8 @@ otherwise (`none`, `deflate[:0-9]`, `brotli[:0-11]`).
 One line reports the file: its size, the cells holding navigation, the
 leaves, walkable floors, jump links, obstacles and ladder leaves, and the
 time. `ssmap nav` inspects it. `-timings` adds a line per phase (reading
-the map, loading the models, the geometry, the play space, the tree, the
+the map, loading the models, the brushes, the static props, the
+displacements, the rest of the geometry, the play space, the tree, the
 cells, stitching, jump links, the level and writing), each with its wall
 time, its CPU time and how many cores were busy on average over it, then
 the cells' work added up and the slowest cell, and the total; the file is

@@ -121,14 +121,15 @@ public sealed class Nav3dCommandTests(BspNavMap map) : IClassFixture<BspNavMap>
         Assert.True(exit == Program.ExitSuccess, timed.ToString());
         string[] lines = [.. timed.ToString().Split('\n').Where(l => l.StartsWith("ssmap nav3d: time ", StringComparison.Ordinal))];
         Assert.Equal(
-            ["read", "models", "geometry", "play space", "tree", "cells", "stitch", "jumps", "level", "write", "cells:", "total"],
+            ["read", "models", "brushes", "props", "displacements", "geometry", "play space", "tree", "cells", "stitch", "jumps", "level", "write",
+                "cells:", "total"],
             lines.Select(l => l["ssmap nav3d: time ".Length..].Split(' ', StringSplitOptions.RemoveEmptyEntries)[0] switch
             {
                 "play" => "play space",
                 string word => word,
             }));
         Assert.All(lines.Where(l => !l.Contains("cells:", StringComparison.Ordinal)), l => Assert.Contains(" s cpu ", l, StringComparison.Ordinal));
-        Assert.Contains("6 built", lines[10], StringComparison.Ordinal);
+        Assert.Contains("6 built", lines[13], StringComparison.Ordinal);
         Assert.Equal(fs.GetBytes(At("/out/a.nav3d")), fs.GetBytes(At("/out/b.nav3d")));
     }
 

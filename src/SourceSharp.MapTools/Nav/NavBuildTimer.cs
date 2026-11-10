@@ -46,6 +46,7 @@ public sealed class NavBuildTimer
     private readonly Func<TimeSpan>? cpu;
     private readonly long start = Stopwatch.GetTimestamp();
     private readonly List<NavPhaseTime> phases = [];
+    private readonly List<(int Index, TimeSpan Time)> cellTimes = [];
     private readonly Lock gate = new();
     private long lastWall;
     private TimeSpan lastCpu;
@@ -111,6 +112,18 @@ public sealed class NavBuildTimer
         }
     }
 
+    /// <summary>Every timed cell's index and time, in the order they were recorded.</summary>
+    public IReadOnlyList<(int Index, TimeSpan Time)> CellTimes
+    {
+        get
+        {
+            lock (gate)
+            {
+                return [.. cellTimes];
+            }
+        }
+    }
+
     /// <summary>The slowest cell's index and time; index -1 when no cell was timed.</summary>
     public (int Index, TimeSpan Time) SlowestCell
     {
@@ -158,6 +171,7 @@ public sealed class NavBuildTimer
         {
             cells++;
             cellWork += elapsed;
+            cellTimes.Add((index, elapsed));
             if (elapsed > slowest || slowestCell < 0)
             {
                 slowest = elapsed;

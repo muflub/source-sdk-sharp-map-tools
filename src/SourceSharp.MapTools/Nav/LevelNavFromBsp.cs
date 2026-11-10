@@ -233,16 +233,20 @@ public static class LevelNavFromBsp
         // The geometry: the world's brushes, the displacements' shells and
         // the static props' boxes are solid; doors and the like obstacles.
         double voxel = settings.VoxelSize;
+        NavBuildTimer? timer = options.Timer;
         NavGeometry entities = NavGeometry.FromBsp(bsp, modelBounds);
+        timer?.Mark("brushes");
         (IReadOnlyList<NavBrush> props, IReadOnlyList<string> propWarnings) = NavGeometry.StaticProps(bsp, modelBounds, options.ModelPieces);
+        timer?.Mark("props");
+        IReadOnlyList<NavBrush> displacements = NavGeometry.Displacements(bsp, voxel);
+        timer?.Mark("displacements");
         NavGeometry geometry = new()
         {
-            Brushes = [.. entities.Brushes, .. NavGeometry.Displacements(bsp, voxel), .. props],
+            Brushes = [.. entities.Brushes, .. displacements, .. props],
             Obstacles = entities.Obstacles,
             Ladders = ClimbVolumes(bsp, entities.Brushes),
             Warnings = [.. entities.Warnings, .. propWarnings],
         };
-        NavBuildTimer? timer = options.Timer;
         timer?.Mark("geometry");
 
         // The grid: voxel-aligned at the world's low corner, cells across,

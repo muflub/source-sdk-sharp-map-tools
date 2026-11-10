@@ -189,7 +189,7 @@ public static class Nav3dCommand
                 : string.Empty;
             anyCpu |= phase.Cpu is not null;
             cpuTotal += phase.Cpu ?? TimeSpan.Zero;
-            lines.Add(string.Create(CultureInfo.InvariantCulture, $"time {phase.Name,-10} {phase.Wall.TotalSeconds,8:0.000} s wall{cpu}"));
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"time {phase.Name,-13} {phase.Wall.TotalSeconds,8:0.000} s wall{cpu}"));
         }
 
         (int slowCell, TimeSpan slowTime) = timer.SlowestCell;
@@ -202,7 +202,7 @@ public static class Nav3dCommand
         string total = anyCpu
             ? string.Create(CultureInfo.InvariantCulture, $" {cpuTotal.TotalSeconds,8:0.000} s cpu {Busy(cpuTotal, timer.Total),5:0.0} busy")
             : string.Empty;
-        lines.Add(string.Create(CultureInfo.InvariantCulture, $"time {"total",-10} {timer.Total.TotalSeconds,8:0.000} s wall{total}"));
+        lines.Add(string.Create(CultureInfo.InvariantCulture, $"time {"total",-13} {timer.Total.TotalSeconds,8:0.000} s wall{total}"));
         return lines;
 
         static double Busy(TimeSpan cpu, TimeSpan wall) => wall > TimeSpan.Zero ? cpu / wall : 0;
