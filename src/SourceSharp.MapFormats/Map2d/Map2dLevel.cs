@@ -21,7 +21,20 @@ public readonly record struct Map2dPoint(int X, int Y);
 /// <param name="Height">The room's height in units.</param>
 /// <param name="Name">The room's name, as the level places it.</param>
 /// <param name="Label">The room's <c>map_label</c>, or empty.</param>
-public sealed record Map2dRoom(int CellX, int CellY, int Rotation, float Height, string Name, string Label);
+public sealed record Map2dRoom(int CellX, int CellY, int Rotation, float Height, string Name, string Label)
+{
+    /// <summary>
+    /// The cells the placement covers along x from <see cref="CellX"/>, as
+    /// placed: 1 for a room of one cell; for a room larger than one cell (the
+    /// rooms design, 17.8) its footprint turned. Its cells are the rectangle
+    /// from (<see cref="CellX"/>, <see cref="CellY"/>) of this many by
+    /// <see cref="CellsY"/>, and every floor drawn in them is this placement's.
+    /// </summary>
+    public int CellsX { get; init; } = 1;
+
+    /// <summary>The cells the placement covers along y from <see cref="CellY"/>, as placed (<see cref="CellsX"/>).</summary>
+    public int CellsY { get; init; } = 1;
+}
 
 /// <summary>
 /// One ring of a polygon: an outer boundary, counter-clockwise, or a hole,

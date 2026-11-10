@@ -2038,6 +2038,15 @@ can land before the rest of this section (it is part of PR 2 in section
 13, which introduces the `.roomnav` file for them); until navigation exists
 the link writes them to the `.nav3d` sidecar on their own.
 
+`ssmap room` checks each point where the agents it applies to stand: in
+the voxel holding it, or, when its floor's top lies inside that voxel (a
+kit whose `wall_depth` is not a whole number of voxels, such as
+`wall_depth 8` under `nav_voxel_size 16`), in the open voxel above, where
+the grid stands agents on that floor and records its height (the door
+points stand on the same floor). A point sunk below the floor's top or
+inside a solid is still refused, naming its voxel. The stored point is the
+author's position either way, so no level's bytes move.
+
 ---
 
 ## 11. Transition rooms and the level spawn
@@ -5302,6 +5311,103 @@ its points-of-interest store (PR 2) is independent of it.
 Areas after Q3. Water and displacements late: their cross-room cases are the
 hardest and their refusals are safe meanwhile.
 
+**The door sill landed** (17.6's cleaner rule, as an option). An
+`info_room` may say `door_sill floor`: the kit's doors then stand on the
+floor slab, the sill at `wall_depth` and the top at `wall_depth +
+door_height`, whatever the cell, so a kit may have doors lower than the
+room's interior and rooms lower than their cell (`door_width 256,
+door_height 192, wall_depth 32, cell_size 1024` splits; centred, it is
+refused with its sill at 416). `centre`, the default, is the centred rule
+to the bit (`SocketKit.OpeningZ` returns the very product every plug box
+was built from). The sill is part of `SocketKit`: rooms of a library and
+libraries of a level are held to one (`door_sill centre against floor`,
+17.3's kit row), the room container's kit records `"sill": "floor"` only
+for a floor kit (an older build refuses that field), the compile's claimed
+key and the room cache key fold it only for a floor kit, `ssmap rooms`
+says `on the floor` after each such door, and the door light's response
+grid is lifted over the room across a floor door (`DoorLightMath.Lift`, 0
+for a centred kit). Facts: both rules' openings, the player rule, the split
+and its refusals, the mixed-kit refusal, the container, and a floor kit's
+cube and low rooms linking as they flatten at every turn.
+
+**PR 20 landed** (rooms larger than one cell, 17.8, after D37 reversed D30).
+An `info_room`'s `room_footprint "W D"` makes a room cover W x D cells; its
+box is the footprint, its sockets are found per cell edge of the perimeter
+(`RoomSocket.Offset`), named `east0`, `east1`, ... and renamed by
+`socket_east0`; water sockets are `water_east0` and so on. 17.8's design
+holds, with these decisions where it left a detail or did not work as
+written:
+
+- **The compile** sets vbsp's block size to the cell size
+  (`Vbsp.CompileRoomAsync`, `BlockGrid.ClampSized`), and `RoomCellTree`
+  walks the compiled tree from its head the way vbsp stitched it, recording
+  each covered cell's subtree root and the block nodes above them. It
+  refuses a tree that does not split at every cell face (17.3's text) and,
+  not foreseen by 17.8, **a surface lying exactly on an internal cell
+  face**: vbsp puts a face on the node of its plane, the engine draws a
+  node's faces by walking to it, and the link omits the block nodes, so
+  such a face would never be drawn. A brush crossing the face is fine (its
+  cut sides are no faces); only a visible side in the plane is refused,
+  naming it. A cell an author filled solid may share one solid leaf with
+  its neighbours. A door plug with solid behind it (such a cell's plug, or
+  a fill pushed against any room's wall) is refused when the room
+  compiles, naming the socket and its plug box: the door would open into
+  a wall, and the link used to refuse only the level that joined it, with
+  no cause given ("faces no open leaf"). The author removes the plug or
+  opens the space behind it; a corridor through the fill from the plug is
+  fine, and links as the level flattens.
+- **Storage.** `SHAP` revision 2 holds the footprint, each socket's
+  room-local cell and a position along its edge (always 0, kept for doors
+  at several positions), the cell roots and the block nodes; the loader
+  walks the compile again and refuses a section that disagrees. A pack
+  holding such a room is **version 6** (`RoomPack.Version`; 5 is now
+  `ShapedVersion`, 4 `CubeVersion`), and a larger room's section in an
+  older pack is refused as damage. The facts that pinned 5 as the newest
+  version read 6 now.
+- **The link.** `RoomPlacement.CellsX`/`CellsY` carry the footprint (set by
+  `LevelGrid.ToLayout`, and by `LevelLinker.WithFootprints` for a layout
+  built in code), `RoomTransform` moves the room by its turned footprint
+  (the cell itself for one cell, so no bit moves), every per-cell lookup
+  (joints, reachability, door portals, water joints, door light,
+  furniture, the resolver's neighbours) works over covered cells, the top
+  tree points each covered cell at its subtree, and the node lump leaves
+  the block nodes out beside the brush models' omission.
+- **Visibility.** The door flows are unchanged; the rule that two rooms
+  sharing a wall see each other only through its door applies to rooms of
+  one cell only, since a larger room reaches past its neighbour and a line
+  may go round through a third room.
+- **Names (O28).** `cxry_` is the anchor; neighbour offsets, neighbour
+  flags and `room_needs` directions or sides are refused in a larger room;
+  `room_needs` takes `joined_<socket>`, stored as a third condition flag
+  and the socket's index. A neighbour's name looking at any covered cell
+  names the room by its anchor.
+- **The level file (O29)**: `+` in every covered cell but the anchor, the
+  south-west cell as placed; 17.3's three texts refuse a stray `+`, a
+  covered cell holding anything else, and a footprint off the grid.
+- **The generator (O30)** draws rooms of one cell only, and its header
+  names how many larger rooms it left out; role rooms may be larger at
+  the link.
+- **Navigation** is one clearance grid over the footprint (`RoomNav.CellsX`
+  and `CellsY`, a quarter turn swapping them; the room nav section's
+  revision 4 records them and each socket's cell edge). The kit's assumed
+  outside is the footprint's, each face's neighbour wall cut by every open
+  door on it. The link writes each covered cell's `n x n` block under that
+  cell's root, each door in the cell whose edge it is on, each point in the
+  cell it stands in, and the room's name and turn on every covered cell;
+  the `.nav3d`'s layout and version do not change for it, and the 128
+  voxels a cell is still per cell. Facts hold every covered cell to the
+  flattened compile's grid at every turn, a walk across the internal faces
+  of a 3 x 3 room as one component, doors per socket and a point of
+  interest in a cell that is not the anchor.
+- **The level map** cuts a larger room by its footprint and turns it by
+  it; the `.map2d` records the anchor only, as for any placement.
+
+Measured (this build, 32-core host): `ssmap room` of
+`samples/rooms-multicell` (five rooms, the 3 x 3 court and the tall 2 x 2
+atrium the largest) takes 1.4 s and writes a 599 KB pack (court 176 KB,
+atrium 185 KB); each of its four levels links in 0.3 s. Every pinned
+digest and equivalence fact of rooms of one cell holds unchanged.
+
 ---
 
 ## 14. Owner decisions
@@ -5340,6 +5446,7 @@ hardest and their refusals are safe meanwhile.
 | D28 | (2026-09-29, was O32) The combine verb is `ssmap roompack`, with `ssmap room -namespace` for one library (17.10). |
 | D29 | (2026-09-30, was O25) Don't drop singletons across libraries: a singleton only a later library has (the sun, an environment controller, fog) is used, taken from the earliest listed library that has it; the first library still wins wherever it has one, and duplicates keep D24's one summary line per library. The same holds for a library option the first library does not write and for the skybox room; `mapversion` is not filled. The level's sun world lights come from the library that supplied the sun, and D26 holds the other libraries to that sun (17.4). `ssmap roompack`'s level-wide sections and sun (17.10) are the level's singletons by this rule. |
 | D30 | (2026-09-30) Drop multi-cell rooms: "I don't think we want PR 20 so drop that." PR 20 (17.8) is not built, and every room stays one cell. Large open areas are 17.7's option B: groups of adjacent tall one-cell rooms (a room taller than its cell, 17.6), which `ssmap layout` gathers by height and reaches through standard rooms (17.9). PR 21 no longer waits for PR 20: its groups, spanning tree and level file are over cells, with no footprints, units or `+` cells. O28, O29 and O30, which only multi-cell rooms raised, are moot. |
+| D37 | (2026-11-10) Build multi-cell rooms: "Implement multicell rooms on map tools." Reverses D30. 17.8 is built (PR 20's landed note), with O28, O29 and O30 answered: neighbour offsets, flags and `room_needs` directions refused in a larger room, `joined_<socket>` allowed; `+` marks the covered cells; role rooms may be larger at the link while `ssmap layout` places rooms of one cell only. |
 | D31 | (2026-09-30, was O34) The level map is a binary `.map2d` for the game, with an optional SVG preview from the same data (18.4). |
 | D32 | (2026-09-30, was O35) The map's playable area is the compiled room's walkable faces, not the navigation voxels (18.2). |
 | D33 | (2026-09-30, was O36) The map shows `info_poi` entities with a `map_marker` key, plus the spawn, the arrivals and the transition exits; other POIs stay navigation-only (18.1). |
@@ -5378,9 +5485,9 @@ hardest and their refusals are safe meanwhile.
 | O25 | (Decided: D29.) | |
 | O26 | (Decided: D25.) | |
 | O27 | (Decided: D26.) | |
-| O28 | (Moot: D30.) | |
-| O29 | (Moot: D30.) | |
-| O30 | (Moot: D30.) | |
+| O28 | (Decided: D37.) | |
+| O29 | (Decided: D37.) | |
+| O30 | (Decided: D37.) | |
 | O31 | (Decided: D27.) | |
 | O32 | (Decided: D28.) | |
 | O33 | Tall one-cell rooms outside groups (17.9). | Only in groups, under `-large`. |
@@ -5458,7 +5565,7 @@ R = rotations, M = both modes, D = determinism, B = budget counts.
 | Multiple libraries (17.2 to 17.5) | key and alias parsing, resolution order, dotted-name guard, compatibility, singleton rule, every 17.3 text | two packs linked; singletons and options from the first; worldspawn warning; lookup per key | multi-library sample (17.12) | the level linked from two libraries equals the same level from one library holding both room sets, less the warned singletons | yes | yes | yes | yes |
 | Combined packs (17.10) | `NSPC` round trip, namespaced names and `MapBase` | combined and separate packs; `-rooms` forms; `-only` and reuse copy sections byte for byte | multi-library sample | a combined pack and namespaced separate packs link to the same map | | | yes | yes |
 | Room heights (17.6) | door box against today's, height rules, extent limit | tall rooms at every rotation beside short ones: node and solid-leaf bounds, props, nav columns | tall variants (17.12) | lumps, traces and `.nav3d` against the flattened compile; cube-only levels byte-identical | yes | | yes | yes |
-| Multi-cell rooms (17.8), **dropped (D30)** | footprint transform, `+` cells, socket offsets and names, anchor | per-cell subtree routing, block-node omission, joints along edges, capacity | 2 x 2 and 3 x 1 rooms (17.12) | traces at every lattice point, vis a superset, entities, `.nav3d` | yes | yes | yes | yes |
+| Multi-cell rooms (17.8, PR 20) | footprint transform, `+` cells, socket offsets and names, anchor | per-cell subtree routing, block-node omission, joints along edges, capacity | 2 x 2 and 3 x 1 rooms (17.12) | traces at every lattice point, vis a superset, entities, `.nav3d` | yes | yes | yes | yes |
 | Height-aware generator (17.9) | streams, groups, filters, the shortest spelling | | seeded multi-library levels, tall rooms | YAML byte-identical to today's for one library without large rooms, and for `-large 0` | | | yes | yes |
 
 ### 15.3 Correctness fixes, red first
@@ -5801,8 +5908,9 @@ a dropped sun refused once the door light lands, no stacked storeys, and
 (section 11) and on what PRs 9 to 13 landed (the base bake and its pack id,
 the door portals option, the skybox room), and changes nothing they decide.
 The implementation order is PRs 17 to 21 in section 13; the owner dropped
-PR 20, multi-cell rooms, on 2026-09-30 (D30), so every room stays one cell
-and large areas are groups of tall rooms (17.7, 17.9).
+PR 20, multi-cell rooms, on 2026-09-30 (D30), and had it built on
+2026-11-10 (D37): a room may cover several cells (17.8), and large areas
+may also be groups of tall rooms (17.7, 17.9).
 
 ### 17.1 What the code assumes today about height and footprint
 
@@ -5831,8 +5939,8 @@ size. The assumptions, and what each means for taller or larger rooms:
 
 PR 19 lifted the height rows of this table: the room's box replaces the
 cube wherever it is assumed, and the top tree's bounds follow the rooms'
-heights (section 13, its landed note). The footprint rows stand: multi-cell
-rooms were dropped (D30), so every room keeps its one cell.
+heights (section 13, its landed note). PR 20 lifted the footprint rows for
+rooms larger than one cell (D37, its landed note).
 
 In short: **height** is fixed by the kit and assumed in the cell box (split,
 lint, props, furniture, navigation, linker entities) and in the top tree's
@@ -5874,9 +5982,8 @@ grid:
   rules below. An alias may not be the name of any room of any listed
   library (D19: aliases cannot shadow room names); it may equal a library
   key, since a key only matters before a dot.
-- **A cell** is `~` or a token with an optional `@` rotation. (17.8 planned
-  a third form, `+`, for a cell a larger room covers; D30 dropped multi-cell
-  rooms, so there is none, and `+` is refused as a name no library has.) The token is resolved in this order:
+- **A cell** is `~`, `+` (a cell a larger room covers besides its anchor,
+  17.8), or a token with an optional `@` rotation. The token is resolved in this order:
   1. **Qualified**: it holds a dot, and the part before the first dot is a
      library key. The rest is a room of that library; if it has none, the
      cell is refused.
@@ -5940,7 +6047,7 @@ not landed with it, the verb in them is the one PR 18 adds.
 | 17.2 bare, none | R | `no library of the level has a room "{room}"; its libraries are {keys}.` (a `library` level keeps today's missing-room message) |
 | 17.2 bare, several | R | `the room "{room}" is in libraries {k1} and {k2}; write {k1}.{room} or {k2}.{room}, or name one with an alias.` (three or more: `{k1}, {k2} and {k3}`, `{k1}.{room}, {k2}.{room} or {k3}.{room}`) |
 | 17.5 cell | R | `libraries {a} ({pa}) and {b} ({pb}) are built for different grids: cell_size {x} against {y}; the rooms of a level share one cell size.` |
-| 17.5 kit | R | `libraries {a} ({pa}) and {b} ({pb}) have different door kits: {key} {x} against {y}; the rooms of a level join through one kit.` (`{key}` the first that differs of `door_width`, `door_height`, `wall_depth`) |
+| 17.5 kit | R | `libraries {a} ({pa}) and {b} ({pb}) have different door kits: {key} {x} against {y}; the rooms of a level join through one kit.` (`{key}` the first that differs of `door_width`, `door_height`, `wall_depth`, `door_sill`; the sill spelt `centre` or `floor`) |
 | 17.5 navigation grid | R | `libraries {a} and {b} build navigation on different grids: {x} against {y} voxels per cell; a level's navigation is one grid.` |
 | 17.4 differs | W | `library {b}: its {class}{ "name"} differs from library {a}'s ({key}: "{x}" against "{y}"); the level takes library {a}'s, the first listed, and drops it.` (`{a}` the library the level's copy came from; when that is not the first library, D29, `the first listed` reads `the earliest listed with one`) |
 | 17.4 equal | W | `library {b}: {n} singleton(s) equal to library {a}'s dropped ({classes}).` (one line per library; when the level's copies came from several libraries, D29: `library {b}: {n} singleton(s) equal to the level's dropped ({class} of library {a}, {class} of library {a2}).`) |
@@ -5959,13 +6066,15 @@ not landed with it, the verb in them is the one PR 18 adds.
 | 17.6 voxels | R | `room {room}: room_height {h} is not a whole number of navigation voxels ({v} units each).` |
 | 17.6 too tall | R | `room {room}: room_height {h} is taller than {max}, the most {limit}.` (`{limit}`: `the engine's coordinates allow`, or `navigation describes (255 voxels)`) |
 | 17.6 extent | R | `level {level}: reaches {axis} = {v} at cell ({x}, {y}); the engine's coordinates stop at 16384.` |
-| 17.8 footprint (dropped, D30) | R | `room {room}: room_footprint "{v}" is not two whole numbers of cells from 1 to 16, like "2 3".` |
-| 17.8 `+` alone (dropped, D30) | R | `+ is in no room's footprint; + marks the cells a larger room covers besides its south-west one.` |
-| 17.8 covered (dropped, D30) | R | `room {room} at cell ({x}, {y}) covers cell ({cx}, {cy}), which holds {token}; write + there.` |
-| 17.8 off grid (dropped, D30) | R | `room {room} at cell ({x}, {y}) turned {deg} covers {w} x {d} cells and runs off the {rows}x{columns} grid.` |
-| 17.8 neighbour name (dropped, D30) | R | `room {room}: entity {id} ({class}) key "{key}": "{value}" names a neighbour cell; a room of {w} x {d} cells names only its own cell (cxry_).` |
-| 17.8 side (dropped, D30) | R | `room {room}: entity {id} ({class}) room_needs "{value}": a room of {w} x {d} cells has several neighbours on a side; name a socket, joined_<socket>.` |
-| 17.8 blocks (dropped, D30) | R | `room {room}: its compile does not split at every cell face of its {w} x {d} footprint (cell ({i}, {j})); this is a bug in the room compile.` |
+| 17.8 footprint | R | `room {room}: room_footprint "{v}" is not two whole numbers of cells from 1 to 16, like "2 3".` |
+| 17.8 `+` alone | R | `+ is in no room's footprint; + marks the cells a larger room covers besides its south-west one.` |
+| 17.8 covered | R | `room {room} at cell ({x}, {y}) covers cell ({cx}, {cy}), which holds {token}; write + there.` |
+| 17.8 off grid | R | `room {room} at cell ({x}, {y}) turned {deg} covers {w} x {d} cells and runs off the {rows}x{columns} grid.` |
+| 17.8 neighbour name | R | `room {room}: entity {id} ({class}) key "{key}": "{value}" names a neighbour cell; a room of {w} x {d} cells names only its own cell (cxry_).` |
+| 17.8 side | R | `room {room}: entity {id} ({class}) room_needs "{value}": a room of {w} x {d} cells has several neighbours on a side; name a socket, joined_<socket>.` |
+| 17.8 blocks | R | `room {room}: its compile does not split at every cell face of its {w} x {d} footprint (cell ({i}, {j})); this is a bug in the room compile.` |
+| 17.8 face on a cell face | R | `room {room}: a surface lies on the cell face {x/y} = {v} inside its {w} x {d} footprint; the link routes each cell to its own part of the room and would drop it. Move the surface off the cell face, or let its brush cross it.` (PR 20) |
+| 17.8 `+` turned | R | `"{token}" is not a cell; + marks a cell a larger room covers, alone, with no rotation.` (PR 20) |
 | 17.9 no large rooms | R | `layout: -large asks for large areas, but no library of the level has a room taller than one cell.` (with `-max-height {h}`: `... taller than one cell and at most {h} tall (-max-height).`; PR 21 dropped `or wider` with D30) |
 | 17.9 no fill room | R | `none of the library's {n} room(s) has a socket and stands no taller than its cell{ and {h} (-max-height)}, so {placed} rooms cannot be joined; a room taller than its cell stands only in a group of large rooms (-large).` (when height left the fill no room; the socketless text otherwise, as before) |
 | 17.9 no fit | R | `layout: no level of {rows}x{columns} with seed {seed} covers {k} cells with large rooms in groups of {g}; lower -large or grow the grid.` |
@@ -6098,6 +6207,9 @@ the header.
 A room's height becomes its own: the `info_room` key **`room_height`**, in
 units, default the cell size, so every existing library means what it did.
 
+- **The door sill** is the kit's: `door_sill floor` stands every door on
+  the floor at any height (the cleaner rule below, as an option; section
+  13's door sill note), and the default centres it as before.
 - **The door stays where it is.** The door box is the one a standard,
   cube-shaped room of the library has: `SealBox` keeps computing its z range
   from `OpeningUnit` and the **cell size**, never the room height. So a
@@ -6212,6 +6324,9 @@ top tree's algorithm; tall one-cell rooms (17.6) are its `1 × 1` case, so
 heights and footprints are one chain of work; and the cost sits at pack
 time (block splits, larger compiles), where D1 and D16 want it.
 
+**Built (D37, 2026-11-10)** after all: PR 20's landed note (section 13).
+The paragraph below records the decision it reversed.
+
 **Decided otherwise (D30, 2026-09-30).** The owner dropped A ("I don't think
 we want PR 20"). Large areas are B: groups of tall one-cell rooms, gathered
 by height and reached through standard rooms by the generator (17.9, PR 21).
@@ -6221,9 +6336,8 @@ a seamless area would take, should it ever be wanted.
 
 ### 17.8 Multi-cell rooms
 
-**Dropped by D30 (2026-09-30): not built.** The design below is kept as the
-starting point a later change would have; nothing in the code reads
-`room_footprint`, and a level file has no `+` cells.
+**Built by PR 20 (D37, 2026-11-10)**, as below, except that a surface lying
+on an internal cell face is refused; PR 20's landed note (section 13) has the details.
 
 - **Authoring.** The `info_room` key **`room_footprint`**, `"W D"`: cells
   along the room's own +x and +y, 1 to 16 each (a guard, like
@@ -6285,6 +6399,53 @@ starting point a later change would have; nothing in the code reads
   offers only one-cell role rooms in role cells (O30).
 - **Flatten.** `VmfPlacement` with the footprint transform; it writes each
   room's brushes once.
+- **Door slots (stage 9, built 2026-11-10).** The kit key **`door_slots`**,
+  1 (the default, every byte as before), 3 or 5: each cell edge is divided
+  into that many equal parts and a door centred in each, rounded to whole
+  units, the slots before the middle by `round((k + ½)·c/N − w/2)` and the
+  slots after it their mirror `c − low − w`; the middle slot is the
+  one-slot door. So slot `k` and slot `N − 1 − k` are each other's
+  reflection exactly, and a turn or mirror lands a slot on a slot. A kit is
+  refused when its first door leaves less than `wall_depth` to the corner,
+  with the numbers (the edge it needs is `N × (w + 2·wall_depth)`); the
+  wall between doors is then at least twice that less a unit. A socket is
+  (face, cell offset, slot), counted from the room's own south (east and
+  west walls) or west (north and south), at any subset of slots; its
+  default name is the wall's, the cell edge's in a larger room, `_` and the
+  slot's letter (`east_a`, `east0_c`), and `socket_<name>` renames one. The
+  slot count is part of the kit (rooms and libraries compared, `ssmap
+  rooms` prints `slot k of N`), written to the room container (`kit.slots`,
+  each socket's `slot`, only for a kit of several, so an older build
+  refuses the container by its unknown field), the cache key and the nav
+  section (revision 5, only for a kit of several). The layout joins two
+  sockets only where their plugs stand at the same place on the shared
+  edge, so slot `k` meets slot `k` or `N − 1 − k` as the turns have it, and
+  caps every other slot, never refusing; the link refuses a hand-made joint
+  at another slot. Everything per socket follows from its plug box: door
+  vis, door portals, furniture, `joined_<socket>`, `water_<socket>`,
+  navigation's door points and capping (the nav's door records join by the
+  layout's joint names), the level map's doors, transitions, `--flatten`.
+  `ssmap layout` lays out libraries of one slot only and says so.
+  `samples/rooms-slots` holds a room with two doors on one wall, a corridor
+  entering at a corner slot and a 2 x 2 room with every slot. Door light
+  (measured 2026-11-10 against vrad of the linked level, near/far p95 in
+  PR 10's terms): the game's kit (cell 1024, door 208 x 192 on the floor)
+  is within 0.008 near at wall 16 and wall 8, one slot or the first of
+  three (51 units from the side wall). A wall that is not a whole number
+  of 16-unit luxels deep put the last cell of every face running up to the
+  doorway on the opening's plane, which shut it out of the door's light;
+  such a kit's receivers on the plane are now seen from just inside the
+  room (`RoomDoorLight.PullsBackFromThePlane`, keyed on the depth, so a
+  16-deep kit keeps every bit): wall 8 near p99 0.224 to 0.151, the
+  threshold line 0.45 to 0.30. What stays: that line, a luxel on the joint
+  under and over the door, up to 0.3 darker on a part-luxel wall; and a
+  door within a few units of the side wall (a 48-wide slot door 3 units
+  from the corner on a 256 cell measured near p95 0.22, a centred one
+  0.012), the wall beside it lit at grazing incidence. Authoring avoids
+  both: wall depth a multiple of 16, and slot doors a luxel or more of
+  wall from the side wall. A door must also be at least the navigation
+  agent and a voxel wide where the grid meets it, or the nav grid does not
+  pass it.
 
 ### 17.9 The generator: several libraries, heights, large areas
 
@@ -6476,17 +6637,19 @@ ssmap roompack -level <level.yaml> [-out <pack.roompack>] [...]
   refuse a larger room's second socket on a face only by luck. A pack of
   cube rooms keeps the current version and its bytes, so no golden digest
   moves. The room container (`SSROOM01`) does not change, so the room cache
-  keeps every cube room's entries. Since D30 no room is larger than one
-  cell: `SHAP` holds a footprint of 1 × 1 and no per-cell roots, as PR 19
-  wrote it.
+  keeps every cube room's entries. A room of one cell's `SHAP` holds a
+  footprint of 1 × 1 and no per-cell roots, as PR 19 wrote it; a larger
+  room's is revision 2 (the footprint, each socket's cell and a position
+  along its edge, the cell roots and the block nodes), and a pack holding
+  one is **version 6** (PR 20), so a pack holding only rooms of their own
+  height stays 5.
 - **Navigation.** A shaped room's navigation section (`NVRr`) raises its
   revision for that room only (taller columns, the footprint's region). The
   `.nav3d` stays version 2 for a level of cubes; a level placing a shaped
   room is written at **version 3**, whose one addition is a per-placed-cell
   voxel height (a `CHGT` section); `docs/nav3d-format.md` 1, 2 and 16 are
   updated in PR 19.
-- **Level file**: new keys only (17.2); 17.8's `+` cells were dropped with
-  multi-cell rooms (D30).
+- **Level file**: new keys (17.2) and 17.8's `+` cells (PR 20).
 
 ### 17.12 Tests
 
@@ -6540,9 +6703,9 @@ multi-cell rooms, which D30 dropped the same day.
 | O25 | A singleton only a later library has. | **Decided (D29, 2026-09-30):** used, not dropped: taken from the earliest listed library that has it, the first library still winning wherever it has one; the same for an option the first library does not write and for the skybox. Built before as this point's default, dropped with a warning. |
 | O26 | Navigation settings across libraries. | **Decided (D25):** the voxel grid is compatibility (refused); step and jump heights, costs and agent presets follow the singleton rule (warned). |
 | O27 | Rooms of other libraries compiled under a worldspawn and sun the level drops. | **Decided (D26):** `ssmap roompack` compiles every namespace under the first library's worldspawn and singletons; separate packs link with a warning, except that a sunlit room baked under a dropped sun is refused once the door light (PR 10) lands, and warned until then. |
-| O28 | Neighbour names and sides in a room larger than one cell. | **Moot (D30):** no room is larger than one cell. (Was: refused at pack time; `joined_<socket>` works; a later grammar could name a neighbour by socket.) |
-| O29 | The mark for a covered cell in the level file. | **Moot (D30).** (Was: `+`, with the room in its south-west cell.) |
-| O30 | Role rooms larger than one cell in `ssmap layout`. | **Moot (D30).** PR 21 keeps role rooms out of the groups: a role room is a standard room, and a tall one is never placed. |
+| O28 | Neighbour names and sides in a room larger than one cell. | **Decided (D37):** refused at pack time; `joined_<socket>` works. |
+| O29 | The mark for a covered cell in the level file. | **Decided (D37):** `+`, with the room in its south-west cell. |
+| O30 | Role rooms larger than one cell in `ssmap layout`. | **Decided (D37):** role rooms may be larger at the link; `ssmap layout` places rooms of one cell only and says how many it left out. |
 | O31 | Rooms whose floor is not at z = 0, and stacked storeys. | **Decided (D27):** not planned: both need a vertical kit and z splits in the top tree. Storeys are authored inside a tall room. |
 | O32 | The combine verb's name. | **Decided (D28):** `ssmap roompack`, with `ssmap room -namespace` for one library. |
 | O33 | Scattering tall one-cell rooms outside groups. | Only in groups (`-large`); revisit if levels look too regular. |

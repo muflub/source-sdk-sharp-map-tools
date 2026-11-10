@@ -80,6 +80,81 @@ public sealed class RoomIncrementalCommandsTests
     }
 
     /// <summary>
+    /// The multi-cell sample through the store: a second run reuses every
+    /// room, the larger ones with their cell trees, and writes the clean
+    /// pack; an edit to the 2 x 2 hall compiles only the hall, and the pack
+    /// and the map and navigation <c>ssmap link</c> makes from it are still
+    /// the clean ones.
+    /// </summary>
+    [Fact]
+    public async Task ALargerRoomIsReusedAndAnEditRecompilesOnlyIt()
+    {
+        using TempTree tree = new();
+        InMemoryFileSystem fs = new();
+        foreach ((string path, byte[] bytes) in RoomsMultiCellSample.Build())
+        {
+            fs.AddFile(Rooted("/sample/" + path), bytes);
+        }
+
+        int count = RoomsMultiCellSample.Rooms.Count;
+        await AssertSameAsClean(fs, tree, [], $"{count} compiled, 0 reused", link: false);
+        await AssertSameAsClean(fs, tree, [], $"0 compiled, {count} reused", link: false);
+        await SetLibraryAsync(fs, WithTarget(await LibraryAsync(fs), "hall"));
+        await AssertSameAsClean(fs, tree, [], $"1 compiled, {count - 1} reused", link: false);
+        Assert.Contains("ssmap room: compiled hall ", LastLog(fs), StringComparison.Ordinal);
+        foreach (string pack in (string[])["clean", "inc"])
+        {
+            using StringWriter linkOutput = new();
+            int exit = await RoomCommands.RunLinkAsync(
+                fs, ["/sample/levels/multicell_turn3.yaml", "-rooms", $"/{pack}.roompack", "-out", $"/out/{pack}.bsp"], linkOutput);
+            Assert.True(exit == Program.ExitSuccess, linkOutput.ToString());
+        }
+
+        Assert.Equal(Bytes(fs, "/out/clean.bsp"), Bytes(fs, "/out/inc.bsp"));
+        Assert.Equal(Bytes(fs, "/out/clean.nav3d"), Bytes(fs, "/out/inc.nav3d"));
+    }
+
+    /// <summary>
+    /// <c>ssmap roompack</c> with the multi-cell sample in a namespace: its
+    /// larger rooms pack as <c>mc.hall</c> and so on at version 6, and the
+    /// level naming the library by that key links from the combined pack to
+    /// the map the plain pack gives, point for point.
+    /// </summary>
+    [Fact]
+    public async Task ACombinedPackCarriesLargerRoomsInANamespace()
+    {
+        InMemoryFileSystem fs = new();
+        foreach ((string path, byte[] bytes) in RoomsMultiCellSample.Build())
+        {
+            fs.AddFile(Rooted("/sample/" + path), bytes);
+        }
+
+        using StringWriter packed = new();
+        Assert.True(await RoomCommands.RunRoomPackAsync(fs, [], ["-game", "/sample", "-out", "/both.roompack", "mc=/sample/rooms.vmf"], packed) == Program.ExitSuccess, packed.ToString());
+        Assert.Contains("compiled mc.atrium", packed.ToString(), StringComparison.Ordinal);
+        Assert.Equal(6, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(Bytes(fs, "/both.roompack").AsSpan(8)));
+
+        string level = Encoding.UTF8.GetString(Bytes(fs, "/sample/levels/multicell_turn1.yaml"))
+            .Replace("library: ../rooms.vmf", "libraries:\n  mc: ../rooms.vmf", StringComparison.Ordinal);
+        fs.AddFile(Rooted("/sample/levels/combined.yaml"), Encoding.UTF8.GetBytes(level));
+        using StringWriter combined = new();
+        Assert.True(await RoomCommands.RunLinkAsync(fs, ["/sample/levels/combined.yaml", "-rooms", "/both.roompack", "-out", "/out/combined.bsp"], combined) == Program.ExitSuccess, combined.ToString());
+        await CleanAsync(fs, []);
+        using StringWriter plain = new();
+        Assert.True(await RoomCommands.RunLinkAsync(fs, ["/sample/levels/multicell_turn1.yaml", "-rooms", "/clean.roompack", "-out", "/out/plain.bsp"], plain) == Program.ExitSuccess, plain.ToString());
+
+        SourceSharp.MapFormats.Bsp.BspData a = await LoadAsync(fs, "/out/combined.bsp"), b = await LoadAsync(fs, "/out/plain.bsp");
+        Assert.Equal(LevelLinkerWaterTests.Points(b, 5, 7), LevelLinkerWaterTests.Points(a, 5, 7));
+        Assert.Equal(a[SourceSharp.MapFormats.Bsp.BspLump.Nodes].Data.Length, b[SourceSharp.MapFormats.Bsp.BspLump.Nodes].Data.Length);
+    }
+
+    private static async Task<SourceSharp.MapFormats.Bsp.BspData> LoadAsync(InMemoryFileSystem fs, string path)
+    {
+        using MemoryStream stream = new(Bytes(fs, path));
+        return await SourceSharp.MapFormats.Bsp.BspFile.LoadAsync(stream);
+    }
+
+    /// <summary>
     /// A library-only setting (the entity reserve) rewrites the pack's
     /// settings section and reuses every room: the pack is still the clean
     /// one.

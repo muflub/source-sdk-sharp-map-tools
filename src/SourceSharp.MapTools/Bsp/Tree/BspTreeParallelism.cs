@@ -75,7 +75,7 @@ internal sealed record BspTreeParallelism
 
     /// <summary>
     /// How many threads the world pass may build blocks on at once, the
-    /// calling thread included (<see cref="BlockGrid.BuildWorldPass"/>).
+    /// calling thread included (<c>BlockGrid.BuildWorldPass</c>).
     /// </summary>
     /// <remarks>
     /// The compile's degree. A subtree fork needs no such number, as it only

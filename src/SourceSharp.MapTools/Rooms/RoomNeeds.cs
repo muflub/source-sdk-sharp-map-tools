@@ -13,7 +13,16 @@ namespace SourceSharp.MapTools.Rooms;
 /// <param name="Direction">The direction: any of the eight for a neighbour, a side for a joined socket.</param>
 /// <param name="Joined">True for <c>joined_&lt;side&gt;</c> (a socket on that side is joined); false for a neighbour cell.</param>
 /// <param name="Negated">True for a leading <c>!</c>: the condition holds when the other does not.</param>
-internal readonly record struct RoomNeed(RoomDirection Direction, bool Joined, bool Negated);
+internal readonly record struct RoomNeed(RoomDirection Direction, bool Joined, bool Negated)
+{
+    /// <summary>
+    /// For <c>joined_&lt;socket&gt;</c> in a room larger than one cell (the
+    /// rooms design, 17.8 and O28): the socket's index in the room's
+    /// definition, the condition holding when that socket is joined; -1 for
+    /// every other condition.
+    /// </summary>
+    public int Socket { get; init; } = -1;
+}
 
 /// <summary>
 /// The <c>room_needs</c> key: link-time inclusion, the third of the
@@ -51,7 +60,21 @@ internal static class RoomNeeds
     /// <param name="needs">The conditions, in order.</param>
     /// <param name="unknown">The direction that is not one (without <c>!</c> or <c>joined_</c>), or null.</param>
     /// <returns>Whether every token is a condition.</returns>
-    public static bool TryParse(string value, out List<RoomNeed> needs, out string? unknown)
+    public static bool TryParse(string value, out List<RoomNeed> needs, out string? unknown) =>
+        TryParse(value, null, out needs, out unknown);
+
+    /// <summary>
+    /// A key's conditions, where <c>joined_</c> may also name one of
+    /// <paramref name="sockets"/> (a room larger than one cell names its
+    /// sockets, since a side has several): such a condition carries the
+    /// socket's index (<see cref="RoomNeed.Socket"/>).
+    /// </summary>
+    /// <param name="value">The key's value.</param>
+    /// <param name="sockets">The room's sockets, or null for a room whose <c>joined_</c> takes a side only.</param>
+    /// <param name="needs">The conditions, in order.</param>
+    /// <param name="unknown">The direction that is not one, or null.</param>
+    /// <returns>Whether every token is a condition.</returns>
+    public static bool TryParse(string value, IReadOnlyList<RoomSocket>? sockets, out List<RoomNeed> needs, out string? unknown)
     {
         needs = [];
         unknown = null;
@@ -62,6 +85,13 @@ internal static class RoomNeeds
             string body = negated ? token[1..] : token;
             bool joined = body.StartsWith(RoomLinkerNames.JoinedPrefix, StringComparison.Ordinal);
             string direction = joined ? body[RoomLinkerNames.JoinedPrefix.Length..] : body;
+            int socket = joined && sockets is not null ? IndexOf(sockets, direction) : -1;
+            if (socket >= 0)
+            {
+                needs.Add(new RoomNeed(default, true, negated) { Socket = socket });
+                continue;
+            }
+
             if (!RoomDirections.TryParse(direction, out RoomDirection parsed) || (joined && !RoomDirections.IsSide(parsed)))
             {
                 unknown = direction;
@@ -72,6 +102,19 @@ internal static class RoomNeeds
         }
 
         return true;
+    }
+
+    private static int IndexOf(IReadOnlyList<RoomSocket> sockets, string name)
+    {
+        for (int i = 0; i < sockets.Count; i++)
+        {
+            if (string.Equals(sockets[i].Name, name, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     /// <summary>Whether a key is <c>room_needs</c>, ignoring case as entity keys are.</summary>
@@ -88,14 +131,19 @@ internal static class RoomNeeds
     /// <param name="row">The placement's row.</param>
     /// <param name="occupied">Whether a cell of the level holds a room.</param>
     /// <param name="joined">The placement's joined sides, in its authored frame.</param>
+    /// <param name="joinedSockets">The placement's joined sockets, a bit per socket index, for <c>joined_&lt;socket&gt;</c>.</param>
     public static bool Hold(
-        IReadOnlyList<RoomNeed> needs, int turns, int column, int row, Func<(int X, int Y), bool> occupied, JoinedMask joined)
+        IReadOnlyList<RoomNeed> needs, int turns, int column, int row, Func<(int X, int Y), bool> occupied, JoinedMask joined, ulong joinedSockets = 0)
     {
         bool holds = true;
         foreach (RoomNeed need in needs)
         {
             bool value;
-            if (need.Joined)
+            if (need.Socket >= 0)
+            {
+                value = (joinedSockets & (1UL << need.Socket)) != 0;
+            }
+            else if (need.Joined)
             {
                 value = (joined & RoomDirections.JoinedBit(need.Direction)) != 0;
             }

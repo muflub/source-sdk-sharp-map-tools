@@ -363,7 +363,7 @@ public static class LevelFlattener
             string name = instance.Placement.Room;
             if (!roomNames.TryGetValue(name, out RoomNameTurn[]? turns))
             {
-                roomNames[name] = turns = RoomNameAnalysis.Analyse(room.Definition.Name, roomEntities, sourceOptions[sourceOf.GetValueOrDefault(name)].NameKeySet);
+                roomNames[name] = turns = RoomNameAnalysis.Analyse(room.Definition.Name, roomEntities, sourceOptions[sourceOf.GetValueOrDefault(name)].NameKeySet, room.Definition);
             }
 
             RoomNameTurn named = turns[instance.Placement.NormalizedRotation];
@@ -378,6 +378,9 @@ public static class LevelFlattener
                 Names = named,
                 Entities = roomEntities,
                 Joined = LevelLinker.JoinedSides(room.Definition, instance),
+                JoinedSockets = LevelLinker.JoinedSockets(room.Definition, instance),
+                SpanX = instance.Placement.SpanCellsX,
+                SpanY = instance.Placement.SpanCellsY,
                 CellCentre = LevelLinker.CellCentre(transform, room.Definition),
             });
         }

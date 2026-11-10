@@ -408,6 +408,9 @@ public static partial class LevelLinker
                 Names = NamesFor(plan, index),
                 Entities = entities,
                 Joined = JoinedSides(placement.Room.Definition, placement.Instance),
+                JoinedSockets = JoinedSockets(placement.Room.Definition, placement.Instance),
+                SpanX = where.SpanCellsX,
+                SpanY = where.SpanCellsY,
                 CellCentre = CellCentre(plan.Transform, placement.Room.Definition),
             };
         }
@@ -429,13 +432,38 @@ public static partial class LevelLinker
     /// <c>origin</c> value: the centre of the room's box,
     /// <c>(c/2, c/2, h/2)</c> turned and moved, which is the cube's
     /// <c>(c/2, c/2, c/2)</c> for a room with no height of its own (the rooms
-    /// design, 17.6). One spelling for the link and the flatten, so the two
+    /// design, 17.6), and the middle of its footprint for a room larger than
+    /// one cell (17.8). One spelling for the link and the flatten, so the two
     /// maps carry the same text.
     /// </summary>
     internal static string CellCentre(RoomTransform transform, RoomDefinition definition)
     {
         float half = definition.CellSize / 2;
-        return FormatVec(transform.Apply(new Vec3(half, half, definition.Height / 2)));
+        Vec3 centre = definition.IsLarge
+            ? new Vec3(definition.SpanX / 2, definition.SpanY / 2, definition.Height / 2)
+            : new Vec3(half, half, definition.Height / 2);
+        return FormatVec(transform.Apply(centre));
+    }
+
+    /// <summary>
+    /// A placement's joined sockets, a bit per socket index: what a larger
+    /// room's <c>joined_&lt;socket&gt;</c> conditions read (17.8).
+    /// </summary>
+    internal static ulong JoinedSockets(RoomDefinition definition, RoomInstance instance)
+    {
+        ulong joined = 0;
+        foreach ((string socket, _) in instance.Joints)
+        {
+            for (int s = 0; s < definition.Sockets.Count && s < 64; s++)
+            {
+                if (definition.Sockets[s].Name == socket)
+                {
+                    joined |= 1UL << s;
+                }
+            }
+        }
+
+        return joined;
     }
 
     /// <summary>A placement's joined sockets by the side of the room they are on, in its authored frame.</summary>

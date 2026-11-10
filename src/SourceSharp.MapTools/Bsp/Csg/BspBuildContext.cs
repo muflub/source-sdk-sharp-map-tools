@@ -452,7 +452,7 @@ public sealed class BspBuildContext
     /// </summary>
     /// <returns>The fork.</returns>
     /// <remarks>
-    /// The parallel world pass (<see cref="Tree.BlockGrid.BuildWorldPass"/>)
+    /// The parallel world pass (<c>Tree.BlockGrid.BuildWorldPass</c>)
     /// makes every block's fork up front, on the calling thread, so that none
     /// of them reads this context while another thread is joining into it.
     /// Renting their arenas then too would hold one arena per block for the

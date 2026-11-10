@@ -467,7 +467,12 @@ internal sealed class RoomStaticProps
             foreach (RoomNeed need in prop.Needs)
             {
                 w.Byte((byte)need.Direction);
-                w.Byte((byte)((need.Joined ? 1 : 0) | (need.Negated ? 2 : 0)));
+                w.Byte((byte)((need.Joined ? 1 : 0) | (need.Negated ? 2 : 0) | (need.Socket >= 0 ? 4 : 0)));
+                if (need.Socket >= 0)
+                {
+                    // A larger room's joined_<socket> (17.8): its socket's index.
+                    w.Byte((byte)need.Socket);
+                }
             }
         }
 
@@ -557,14 +562,15 @@ internal sealed class RoomStaticProps
             for (int n = needs.Capacity; n > 0; n--)
             {
                 RoomDirection direction = (RoomDirection)r.Small(7, "a direction");
-                int flags = r.Small(3, "condition flags");
+                int flags = r.Small(7, "condition flags");
                 bool joined = (flags & 1) != 0;
-                if (joined && !RoomDirections.IsSide(direction))
+                int bySocket = (flags & 4) != 0 ? r.Small(RoomDefinition.MaxFootprint * 4, "a socket") : -1;
+                if (joined && bySocket < 0 && !RoomDirections.IsSide(direction))
                 {
                     throw r.Mismatch($"a joined condition on the diagonal {RoomDirections.Name(direction)}");
                 }
 
-                needs.Add(new RoomNeed(direction, joined, (flags & 2) != 0));
+                needs.Add(new RoomNeed(direction, joined, (flags & 2) != 0) { Socket = bySocket });
             }
 
             props.Add(new RoomProp(id, needs.MoveToImmutable(), socket, priority));
@@ -624,7 +630,7 @@ internal sealed class RoomStaticProps
         {
             // The naming rule checked the key on the VMF before the compile
             // (RoomNameAnalysis.CheckVmf), with its own message.
-            if (!RoomNeeds.TryParse(value, out List<RoomNeed> parsed, out string? unknown))
+            if (!RoomNeeds.TryParse(value, definition.IsLarge || definition.Kit.Slots > 1 ? definition.Sockets : null, out List<RoomNeed> parsed, out string? unknown))
             {
                 throw new RoomLintException(
                     $"room {room}: entity {source.Id} (prop_static) room_needs \"{value}\": unknown direction \"{unknown}\";"
@@ -664,12 +670,13 @@ internal sealed class RoomStaticProps
     private static async Task<Box> CheckCellAsync(
         RoomDefinition definition, RoomProp prop, string model, IStaticPropHull hull, StaticProp record, CancellationToken cancellationToken)
     {
-        // The room's box (17.6): the cell in x and y, the room's height in z.
-        float cell = definition.CellSize;
+        // The room's box (17.6, 17.8): its footprint in x and y, the room's
+        // height in z.
+        float spanX = definition.SpanX, spanY = definition.SpanY;
         float top = definition.Height;
         (Vec3 mins, Vec3 maxs) = await hull.GetAabbAsync(record.Origin, record.Angles, cancellationToken).ConfigureAwait(false);
         float reach = Math.Max(
-            Math.Max(Math.Max(-mins.X, maxs.X - cell), Math.Max(-mins.Y, maxs.Y - cell)),
+            Math.Max(Math.Max(-mins.X, maxs.X - spanX), Math.Max(-mins.Y, maxs.Y - spanY)),
             Math.Max(-mins.Z, maxs.Z - top));
         Box bounds = new(mins, maxs);
         if (reach <= RoomLinter.CellEpsilon)
@@ -737,14 +744,15 @@ internal sealed class RoomStaticProps
                     continue;
                 }
 
-                regions.Add([Beyond(a, s, s > 0 ? (a == 2 ? definition.Height : cell) + e : -e)]);
+                regions.Add([Beyond(a, s, s > 0 ? (a == 2 ? definition.Height : a == 0 ? definition.SpanX : definition.SpanY) + e : -e)]);
             }
         }
 
         // Beyond the socket's face: past the doorway's depth, and beside the
         // opening in the two axes of the face.
-        (Vec3 Normal, float Dist) past = Beyond(axis, sign, sign > 0 ? cell + e : -e);
-        regions.Add([Beyond(axis, sign, sign > 0 ? cell + depth + e : -depth - e)]);
+        float face = axis == 0 ? definition.SpanX : definition.SpanY;
+        (Vec3 Normal, float Dist) past = Beyond(axis, sign, sign > 0 ? face + e : -e);
+        regions.Add([Beyond(axis, sign, sign > 0 ? face + depth + e : -depth - e)]);
         for (int a = 0; a < 3; a++)
         {
             if (a == axis)

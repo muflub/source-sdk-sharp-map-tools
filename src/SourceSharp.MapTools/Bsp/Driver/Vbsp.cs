@@ -196,6 +196,29 @@ public static class Vbsp
         return new VbspCompilation(map, context, DefaultExtensions(context, document, propCooker)).RunAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// The compile of a room larger than one cell (the rooms design, 17.8):
+    /// <see cref="CompileAsync(MapFile, VbspContext, CancellationToken)"/>
+    /// with the world compiled on blocks of <paramref name="blockSize"/>
+    /// units, the room's cell size, so its tree splits at every cell face
+    /// first and holds one self-contained subtree per cell.
+    /// </summary>
+    /// <remarks>
+    /// A room-compile setting, not an option: <c>ssmap vbsp</c> cannot reach
+    /// it, so stock output never moves and there is no compliance entry.
+    /// </remarks>
+    internal static Task<VbspResult> CompileRoomAsync(
+        MapFile map,
+        VbspContext context,
+        int blockSize,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(context);
+        cancellationToken.ThrowIfCancellationRequested();
+        return HostHandoff.ReturnAsync(new VbspCompilation(map, context, DefaultExtensions(context)) { BlockSize = blockSize }.RunAsync(cancellationToken));
+    }
+
     /// <summary>The compile with other lanes' extensions attached, for the integrator.</summary>
     internal static Task<VbspResult> CompileAsync(
         MapFile map,

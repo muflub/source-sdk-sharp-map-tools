@@ -63,6 +63,14 @@ internal sealed class VbspCompilation
 
     private VbspOptions Options => _compile.Options;
 
+    /// <summary>
+    /// The edge of the blocks the world is compiled on: stock's
+    /// <see cref="BlockGrid.BlockSize"/>, or the cell size for a room larger
+    /// than one cell (<see cref="Vbsp.CompileRoomAsync"/>), never an option
+    /// of <c>ssmap vbsp</c>.
+    /// </summary>
+    internal int BlockSize { get; init; } = BlockGrid.BlockSize;
+
     private ComplianceOptions Compliance => _compile.Options.Compliance;
 
     /// <summary>The compile's CSG and tree state, once the load phase has made it.</summary>
@@ -364,7 +372,9 @@ internal sealed class VbspCompilation
         _build.BrushStart = brushStart;
         _build.BrushEnd = brushEnd;
 
-        BspBlockGrid grid = BlockGrid.Clamp(Options.Blocks, _map.Mins, _map.Maxs);
+        BspBlockGrid grid = BlockSize == BlockGrid.BlockSize
+            ? BlockGrid.Clamp(Options.Blocks, _map.Mins, _map.Maxs)
+            : BlockGrid.ClampSized(_map.Mins, _map.Maxs, BlockSize);
 
         TreeTree tree = null!;
         TreePortals portals = null!;
@@ -372,7 +382,7 @@ internal sealed class VbspCompilation
 
         for (int optimize = 0; optimize <= 1; optimize++)
         {
-            tree = BlockGrid.BuildWorldPass(_build, grid, _map.Mins, _map.Maxs, out _);
+            tree = BlockGrid.BuildWorldPass(_build, grid, _map.Mins, _map.Maxs, BlockSize, out _);
 
             // make the portals/faces by traversing down to each empty leaf
             Stage("vbsp.world.portals");

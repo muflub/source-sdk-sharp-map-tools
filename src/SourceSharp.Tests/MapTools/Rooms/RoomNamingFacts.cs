@@ -17,7 +17,7 @@ namespace SourceSharp.Tests.MapTools.Rooms;
 internal static class RoomNamingFacts
 {
     /// <summary>A placement for <see cref="Resolve"/>: a room, its cell and turn, its entities made fresh, its joined sides.</summary>
-    public sealed record Placed(string Room, int X, int Y, int Turns, Func<int, List<LevelEntity>> Entities, JoinedMask Joined = JoinedMask.None);
+    public sealed record Placed(string Room, int X, int Y, int Turns, Func<int, List<LevelEntity>> Entities, JoinedMask Joined = JoinedMask.None, int SpanX = 1, int SpanY = 1);
 
     /// <summary>An output value, ESC-separated as Hammer writes it.</summary>
     public static string Out(string target, string input, string parameter = "", string delay = "0", string times = "-1") =>
@@ -56,6 +56,8 @@ internal static class RoomNamingFacts
                 Names = RoomNameAnalysis.Analyse(placed.Room, entities, null)[placed.Turns],
                 Entities = entities,
                 Joined = placed.Joined,
+                SpanX = placed.SpanX,
+                SpanY = placed.SpanY,
                 CellCentre = $"{placed.X} {placed.Y} 0",
             });
         }

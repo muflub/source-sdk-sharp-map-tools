@@ -334,7 +334,10 @@ internal sealed class LevelTransitionPlan
         Dictionary<(int, int), int> byCell = [];
         for (int i = 0; i < rooms.Count; i++)
         {
-            byCell[(rooms[i].Placement.CellX, rooms[i].Placement.CellY)] = i;
+            foreach ((int x, int y, _, _) in rooms[i].Placement.Covered())
+            {
+                byCell[(x, y)] = i;
+            }
         }
 
         List<int>[] next = [.. rooms.Select(_ => new List<int>())];
@@ -350,8 +353,8 @@ internal sealed class LevelTransitionPlan
                     continue;
                 }
 
-                (int axis, int sign) = transform.WorldNormal(found.Facing);
-                if (byCell.TryGetValue((placement.CellX + (axis == 0 ? sign : 0), placement.CellY + (axis == 1 ? sign : 0)), out int j))
+                (_, (int X, int Y) there) = placement.SocketCells(definitions(placement.Room), found, layout.CellSize);
+                if (byCell.TryGetValue(there, out int j))
                 {
                     next[i].Add(j);
                 }

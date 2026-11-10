@@ -495,14 +495,16 @@ internal sealed class RoomDisplacements
                 continue;
             }
 
-            // The room's box (17.6): the cell in x and y, the room's height in z.
-            float cell = definition.CellSize;
+            // The room's box (17.6, 17.8): its footprint in x and y, the
+            // room's height in z. A displacement may cross the footprint's
+            // internal cell faces freely; only the perimeter holds it.
+            float spanX = definition.SpanX, spanY = definition.SpanY;
             float top = definition.Height;
             float reach = 0;
             foreach (Vec3 v in core.Verts)
             {
                 reach = Math.Max(reach, Math.Max(
-                    Math.Max(Math.Max(-v.X, v.X - cell), Math.Max(-v.Y, v.Y - cell)),
+                    Math.Max(Math.Max(-v.X, v.X - spanX), Math.Max(-v.Y, v.Y - spanY)),
                     Math.Max(-v.Z, v.Z - top)));
             }
 

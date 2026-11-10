@@ -75,6 +75,18 @@ public static class Map2dFormat
     /// <summary>The markers (<see cref="MarkerBytes"/> each).</summary>
     public const string MarkersTag = "MARK";
 
+    /// <summary>
+    /// The placements' footprints, written only when a placement covers more
+    /// than one cell (<see cref="FootprintBytes"/> each, one per <c>ROOM</c>
+    /// record): an optional section, so a level of rooms of one cell is the
+    /// file it was, and a reader that does not know the tag reads every
+    /// placement as one cell, its floors still named by their placement.
+    /// </summary>
+    public const string FootprintsTag = "CELL";
+
+    /// <summary>A <c>CELL</c> record: the cells along x and along y the placement covers, as placed.</summary>
+    public const int FootprintBytes = 8;
+
     /// <summary>A <c>ROOM</c> record: cell x, cell y, rotation, height, name, label.</summary>
     public const int RoomBytes = 24;
 

@@ -136,6 +136,7 @@ Version 1 writes six, in this order: `STRS`, `ROOM`, `POLY`, `PNTS`,
 | `PNTS` | 4 or 8 bytes | `pointCount` |
 | `DOOR` | 40 bytes | `doorCount` |
 | `MARK` | 28 bytes | `markerCount` |
+| `CELL` | 8 bytes | `roomCount`; optional, only when a placement covers more than one cell |
 
 ### 4.1 `STRS`
 
@@ -157,8 +158,26 @@ and labels, then doors' sockets, then markers' kinds and labels).
 
 Placements are in link order: the level file's rows from the south, each
 west to east. A placement's cell spans `(column × cellSize, row × cellSize)`
-to that plus `cellSize` on the plane, and 0 to its height in z. Its name in
+to that plus `cellSize` on the plane, and 0 to its height in z, unless the
+`CELL` section says it covers more cells. Its name in
 the naming grammar (the rooms design, section 5) is `c<column>r<row>`.
+
+### 4.2a `CELL`: a placement's footprint
+
+Written only when some placement is a room larger than one cell (the rooms
+design, 17.8), one record per `ROOM` record, in the same order:
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| 0 | `int32` | the cells it covers along x from its column, as placed |
+| 4 | `int32` | the cells it covers along y from its row, as placed |
+
+A placement then spans that many cells from its own (its south-west cell,
+where the level file writes it); every ring drawn in them names it, so a
+game draws and reveals the whole room as one. A level of rooms of one cell
+has no `CELL` section, so its file is what it always was; a reader that does
+not know the tag skips it (section 9) and reads every placement as one
+cell, its rings still named by their placement.
 
 ### 4.3 `POLY`: a ring
 

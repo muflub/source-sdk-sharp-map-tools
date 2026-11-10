@@ -202,12 +202,43 @@ public static class RoomCacheKey
             fold.Text(room.MapLabel);
         }
 
+        // A kit that stands its doors on the floor, folded only for such a
+        // kit, so every centred kit's room keeps its key and its row.
+        if (definition.Kit.Sill == DoorSill.Floor)
+        {
+            fold.Text("door_sill/floor");
+        }
+
+        // A kit of several door slots, and where each socket stands, folded
+        // only for such a kit, so every one-slot room keeps its key.
+        if (definition.Kit.Slots != 1)
+        {
+            fold.Text("door_slots/" + definition.Kit.Slots.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            foreach (RoomSocket socket in definition.Sockets)
+            {
+                fold.Text(socket.Name + "/" + socket.Slot.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+        }
+
         // A room's own height (17.6), folded only for a shaped room, so a
         // cube room keeps the key, and the cache row, it always had.
-        if (definition.IsShaped)
+        if (definition.HasOwnHeight)
         {
             fold.Text("height");
             fold.Float(definition.Height);
+        }
+
+        // A larger room's footprint and its sockets' cell offsets (17.8),
+        // folded only for such a room, so every room of one cell keeps its key.
+        if (definition.IsLarge)
+        {
+            fold.Text("footprint");
+            fold.Int(definition.CellsX);
+            fold.Int(definition.CellsY);
+            foreach (RoomSocket socket in definition.Sockets)
+            {
+                fold.Int(socket.Offset);
+            }
         }
 
         return fold.Finish();

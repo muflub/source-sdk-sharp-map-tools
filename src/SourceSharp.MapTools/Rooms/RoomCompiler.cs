@@ -164,7 +164,7 @@ public static class RoomCompiler
         RoomNameAnalysis.CheckVmf(
             definition.Name,
             [.. document.GetChunks(MapFileLoader.EntityChunk).Select((e, i) => LevelEntity.FromVmf(e, -1, i))],
-            nameKeys);
+            nameKeys, definition);
 
         // A brush entity whose angles a turned placement could not treat
         // right (open point O15), refused before the compile as the split
@@ -235,8 +235,13 @@ public static class RoomCompiler
         IReadOnlyList<RoomPropSource> props = RoomStaticProps.Sources(map.Entities);
         RoomStaticProps.RefuseTexelLighting(definition.Name, props);
 
-        // The compile. A room that leaks is not a room.
-        VbspResult vbsp = await Vbsp.CompileAsync(map, context, cancellationToken).ConfigureAwait(false);
+        // The compile. A room that leaks is not a room. A room larger than
+        // one cell compiles on cell-sized blocks (RoomCellTree), so its tree
+        // splits at every cell face first; a room of one cell compiles as
+        // any map does.
+        VbspResult vbsp = definition.IsLarge
+            ? await Vbsp.CompileRoomAsync(map, context, LargeBlockSize(definition), cancellationToken).ConfigureAwait(false)
+            : await Vbsp.CompileAsync(map, context, cancellationToken).ConfigureAwait(false);
         if (vbsp.Bsp is null || vbsp.Portals is null)
         {
             throw new RoomLintException(
@@ -249,6 +254,11 @@ public static class RoomCompiler
         // interior never escapes the cell.
         IReadOnlyList<Box> seals = SealBoxes(definition);
         RoomLintReport lint = RoomLinter.CheckCompiled(definition, vbsp.Bsp, seals, leaked: false);
+        RoomCellTree? cellTree = RoomCellTree.Derive(definition, vbsp.Bsp);
+        if (BlindPlug(definition, vbsp.Bsp, seals) is { } blind)
+        {
+            throw new RoomLintException(blind);
+        }
 
         // The vvis half: the room's PVS with its doors shut.
         //
@@ -273,7 +283,7 @@ public static class RoomCompiler
         // The names per turn, from the compile's own entity list (the one the
         // link indexes), so every link of the room fills in cells and
         // nothing more.
-        RoomNameTurn[] names = RoomNameAnalysis.Analyse(definition.Name, vbsp.Bsp, nameKeys);
+        RoomNameTurn[] names = RoomNameAnalysis.Analyse(definition.Name, vbsp.Bsp, nameKeys, definition);
 
         // The static props the link carries: each record matched to its
         // entity, its model's hull read from the content (the link has no
@@ -340,7 +350,55 @@ public static class RoomCompiler
             Displacements = displacements,
             DetailProps = detailProps,
             MapView = mapView,
+            CellTree = cellTree,
         };
+    }
+
+    /// <summary>
+    /// The block size a larger room compiles on: its cell size, which must be
+    /// a whole number of units (vbsp's blocks are), refused otherwise.
+    /// </summary>
+    private static int LargeBlockSize(RoomDefinition definition)
+    {
+        int size = (int)definition.CellSize;
+        return size == definition.CellSize && size >= 1
+            ? size
+            : throw new RoomLintException(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"room {definition.Name}: a room of {definition.CellsX} x {definition.CellsY} cells compiles on blocks of its cell size, so the cell size {definition.CellSize:0.###} must be a whole number of units."));
+    }
+
+    /// <summary>
+    /// The refusal for a door plug no open leaf of the room faces, or null
+    /// when every plug faces the room's open space.
+    /// </summary>
+    /// <remarks>
+    /// A plug with solid behind it (a cell the author filled solid, a fill
+    /// pushed up against the wall) is a door into a wall: any level that set
+    /// a room beside it would join that socket, and the link refuses a joint
+    /// that joins nothing. The room is where it can be put right, so the
+    /// compile refuses it, naming the socket and its plug: remove the plug
+    /// (a wall needs none) or open the space behind it.
+    /// </remarks>
+    /// <param name="definition">The room.</param>
+    /// <param name="bsp">Its compile.</param>
+    /// <param name="seals">Its plug boxes, in socket order.</param>
+    internal static string? BlindPlug(RoomDefinition definition, BspData bsp, IReadOnlyList<Box> seals)
+    {
+        ReadOnlySpan<DLeaf> leafs = BspStructView.As<DLeaf>(bsp[BspLump.Leafs]);
+        for (int s = 0; s < seals.Count; s++)
+        {
+            if (LevelLinker.Facing(leafs, seals[s]).Length == 0)
+            {
+                Box plug = seals[s];
+                return string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"room {definition.Name}: its {definition.Sockets[s].Name} door plug ({plug.Mins.X:0.###} {plug.Mins.Y:0.###} {plug.Mins.Z:0.###})-({plug.Maxs.X:0.###} {plug.Maxs.Y:0.###} {plug.Maxs.Z:0.###})")
+                    + " faces no open space of the room: the space behind it is solid, so a door there would open into a wall and any level that joined it would be refused."
+                    + " Remove the plug (a wall needs none) or open the space behind it.";
+            }
+        }
+
+        return null;
     }
 
     /// <summary>The kit's plug boxes for every socket, room-local, in socket order.</summary>
@@ -372,6 +430,20 @@ public static class RoomCompiler
     /// the key even when the geometry is identical — over-missing, which the
     /// plan's §10a accepts in exchange for never serving a stale room.
     /// </remarks>
+    /// <summary>
+    /// A larger room's footprint and socket offsets in the compile's claimed
+    /// key, or nothing for a room of one cell, whose key is what it was.
+    /// </summary>
+    internal static string FootprintText(RoomDefinition definition) =>
+        definition.IsLarge
+            ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"|f{definition.CellsX}x{definition.CellsY}:")
+                + string.Join(",", definition.Sockets.Select(s => s.Offset.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+            : string.Empty;
+
+    internal static string SillText(SocketKit kit) =>
+        (kit.Sill == DoorSill.Floor ? ",floor" : string.Empty)
+        + (kit.Slots != 1 ? ",slots" + kit.Slots.ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty);
+
     private static IReadOnlyList<string> InputKeysOf(VmfDocument document, RoomDefinition definition, VbspContext context)
     {
         byte[] vmf = document.ToBytes();
@@ -380,7 +452,9 @@ public static class RoomCompiler
             + "|" + definition.Kit.Width.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ","
             + definition.Kit.Height.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ","
             + definition.Kit.Depth.ToString("R", System.Globalization.CultureInfo.InvariantCulture)
-            + (definition.IsShaped ? "|h" + definition.Height.ToString("R", System.Globalization.CultureInfo.InvariantCulture) : string.Empty);
+            + SillText(definition.Kit)
+            + (definition.HasOwnHeight ? "|h" + definition.Height.ToString("R", System.Globalization.CultureInfo.InvariantCulture) : string.Empty)
+            + FootprintText(definition);
         _ = context; // context-dependent keys (options, content revisions) join at the cache layer, §10a.
         return [model, claimed];
     }

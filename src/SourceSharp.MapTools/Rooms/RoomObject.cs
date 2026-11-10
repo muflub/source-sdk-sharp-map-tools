@@ -109,7 +109,7 @@ public sealed record RoomObject(
     internal RoomNameTurn NamesFor(int turn, IReadOnlySet<string>? nameKeys) =>
         Names is { } stored && stored.IsFor(this) && stored.Turn(turn) is { } names
             ? names
-            : RoomNameAnalysis.Analyse(Definition.Name, Bsp, nameKeys)[turn];
+            : RoomNameAnalysis.Analyse(Definition.Name, Bsp, nameKeys, Definition)[turn];
 
     /// <summary>
     /// The room's static props as the link carries them
@@ -316,6 +316,19 @@ public sealed record RoomObject(
 
     /// <summary>The room's map while it describes this compile, else null.</summary>
     internal RoomMapView? MapViewOfCompile => MapView is { } view && view.IsFor(this) ? view : null;
+
+    /// <summary>
+    /// For a room larger than one cell, each cell's subtree root and the
+    /// block nodes the link leaves out (<see cref="RoomCellTree"/>): found
+    /// when the room is compiled or loaded, or null for a room of one cell.
+    /// </summary>
+    internal RoomCellTree? CellTree { get; init; }
+
+    /// <summary>
+    /// <see cref="CellTree"/>, or for a larger room built without one (in
+    /// code, by a host) the tree walked from its compile now.
+    /// </summary>
+    internal RoomCellTree? CellTreeOfCompile => CellTree ?? RoomCellTree.Derive(Definition, Bsp);
 
     /// <summary>
     /// The room's navigation, or null: built beside the link work by a

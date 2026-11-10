@@ -135,6 +135,27 @@ public static class Map2dWriter
             BinaryPrimitives.WriteSingleLittleEndian(r[24..], marker.Yaw);
         }
 
+        // The footprints only when a placement covers more than one cell, so
+        // a level of rooms of one cell keeps its bytes.
+        // (A loop, not a lambda: a cached delegate is a static field, which
+        // the library's rule against mutable statics counts.)
+        bool larger = false;
+        foreach (Map2dRoom room in level.Rooms)
+        {
+            larger |= room.CellsX != 1 || room.CellsY != 1;
+        }
+
+        byte[]? footprints = null;
+        if (larger)
+        {
+            footprints = new byte[level.Rooms.Length * Map2dFormat.FootprintBytes];
+            for (int i = 0; i < level.Rooms.Length; i++)
+            {
+                BinaryPrimitives.WriteInt32LittleEndian(footprints.AsSpan(i * Map2dFormat.FootprintBytes), level.Rooms[i].CellsX);
+                BinaryPrimitives.WriteInt32LittleEndian(footprints.AsSpan((i * Map2dFormat.FootprintBytes) + 4), level.Rooms[i].CellsY);
+            }
+        }
+
         (string Tag, byte[] Bytes)[] sections =
         [
             (Map2dFormat.StringsTag, strings.ToArray()),
@@ -143,6 +164,7 @@ public static class Map2dWriter
             (Map2dFormat.PointsTag, pointBytes),
             (Map2dFormat.DoorsTag, doors),
             (Map2dFormat.MarkersTag, markers),
+            .. footprints is null ? [] : new[] { (Map2dFormat.FootprintsTag, footprints) },
         ];
 
         int at = Map2dFormat.HeaderBytes + (sections.Length * Map2dFormat.DirectoryEntryBytes);

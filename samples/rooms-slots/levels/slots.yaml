@@ -1,0 +1,10 @@
+# the rooms door slots sample level
+# the grid's first line is the north row; each line runs west to east; + is a cell the room to its south-west covers
+library: ../rooms.vmf
+rows: 4
+columns: 3
+grid:
+  - [+,      +,        ~]
+  - [ring,   +,        corner@180]
+  - [three,  twin@180, ~]
+  - [corner, corridor, corner]

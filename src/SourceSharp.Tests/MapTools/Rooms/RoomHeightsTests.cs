@@ -455,7 +455,8 @@ public sealed class RoomHeightsTests
     /// <summary>
     /// A build that reads only version 4 refuses a version 5 pack by its
     /// version check, with the text every build's check gives, so it never
-    /// links a tall room as a cube; this build refuses version 6 the same way.
+    /// links a tall room as a cube; this build, which reads up to version 6
+    /// (rooms larger than one cell), refuses version 7 the same way.
     /// </summary>
     [Fact]
     public async Task AVersionFourReaderRefusesAVersionFivePack()
@@ -467,10 +468,10 @@ public sealed class RoomHeightsTests
 
         RoomLibrary rooms = await RoomPropHarness.CompileAsync(RoomHarness.LibraryVmf(Shaped("tall", Tall)));
         byte[] pack = await PackAsync(rooms.Get("tall"));
-        BinaryPrimitives.WriteInt32BigEndian(pack.AsSpan(8), 6);
+        BinaryPrimitives.WriteInt32BigEndian(pack.AsSpan(8), 7);
         using MemoryStream stream = new(pack);
         LinkException refused = await Assert.ThrowsAsync<LinkException>(() => RoomPack.ReadIndexAsync(stream));
-        Assert.Equal("room pack version 6; this build reads version 5.", refused.Message);
+        Assert.Equal("room pack version 7; this build reads version 6.", refused.Message);
     }
 
     /// <summary>
@@ -491,7 +492,7 @@ public sealed class RoomHeightsTests
         // payload: revision @9, rotations @13, length @17, height @21, width @25, depth @29, sockets @33, offsets @37
         Assert.Equal(
             "room pack entry \"tall\": its \"SHAP\" section is of a revision this build does not read; its shape would be lost, so recompile the library with ssmap room.",
-            Refused(section, 9, 2));
+            Refused(section, 9, 3));
         Assert.Equal("room pack entry \"tall\": its \"SHAP\" section holds 4 rotations; a room's shape is stored once.", Refused(section, 13, 4));
         Assert.Equal("room pack entry \"tall\": its \"SHAP\" section holds a footprint of 2 x 1 cells; this build links rooms of one cell.", Refused(section, 25, 2));
         Assert.Equal("room pack entry \"tall\": its \"SHAP\" section holds socket 1 at cell (1, 0) of a one-cell footprint.", Refused(section, 45, 1));

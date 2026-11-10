@@ -120,7 +120,7 @@ public static class LevelNavLinker
         for (int i = 0; i < placed.Length; i++)
         {
             RoomPlacement p = layout.Rooms[i].Placement;
-            if (p.CellX < 0 || p.CellY < 0 || p.CellX >= columns || p.CellY >= rows)
+            if (p.CellX < 0 || p.CellY < 0 || p.CellX + p.SpanCellsX > columns || p.CellY + p.SpanCellsY > rows)
             {
                 throw new LinkException($"room \"{p.Room}\" is placed at cell ({p.CellX}, {p.CellY}), outside the {columns} x {rows} grid.");
             }
@@ -131,7 +131,7 @@ public static class LevelNavLinker
                 throw new LinkException($"room \"{p.Room}\"'s navigation is at turn {nav.Turn}, not the placement's {p.NormalizedRotation}.");
             }
 
-            placed[i] = new Placed(layout.Rooms[i], nav, (p.CellY * columns) + p.CellX, new RoomTransform(p, nav.CellSize));
+            placed[i] = new Placed(layout.Rooms[i], nav, (p.CellY * columns) + p.CellX, new RoomTransform(p, nav.CellSize)) { Columns = columns };
         }
 
         // The header's settings: the first placed room's of the earliest
@@ -169,10 +169,13 @@ public static class LevelNavLinker
             Placed p = placed[i];
             RoomPlacement placement = p.Instance.Placement;
             int nz = p.Nav.ColumnVoxels;
-            NavRegion cellRegion = new(0, 0, 0, n, n, nz, first.VoxelSize);
+            NavRegion cellRegion = new(0, 0, 0, p.Nav.SizeX, p.Nav.SizeY, nz, first.VoxelSize);
             if (heights is not null)
             {
-                heights[p.Cell] = nz;
+                foreach (int cell in CoveredCells(p, columns))
+                {
+                    heights[cell] = nz;
+                }
             }
 
             NavRecordTable local = new();
@@ -225,15 +228,22 @@ public static class LevelNavLinker
                 return map[record];
             }
 
-            roots[p.Cell] = columnStarts.Count;
-            for (int y = 0; y < n; y++)
+            // Each cell the room covers (its own alone for a room of one
+            // cell) takes its n x n block of the room's grid, so the reader's
+            // point lookup is a cell's as it always was (17.8, 17.11).
+            foreach ((int wx, int wy, _, _) in placement.Covered().OrderBy(c => c.Y).ThenBy(c => c.X))
             {
-                for (int x = 0; x < n; x++)
+                int ox = (wx - placement.CellX) * n, oy = (wy - placement.CellY) * n;
+                roots[(wy * columns) + wx] = columnStarts.Count;
+                for (int y = 0; y < n; y++)
                 {
-                    columnStarts.Add((uint)runs.Count);
-                    foreach (NavRun run in roomColumns.Column(x, y))
+                    for (int x = 0; x < n; x++)
                     {
-                        runs.Add(run with { Key = run.Key with { PlayerRecord = Level(run.Key.PlayerRecord), NpcRecord = Level(run.Key.NpcRecord) } });
+                        columnStarts.Add((uint)runs.Count);
+                        foreach (NavRun run in roomColumns.Column(ox + x, oy + y))
+                        {
+                            runs.Add(run with { Key = run.Key with { PlayerRecord = Level(run.Key.PlayerRecord), NpcRecord = Level(run.Key.NpcRecord) } });
+                        }
                     }
                 }
             }
@@ -243,7 +253,7 @@ public static class LevelNavLinker
             {
                 obstacles.Add(new Nav3dObstacle(
                     o.TargetName is null ? null : ResolveName(o.TargetName, placement),
-                    o.ClassName, (uint)p.Cell, o.HammerId, o.Kind, o.Bounds.Mins + offset, o.Bounds.Maxs + offset));
+                    o.ClassName, (uint)CellAt(p, (o.Bounds.Mins + o.Bounds.Maxs) * 0.5f, columns), o.HammerId, o.Kind, o.Bounds.Mins + offset, o.Bounds.Maxs + offset));
             }
 
             foreach (float[] planes in p.Nav.Brushes)
@@ -329,8 +339,8 @@ public static class LevelNavLinker
         {
             Placed p = placed[i];
             RoomPlacement placement = p.Instance.Placement;
-            RoomDefinition definition = new(placement.Room, p.Nav.CellSize, layout.Kit, p.Nav.Sockets);
-            RoomTransform turn = new(new RoomPlacement("turn", 0, 0, placement.NormalizedRotation), p.Nav.CellSize);
+            RoomDefinition definition = DefinitionOf(p, layout.Kit);
+            RoomTransform turn = new(new RoomPlacement("turn", 0, 0, placement.NormalizedRotation) { CellsX = definition.CellsX, CellsY = definition.CellsY }, p.Nav.CellSize);
             for (int s = 0; s < p.Nav.Sockets.Count; s++)
             {
                 if (doors.Records[doors.Index[i][s]].Joined)
@@ -466,19 +476,32 @@ public static class LevelNavLinker
         Dictionary<(int, int), int> byCell = [];
         for (int i = 0; i < placed.Length; i++)
         {
-            byCell[(placed[i].Instance.Placement.CellX, placed[i].Instance.Placement.CellY)] = i;
+            foreach ((int x, int y, _, _) in placed[i].Instance.Placement.Covered())
+            {
+                byCell[(x, y)] = i;
+            }
         }
 
+        // Each door stands in the cell whose edge it is on (a larger room's
+        // in one of its cells, 17.8): its cell index is the anchor's moved by
+        // the socket's world cell.
+        (int X, int Y)[][] doorCell = new (int, int)[placed.Length][];
         for (int i = 0; i < placed.Length; i++)
         {
             Placed p = placed[i];
+            RoomPlacement at = p.Instance.Placement;
+            RoomDefinition definition = DefinitionOf(p, null);
             index[i] = new int[p.Nav.Sockets.Count];
+            doorCell[i] = new (int, int)[p.Nav.Sockets.Count];
             for (int s = 0; s < p.Nav.Sockets.Count; s++)
             {
                 RoomSocket socket = p.Nav.Sockets[s];
                 bool joined = p.Instance.Joints.Any(j => j.Socket == socket.Name);
+                (int lx, int ly) = definition.CellOf(socket);
+                doorCell[i][s] = at.WorldCell(lx, ly);
+                int cell = p.Cell + ((doorCell[i][s].Y - at.CellY) * p.Columns) + (doorCell[i][s].X - at.CellX);
                 index[i][s] = records.Count;
-                records.Add(new Nav3dDoor((uint)p.Cell, Direction(p.Transform, socket.Facing), joined, socket.Name, -1));
+                records.Add(new Nav3dDoor((uint)cell, Direction(p.Transform, socket.Facing), joined, socket.Name, -1));
             }
         }
 
@@ -501,12 +524,19 @@ public static class LevelNavLinker
                     2 => (-1, 0),
                     _ => (0, -1),
                 };
+                // The door across is the socket the layout joins this one
+                // to: on the shared edge, facing back, and (under a kit of
+                // several door slots, with several doors on that edge) the
+                // one the joint names.
                 int other = -1;
-                if (byCell.TryGetValue((pi.CellX + dx, pi.CellY + dy), out int j))
+                string theirs = placed[i].Instance.Joints.First(j => j.Socket == door.Name).NeighborSocket;
+                (int X, int Y) across = (doorCell[i][s].X + dx, doorCell[i][s].Y + dy);
+                if (byCell.TryGetValue(across, out int j))
                 {
                     for (int t = 0; t < placed[j].Nav.Sockets.Count; t++)
                     {
-                        if (records[index[j][t]].Direction == (door.Direction + 2) % 4 && records[index[j][t]].Joined)
+                        if (records[index[j][t]].Direction == (door.Direction + 2) % 4 && records[index[j][t]].Joined && doorCell[j][t] == across
+                            && placed[j].Nav.Sockets[t].Name == theirs)
                         {
                             other = index[j][t];
                         }
@@ -538,7 +568,7 @@ public static class LevelNavLinker
                 pois.Add(new Nav3dPoi(
                     poi.Position + offset, poi.Yaw, poi.Radius, poi.Type, poi.Tags,
                     poi.Name is null ? null : RoomLocalNames.Resolve(poi.Name, placement.CellX, placement.CellY, placement.NormalizedRotation),
-                    (uint)p.Cell, poi.AgentMask, -1, flags, ToNav(p.Nav.Role)));
+                    (uint)CellAt(p, poi.Position, p.Columns), poi.AgentMask, -1, flags, ToNav(p.Nav.Role)));
             }
 
             for (int s = 0; s < p.Nav.Sockets.Count; s++)
@@ -547,7 +577,7 @@ public static class LevelNavLinker
                 Nav3dDoor record = doors.Records[door];
                 pois.Add(new Nav3dPoi(
                     p.Nav.SocketData[s].DoorPoint + offset, record.Direction * 90f, 0, RoomPois.DoorType, string.Empty, record.Name,
-                    (uint)p.Cell, all, door, Nav3dPoiFlags.Door | Nav3dPoiFlags.HasFacing | (record.Joined ? Nav3dPoiFlags.Joined : 0),
+                    record.Cell, all, door, Nav3dPoiFlags.Door | Nav3dPoiFlags.HasFacing | (record.Joined ? Nav3dPoiFlags.Joined : 0),
                     ToNav(p.Nav.Role)));
             }
         }
@@ -567,24 +597,34 @@ public static class LevelNavLinker
 
         for (int i = 0; i < placed.Length; i++)
         {
-            byte joined = 0;
-            byte capped = 0;
-            foreach (int door in doors.Index[i])
-            {
-                Nav3dDoor record = doors.Records[door];
-                if (record.Joined)
-                {
-                    joined |= (byte)(1 << record.Direction);
-                }
-                else
-                {
-                    capped |= (byte)(1 << record.Direction);
-                }
-            }
-
+            // Every cell a room covers names it; each cell's door bits are
+            // the doors on its own edges (all the room's for one cell).
             RoomPlacement placement = placed[i].Instance.Placement;
-            cells[placed[i].Cell] = new Nav3dCell(
-                placement.Room, (byte)placement.NormalizedRotation, ToNav(placed[i].Nav.Role), joined, capped);
+            foreach (int cell in CoveredCells(placed[i], columns))
+            {
+                byte joined = 0;
+                byte capped = 0;
+                foreach (int door in doors.Index[i])
+                {
+                    Nav3dDoor record = doors.Records[door];
+                    if (record.Cell != (uint)cell)
+                    {
+                        continue;
+                    }
+
+                    if (record.Joined)
+                    {
+                        joined |= (byte)(1 << record.Direction);
+                    }
+                    else
+                    {
+                        capped |= (byte)(1 << record.Direction);
+                    }
+                }
+
+                cells[cell] = new Nav3dCell(
+                    placement.Room, (byte)placement.NormalizedRotation, ToNav(placed[i].Nav.Role), joined, capped);
+            }
         }
 
         return cells;
@@ -781,7 +821,40 @@ public static class LevelNavLinker
         }
     }
 
-    private sealed record Placed(RoomInstance Instance, RoomNav Nav, int Cell, RoomTransform Transform);
+    private sealed record Placed(RoomInstance Instance, RoomNav Nav, int Cell, RoomTransform Transform)
+    {
+        /// <summary>The level's columns, for the cell indices of a larger room's other cells; 0 when no index is asked for.</summary>
+        public int Columns { get; init; }
+    }
+
+    /// <summary>The level's index of every cell a placement covers, in row then column order.</summary>
+    private static IEnumerable<int> CoveredCells(Placed p, int columns) =>
+        p.Instance.Placement.Covered().Select(c => (c.Y * columns) + c.X).Order();
+
+    /// <summary>The level's index of the covered cell holding a point of the placement's turned frame (clamped into the footprint).</summary>
+    private static int CellAt(Placed p, Vec3 local, int columns)
+    {
+        RoomPlacement at = p.Instance.Placement;
+        int dx = Math.Clamp((int)MathF.Floor(local.X / p.Nav.CellSize), 0, at.SpanCellsX - 1);
+        int dy = Math.Clamp((int)MathF.Floor(local.Y / p.Nav.CellSize), 0, at.SpanCellsY - 1);
+        return p.Cell + (dy * columns) + dx;
+    }
+
+    /// <summary>
+    /// The room a placement's navigation describes, room-local: its sockets
+    /// at turn 0 and its footprint (the grid's at the navigation's turn,
+    /// swapped back for an odd turn), on the given kit or the walkable
+    /// default when only the footprint is wanted.
+    /// </summary>
+    private static RoomDefinition DefinitionOf(Placed p, SocketKit? kit)
+    {
+        bool odd = (p.Nav.Turn & 1) != 0;
+        return new RoomDefinition(p.Instance.Placement.Room, p.Nav.CellSize, kit ?? new SocketKit(1, 1, 1), p.Nav.Sockets)
+        {
+            CellsX = odd ? p.Nav.CellsY : p.Nav.CellsX,
+            CellsY = odd ? p.Nav.CellsX : p.Nav.CellsY,
+        };
+    }
 
     private sealed record Doors(List<Nav3dDoor> Records, int[][] Index);
 }

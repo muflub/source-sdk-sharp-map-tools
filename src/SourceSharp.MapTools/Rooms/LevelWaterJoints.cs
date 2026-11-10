@@ -50,7 +50,10 @@ internal static class LevelWaterJoints
         Dictionary<(int X, int Y), int> byCell = new(layout.Rooms.Count);
         for (int i = 0; i < layout.Rooms.Count; i++)
         {
-            byCell[(layout.Rooms[i].Placement.CellX, layout.Rooms[i].Placement.CellY)] = i;
+            foreach ((int x, int y, _, _) in layout.Rooms[i].Placement.Covered())
+            {
+                byCell[(x, y)] = i;
+            }
         }
 
         List<(int, string, float?, int, string, float?)> joints = [];
@@ -61,8 +64,7 @@ internal static class LevelWaterJoints
             foreach ((string socket, string neighbourSocket) in instance.Joints)
             {
                 RoomSocket mine = definition.Sockets.First(s => string.Equals(s.Name, socket, StringComparison.Ordinal));
-                (int axis, int sign) = new RoomTransform(instance.Placement, definition.CellSize).WorldNormal(mine.Facing);
-                (int X, int Y) there = (instance.Placement.CellX + (axis == 0 ? sign : 0), instance.Placement.CellY + (axis == 1 ? sign : 0));
+                (_, (int X, int Y) there) = instance.Placement.SocketCells(definition, mine, definition.CellSize);
                 if (!byCell.TryGetValue(there, out int q) || q < p)
                 {
                     continue;

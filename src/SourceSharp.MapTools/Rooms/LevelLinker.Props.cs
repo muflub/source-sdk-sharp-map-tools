@@ -86,7 +86,7 @@ public static partial class LevelLinker
             return null;
         }
 
-        HashSet<(int, int)> occupied = [.. layout.Rooms.Select(r => (r.Placement.CellX, r.Placement.CellY))];
+        HashSet<(int, int)> occupied = [.. layout.Rooms.SelectMany(r => r.Placement.Covered().Select(c => (c.X, c.Y)))];
         furniture ??= new LevelFurniture(resolved, layout);
 
         List<LinkedProp> kept = [];
@@ -104,6 +104,7 @@ public static partial class LevelLinker
             ResolvedPlacement placement = resolved[p];
             RoomDefinition definition = placement.Room.Definition;
             RoomPlacement where = placement.Instance.Placement;
+            ulong joinedSockets = JoinedSockets(definition, placement.Instance);
             JoinedMask joined = JoinedSides(definition, placement.Instance);
             if (!files.TryGetValue(placement.Instance.Placement.Room, out List<(int RoomProp, int Linked)>? roomFiles))
             {
@@ -113,7 +114,7 @@ public static partial class LevelLinker
             for (int i = 0; i < props.Props.Count; i++)
             {
                 RoomProp prop = props.Props[i];
-                bool keep = RoomNeeds.Hold(prop.Needs, where.NormalizedRotation, where.CellX, where.CellY, occupied.Contains, joined)
+                bool keep = RoomNeeds.Hold(prop.Needs, where.NormalizedRotation, where.CellX, where.CellY, occupied.Contains, joined, joinedSockets)
                     && (prop.Socket < 0 || furniture.Keeps(p, prop.Socket));
                 if (!keep)
                 {
@@ -296,12 +297,13 @@ public static partial class LevelLinker
             return false;
         }
 
-        // The room's box at its cell: the room's height in z (17.6).
+        // The room's box at its cell: the room's height in z (17.6), its
+        // footprint as placed in x and y (17.8).
         float cell = plan.Placement.Room.Definition.CellSize;
         RoomPlacement where = plan.Placement.Instance.Placement;
         Box cellBox = new(
             new Vec3(where.CellX * cell, where.CellY * cell, 0),
-            new Vec3((where.CellX + 1) * cell, (where.CellY + 1) * cell, plan.Placement.Room.Definition.Height));
+            new Vec3((where.CellX + where.SpanCellsX) * cell, (where.CellY + where.SpanCellsY) * cell, plan.Placement.Room.Definition.Height));
         if (!bounds.ContainsWithin(cellBox, 0))
         {
             return false;

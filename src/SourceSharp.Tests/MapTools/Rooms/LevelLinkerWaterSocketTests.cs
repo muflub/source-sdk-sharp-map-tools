@@ -613,7 +613,7 @@ public sealed class LevelLinkerWaterSocketTests
     /// room's fluid (the doorway's convexes joining one) where the flattened
     /// level's compile makes one of the body of water.
     /// </summary>
-    private static List<string> FluidSummary(BspData bsp)
+    internal static List<string> FluidSummary(BspData bsp)
     {
         PhysCollideModel world = PhysCollideLump.Read(bsp[BspLump.PhysCollide].Data.Span)[0];
         List<(int Index, RoomWaterFluid Fluid)> fluids = [];

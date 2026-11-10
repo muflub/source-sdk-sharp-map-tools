@@ -130,10 +130,10 @@ internal sealed class RoomSkybox
         && RoomLighting.HasSkyFace(room.Bsp);
 
     /// <summary>What <see cref="Move"/> adds to a skybox point before its turn, for a room lit at <paramref name="turn"/>.</summary>
-    internal Vec3 Offset(int turn, float cell) => new Vec3(0, 0, -cell) - PlacementOffset(turn, cell);
+    internal Vec3 Offset(int turn, float cell, int cellsX = 1, int cellsY = 1) => new Vec3(0, 0, -cell) - PlacementOffset(turn, cell, cellsX, cellsY);
 
     /// <summary>A skybox point in the frame of a room lit at <paramref name="turn"/>.</summary>
-    internal Vec3 Move(Vec3 point, int turn, float cell) => BakeFrame.ToRoom(point + Offset(turn, cell), turn);
+    internal Vec3 Move(Vec3 point, int turn, float cell, int cellsX = 1, int cellsY = 1) => BakeFrame.ToRoom(point + Offset(turn, cell, cellsX, cellsY), turn);
 
     /// <summary>
     /// The skybox as vrad takes it for a bake of <paramref name="room"/> at
@@ -147,19 +147,20 @@ internal sealed class RoomSkybox
     {
         ArgumentNullException.ThrowIfNull(room);
         float cell = room.Definition.CellSize;
-        return new VradSkybox(Room.Bsp, Offset(turn, cell), turn, Cameras(turn, cell), PropCount(room.Bsp));
+        (int w, int d) = (room.Definition.CellsX, room.Definition.CellsY);
+        return new VradSkybox(Room.Bsp, Offset(turn, cell, w, d), turn, Cameras(turn, cell, w, d), PropCount(room.Bsp));
     }
 
     /// <summary>The cameras in the frame of a room lit at <paramref name="turn"/>, each in no area.</summary>
-    internal SkyCamera[] Cameras(int turn, float cell)
+    internal SkyCamera[] Cameras(int turn, float cell, int cellsX = 1, int cellsY = 1)
     {
-        Vec3 shift = BakeFrame.ToRoom(PlacementOffset(turn, cell), turn);
+        Vec3 shift = BakeFrame.ToRoom(PlacementOffset(turn, cell, cellsX, cellsY), turn);
         SkyCamera[] cameras = new SkyCamera[LocalCameras.Length];
         for (int i = 0; i < cameras.Length; i++)
         {
             (Vec3 origin, float scale) = LocalCameras[i];
             float worldToSky = 1.0f / scale;
-            cameras[i] = new SkyCamera(Move(origin, turn, cell) + (shift * worldToSky), scale, worldToSky, -1);
+            cameras[i] = new SkyCamera(Move(origin, turn, cell, cellsX, cellsY) + (shift * worldToSky), scale, worldToSky, -1);
         }
 
         return cameras;
@@ -189,10 +190,11 @@ internal sealed class RoomSkybox
 
     /// <summary>
     /// The offset of a room at cell (0, 0) at <paramref name="turn"/>: where
-    /// <see cref="RoomTransform.Apply"/> puts the room's origin.
+    /// <see cref="RoomTransform.Apply"/> puts the room's origin, which for a
+    /// room larger than one cell depends on its footprint.
     /// </summary>
-    private static Vec3 PlacementOffset(int turn, float cell) =>
-        new RoomTransform(new RoomPlacement(string.Empty, 0, 0, turn), cell).Apply(Vec3.Zero);
+    private static Vec3 PlacementOffset(int turn, float cell, int cellsX, int cellsY) =>
+        new RoomTransform(new RoomPlacement(string.Empty, 0, 0, turn) { CellsX = cellsX, CellsY = cellsY }, cell).Apply(Vec3.Zero);
 }
 
 /// <summary>

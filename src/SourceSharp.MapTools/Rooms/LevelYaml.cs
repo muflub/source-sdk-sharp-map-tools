@@ -645,6 +645,15 @@ public static class LevelYaml
             throw At(scalar, $"{token} is not a cell; an empty cell is YAML's null, written {Empty}.");
         }
 
+        // A cell a larger room covers besides its anchor (17.8): no room of
+        // its own, and no turn (the room's is in its anchor).
+        if (token.StartsWith(LevelCell.CoveredMark, StringComparison.Ordinal))
+        {
+            return token == LevelCell.CoveredMark
+                ? new LevelCell(LevelCell.CoveredMark, 0, (int)scalar.Start.Line, (int)scalar.Start.Column)
+                : throw At(scalar, $"\"{token}\" is not a cell; {LevelCell.CoveredMark} marks a cell a larger room covers, alone, with no rotation.");
+        }
+
         int at = token.IndexOf('@', StringComparison.Ordinal);
         string room = at < 0 ? token : token[..at];
         if (RoomNames.Problem(room) is { } problem)

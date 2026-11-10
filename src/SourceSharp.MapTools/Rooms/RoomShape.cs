@@ -35,13 +35,25 @@ namespace SourceSharp.MapTools.Rooms;
 /// payload's byte length and the payload: the height (a float, a whole
 /// number of units), the footprint's width and depth in cells (1 and 1),
 /// the socket count and each socket's cell offset in the footprint, in
-/// socket order (0 and 0). A larger room (PR 20) will add its per-cell
-/// subtree roots and the node runs its link omits after the offsets.
+/// socket order (0 and 0).
+/// </para>
+/// <para>
+/// <b>A room larger than one cell</b> (17.8) writes <see cref="LargeRevision"/>,
+/// the same framing and rotation count, with a payload of: the height; the
+/// footprint's width and depth in cells; the socket count and, per socket in
+/// socket order, the room-local cell it stands in (x and y) and its
+/// position along that cell edge (always 0, the edge's centre: a field kept
+/// so that doors at several positions along an edge need no new layout);
+/// the count of covered cells and each one's subtree root
+/// (<see cref="RoomCellTree.Roots"/>, x fastest); the count of block nodes
+/// the link leaves out and each one's index, ascending. Node indices do not
+/// change with a turn, so one copy serves all four.
 /// </para>
 /// <para>
 /// <b>The pack version.</b> A pack holding any shaped room is written at
-/// version 5 (<see cref="RoomPack.Version"/>), one of cube rooms at version
-/// 4 (<see cref="RoomPack.CubeVersion"/>). An older build would skip an
+/// version 5 (<see cref="RoomPack.ShapedVersion"/>), one holding a room
+/// larger than one cell at version 6 (<see cref="RoomPack.Version"/>), one of
+/// cube rooms at version 4 (<see cref="RoomPack.CubeVersion"/>). An older build would skip an
 /// unknown tag and link a tall room as a cube, its top tree's bounds one
 /// cell tall, so this is the kind of change a version is kept for: an older
 /// build refuses the version and never reads the section.
@@ -61,18 +73,28 @@ internal static class RoomShape
     /// <summary>The tag of a shaped room's section.</summary>
     public const string SectionTag = "SHAP";
 
-    /// <summary>The revision of the section's payload this build writes and reads.</summary>
+    /// <summary>The revision of a one-cell room's section, which this build writes and reads.</summary>
     public const int Revision = RoomLinkSections.Revision;
+
+    /// <summary>The revision of a larger room's section (17.8): the footprint, the sockets' cells and the cell tree.</summary>
+    public const int LargeRevision = 2;
 
     /// <summary>The section for a room, or null for a cube room, which has none.</summary>
     /// <param name="definition">The room.</param>
+    /// <param name="cells">A larger room's cell tree (<see cref="RoomCellTree"/>); null for a room of one cell.</param>
     /// <returns>The section, or null.</returns>
-    public static RoomPackSectionData? ToSection(RoomDefinition definition)
+    /// <exception cref="ArgumentException">A larger room has no cell tree, or one of another footprint.</exception>
+    public static RoomPackSectionData? ToSection(RoomDefinition definition, RoomCellTree? cells = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         if (!definition.IsShaped)
         {
             return null;
+        }
+
+        if (definition.IsLarge)
+        {
+            return LargeSection(definition, cells ?? throw new ArgumentException($"room {definition.Name} covers several cells but has no cell tree.", nameof(cells)));
         }
 
         RoomLinkSections.Writer turn = new();
@@ -93,6 +115,53 @@ internal static class RoomShape
         w.Int(payload.Length);
         w.Raw(payload);
         return new RoomPackSectionData(SectionTag, RoomLinkSections.Encode(w.ToArray(), RoomLinkCodec.None));
+    }
+
+    /// <summary>Revision 2: a larger room's footprint, sockets and cell tree.</summary>
+    private static RoomPackSectionData LargeSection(RoomDefinition definition, RoomCellTree cells)
+    {
+        if (cells.CellsX != definition.CellsX || cells.CellsY != definition.CellsY)
+        {
+            throw new ArgumentException($"room {definition.Name}: its cell tree is of another footprint.", nameof(cells));
+        }
+
+        RoomLinkSections.Writer turn = new();
+        turn.Structs<float>([definition.Height], counted: false);
+        turn.Int(definition.CellsX);
+        turn.Int(definition.CellsY);
+        turn.Int(definition.Sockets.Count);
+        foreach (RoomSocket socket in definition.Sockets)
+        {
+            (int x, int y) = definition.CellOf(socket);
+            turn.Int(x);
+            turn.Int(y);
+            turn.Int(0);
+        }
+
+        turn.Ints([.. cells.Roots]);
+        turn.Ints([.. cells.BlockNodes]);
+        byte[] payload = turn.ToArray();
+        RoomLinkSections.Writer w = new();
+        w.Int(LargeRevision);
+        w.Int(1);
+        w.Int(payload.Length);
+        w.Raw(payload);
+        return new RoomPackSectionData(SectionTag, RoomLinkSections.Encode(w.ToArray(), RoomLinkCodec.None));
+    }
+
+    /// <summary>Whether a <c>SHAP</c> section describes a room larger than one cell (its revision), which only a version 6 pack holds.</summary>
+    /// <param name="section">The section.</param>
+    /// <returns>True for a larger room's section.</returns>
+    public static bool IsLarge(RoomPackSectionData section) =>
+        section.Tag == SectionTag && IsLarge(new ArraySegment<byte>(section.Bytes.ToArray()));
+
+    /// <summary>Whether a <c>SHAP</c> section's bytes are a larger room's (revision <see cref="LargeRevision"/>).</summary>
+    /// <param name="bytes">The section's bytes, as stored.</param>
+    /// <returns>True for a larger room's section.</returns>
+    public static bool IsLarge(ArraySegment<byte> bytes)
+    {
+        _ = RoomLinkSections.OpenAnyRevision(bytes, "?", SectionTag, out int revision);
+        return revision == LargeRevision;
     }
 
     /// <summary>What a room's section records, read from its bytes; null when the room has none.</summary>
@@ -118,10 +187,19 @@ internal static class RoomShape
             return null;
         }
 
-        RoomLinkSections.Reader r = RoomLinkSections.Open(section, room, SectionTag)
-            ?? throw new LinkException(
+        RoomLinkSections.Reader r = RoomLinkSections.OpenAnyRevision(section, room, SectionTag, out int revision)!;
+        if (revision == LargeRevision)
+        {
+            return ReadLarge(r);
+        }
+
+        if (revision != Revision)
+        {
+            throw new LinkException(
                 $"room pack entry \"{room}\": its \"{SectionTag}\" section is of a revision this build does not read;"
                 + " its shape would be lost, so recompile the library with ssmap room.");
+        }
+
         int rotations = r.Int();
         if (rotations != 1)
         {
@@ -165,6 +243,87 @@ internal static class RoomShape
         return new RoomShapeData(height, sockets);
     }
 
+    /// <summary>Revision 2's payload (<see cref="LargeSection"/>).</summary>
+    private static RoomShapeData ReadLarge(RoomLinkSections.Reader r)
+    {
+        int rotations = r.Int();
+        if (rotations != 1)
+        {
+            throw r.Mismatch($"{rotations} rotations; a room's shape is stored once");
+        }
+
+        int length = r.Count("shape bytes");
+        int start = r.Position;
+        float height = r.Structs<float>("height", 1, counted: false)[0];
+        int width = r.Int();
+        int depth = r.Int();
+        if (width < 1 || depth < 1 || width > RoomDefinition.MaxFootprint || depth > RoomDefinition.MaxFootprint || (width == 1 && depth == 1))
+        {
+            throw r.Mismatch(string.Create(CultureInfo.InvariantCulture,
+                $"a footprint of {width} x {depth} cells; a larger room covers 1 to {RoomDefinition.MaxFootprint} cells each way, and more than one"));
+        }
+
+        int sockets = r.Count("sockets");
+        (int X, int Y)[] cells = new (int, int)[sockets];
+        for (int s = 0; s < sockets; s++)
+        {
+            int x = r.Int();
+            int y = r.Int();
+            int slot = r.Int();
+            if (x < 0 || y < 0 || x >= width || y >= depth)
+            {
+                throw r.Mismatch(string.Create(CultureInfo.InvariantCulture,
+                    $"socket {s} at cell ({x}, {y}) outside its {width} x {depth} footprint"));
+            }
+
+            if (slot != 0)
+            {
+                throw r.Mismatch(string.Create(CultureInfo.InvariantCulture,
+                    $"socket {s} at door position {slot} along its cell edge; this build places a door at the edge's centre only"));
+            }
+
+            cells[s] = (x, y);
+        }
+
+        int[] roots = ReadInts(r, "cell roots");
+        if (roots.Length != width * depth)
+        {
+            throw r.Mismatch(string.Create(CultureInfo.InvariantCulture, $"{roots.Length} cell roots for {width * depth} cells"));
+        }
+
+        int[] blocks = ReadInts(r, "block nodes");
+        for (int i = 0; i < blocks.Length; i++)
+        {
+            if (blocks[i] < 0 || (i > 0 && blocks[i] <= blocks[i - 1]))
+            {
+                throw r.Mismatch("block nodes out of order");
+            }
+        }
+
+        if (r.Position - start != length)
+        {
+            throw r.Mismatch($"a shape of {r.Position - start} bytes where it records {length}");
+        }
+
+        r.End();
+        return new RoomShapeData(height, sockets)
+        {
+            CellsX = width, CellsY = depth, SocketCells = cells, Cells = new RoomCellTree(width, depth, roots, blocks),
+        };
+
+        static int[] ReadInts(RoomLinkSections.Reader r, string what)
+        {
+            int count = r.Count(what);
+            int[] values = new int[count];
+            for (int i = 0; i < count; i++)
+            {
+                values[i] = r.Int();
+            }
+
+            return values;
+        }
+    }
+
     /// <summary>
     /// The room's definition with the height its section records, or the
     /// definition as it is when the room has no section.
@@ -190,14 +349,54 @@ internal static class RoomShape
             throw Mismatch($"{data.Sockets} sockets; the room has {definition.Sockets.Count}");
         }
 
-        if (data.Height == definition.CellSize)
+        if (data.Height == definition.CellSize && data.Cells is null)
         {
             throw Mismatch("the cell size as its height; a cube room has no shape section");
         }
 
-        return RoomDefinition.HeightProblem(data.Height, definition.Kit) is { } problem
-            ? throw Mismatch($"room_height {problem.TrimEnd('.')}")
-            : definition with { Height = data.Height };
+        if (data.Height != definition.CellSize && RoomDefinition.HeightProblem(data.Height, definition.Kit) is { } problem)
+        {
+            throw Mismatch($"room_height {problem.TrimEnd('.')}");
+        }
+
+        if (data.Cells is null)
+        {
+            return definition with { Height = data.Height };
+        }
+
+        // A larger room: each socket's offset is the cell it stands in along
+        // its face, and that cell must be on the face's side of the footprint.
+        RoomSocket[] sockets = new RoomSocket[definition.Sockets.Count];
+        for (int s = 0; s < sockets.Length; s++)
+        {
+            RoomSocket socket = definition.Sockets[s];
+            (int x, int y) = data.SocketCells![s];
+            (bool onFace, int offset) = socket.Facing switch
+            {
+                RoomFacing.PositiveX => (x == data.CellsX - 1, y),
+                RoomFacing.NegativeX => (x == 0, y),
+                RoomFacing.PositiveY => (y == data.CellsY - 1, x),
+                _ => (y == 0, x),
+            };
+            if (!onFace)
+            {
+                throw Mismatch(string.Create(CultureInfo.InvariantCulture, $"socket \"{socket.Name}\" at cell ({x}, {y}), which is not on its {RoomLibraryVmf.WallName(socket.Facing)} side"));
+            }
+
+            sockets[s] = socket with { Offset = offset };
+        }
+
+        RoomDefinition shaped = definition with { Height = data.Height, CellsX = data.CellsX, CellsY = data.CellsY, Sockets = sockets };
+        try
+        {
+            shaped.Validate();
+        }
+        catch (ArgumentException exception)
+        {
+            throw Mismatch($"a footprint its sockets do not fit: {exception.Message}");
+        }
+
+        return shaped;
 
         static LinkException Mismatch(string what) => new($"its \"{SectionTag}\" section holds {what}.");
     }
@@ -205,5 +404,18 @@ internal static class RoomShape
 
 /// <summary>What a room's <c>SHAP</c> section records (<see cref="RoomShape"/>).</summary>
 /// <param name="Height">The room's height.</param>
-/// <param name="Sockets">How many sockets it lists, each in the one cell.</param>
-internal readonly record struct RoomShapeData(float Height, int Sockets);
+/// <param name="Sockets">How many sockets it lists.</param>
+internal readonly record struct RoomShapeData(float Height, int Sockets)
+{
+    /// <summary>The footprint's cells along +x: 1 for a room of one cell.</summary>
+    public int CellsX { get; init; } = 1;
+
+    /// <summary>The footprint's cells along +y.</summary>
+    public int CellsY { get; init; } = 1;
+
+    /// <summary>A larger room's sockets' room-local cells, in socket order; null for a room of one cell.</summary>
+    public IReadOnlyList<(int X, int Y)>? SocketCells { get; init; }
+
+    /// <summary>A larger room's cell tree as the pack recorded it; null for a room of one cell.</summary>
+    public RoomCellTree? Cells { get; init; }
+}

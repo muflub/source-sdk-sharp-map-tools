@@ -617,7 +617,19 @@ public sealed class NavBrush
     /// <param name="quarterTurns">Counter-clockwise quarter turns, 0 to 3.</param>
     /// <param name="size">The cell's edge: the turn maps the cell <c>[0, size]²</c> onto itself.</param>
     /// <returns>The turned brush: its planes permuted and negated exactly, its corners and edges likewise.</returns>
-    public NavBrush Turned(int quarterTurns, double size)
+    public NavBrush Turned(int quarterTurns, double size) => Turned(quarterTurns, size, size);
+
+    /// <summary>
+    /// The brush turned a quarter turn about +z, some number of times, with
+    /// a rectangle <c>[0, sizeX] × [0, sizeY]</c> mapped onto its turned self:
+    /// each turn takes <c>(x, y)</c> to <c>(Y − y, x)</c>, <c>Y</c> the
+    /// rectangle's side along y at that turn, so the sides swap as it turns.
+    /// </summary>
+    /// <param name="quarterTurns">Counter-clockwise quarter turns, 0 to 3.</param>
+    /// <param name="sizeX">The rectangle's side along x before the turns.</param>
+    /// <param name="sizeY">Its side along y.</param>
+    /// <returns>The turned brush, exactly: planes permuted and negated, corners and edges likewise.</returns>
+    public NavBrush Turned(int quarterTurns, double sizeX, double sizeY)
     {
         int r = ((quarterTurns % 4) + 4) % 4;
         double[] planes = (double[])_planes.Clone();
@@ -625,6 +637,7 @@ public sealed class NavBrush
         double[] edges = (double[])_edges.Clone();
         for (int t = 0; t < r; t++)
         {
+            double size = (t & 1) == 0 ? sizeY : sizeX;
             for (int i = 0; i < planes.Length; i += 4)
             {
                 // n·x ≤ d with x' = (size - y, x): n' = (-ny, nx), d' = d - ny·size

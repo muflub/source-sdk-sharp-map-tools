@@ -774,11 +774,22 @@ internal sealed partial class RoomDoorLight
             targets[c] = frame.ToRoom(DoorLightMath.CellCentre(c, frame.Width, frame.Height, Beyond));
         }
 
+        bool pullBack = PullsBackFromThePlane(frame);
         for (int i = 0; i < points.Length; i++)
         {
             (Vec3 point, Vec3 normal) = points[i];
             Vec3 start = point + (normal * 0.5f);
-            if (frame.ToLocal(start).X >= 0 || (normal != Vec3.Zero && !corners.Any(c => Vec3.Dot(c - start, normal) > 0)))
+            float local = frame.ToLocal(start).X;
+            if (pullBack && local >= 0 && local < PlaneBand)
+            {
+                // A cell whose middle lies on the opening's plane, half a
+                // luxel short of its face's end (see PullsBackFromThePlane):
+                // seen from just inside the room, where its face is.
+                start -= frame.Out * (local + 0.5f);
+                local = -0.5f;
+            }
+
+            if (local >= 0 || (normal != Vec3.Zero && !corners.Any(c => Vec3.Dot(c - start, normal) > 0)))
             {
                 continue;
             }
@@ -814,6 +825,35 @@ internal sealed partial class RoomDoorLight
 
         return DoorSeen.Of(masks);
     }
+
+    /// <summary>How far past the opening's plane a cell's middle may lie and still be pulled back into the room (<see cref="PullsBackFromThePlane"/>).</summary>
+    private const float PlaneBand = 1f;
+
+    /// <summary>
+    /// Whether a door's receivers on its opening's plane are seen from just
+    /// inside the room: for a kit whose wall depth is not a whole number of
+    /// 16-unit luxels.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A face that runs up to the doorway (the floor and the ceiling under
+    /// and over it, the walls beside it) ends at the wall's inner face, the
+    /// opening's plane. A cell of door light is the square between four
+    /// luxels, and its middle stands half a luxel in from them. Where the
+    /// wall depth is a whole number of luxels the face ends on a luxel and
+    /// no cell's middle lies on the plane. Where it is not (a wall 8 deep
+    /// under 16-unit luxels) the face ends half a luxel past one, the last
+    /// cell's middle lies exactly on the plane, and the plane test that
+    /// keeps a point beyond the opening from seeing it shut that cell out:
+    /// the luxels at the doorway's threshold got no light through the door,
+    /// up to 0.45 darker than vrad of the linked level gives them.
+    /// </para>
+    /// <para>
+    /// Keyed on the kit, so every kit whose depth is a whole number of
+    /// luxels (the 16-deep kits every level so far uses) keeps every bit.
+    /// </para>
+    /// </remarks>
+    internal static bool PullsBackFromThePlane(DoorFrame frame) => frame.Depth % 16f != 0f;
 
     // ---- the capture -------------------------------------------------------------------------------
 
@@ -1105,7 +1145,7 @@ internal sealed partial class RoomDoorLight
     {
         RoomDefinition definition = room.Definition;
         bool flat = emitter >= DoorLightMath.NodesPerClass;
-        Vec3 node = frame.ToRoom(DoorLightMath.Node(emitter % DoorLightMath.NodesPerClass, definition.CellSize, definition.Kit.Depth));
+        Vec3 node = frame.ToRoom(DoorLightMath.Node(emitter % DoorLightMath.NodesPerClass, definition.CellSize, definition.Kit.Depth, DoorLightMath.Lift(definition.Kit, definition.CellSize)));
         List<BspEntity> entities = Unlit(room.Bsp);
         BspEntity light = new();
         light.Pairs.Add(new BspKeyValue("classname", "light"));

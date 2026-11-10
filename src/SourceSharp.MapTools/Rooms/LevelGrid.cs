@@ -20,6 +20,17 @@ public sealed record LevelCell(string Room, int Rotation, int Line = 0, int Colu
     public string Where => Line > 0
         ? string.Create(CultureInfo.InvariantCulture, $"line {Line}, column {Column}: ")
         : string.Empty;
+
+    /// <summary>
+    /// The mark of a cell a larger room covers besides its anchor (the rooms
+    /// design, 17.8 and O29): <c>+</c>. Not a room name (names start with a
+    /// letter, a digit or <c>_</c>), so a build that knows no larger rooms
+    /// refuses a level holding one with its room-name message.
+    /// </summary>
+    public const string CoveredMark = "+";
+
+    /// <summary>Whether the cell is a <see cref="CoveredMark"/>: part of a larger room placed elsewhere, not a placement.</summary>
+    public bool IsCovered => Room == CoveredMark;
 }
 
 /// <summary>One library of a level that names several (<c>libraries:</c>): its key and its VMF.</summary>
@@ -178,7 +189,7 @@ public sealed class LevelGrid
             {
                 for (int x = 0; x < Columns; x++)
                 {
-                    if (this[x, y] is { } cell)
+                    if (this[x, y] is { IsCovered: false } cell)
                     {
                         yield return (x, y, cell);
                     }
@@ -200,26 +211,64 @@ public sealed class LevelGrid
     {
         ArgumentNullException.ThrowIfNull(rooms);
 
-        List<RoomInstance> instances = [];
+        // The placements first, each with its room's footprint, and every
+        // cell each covers (its anchor alone for a room of one cell); then
+        // each socket is jointed to the socket that stands across its cell
+        // edge facing back, or capped (17.8: joints are per cell edge).
+        List<(RoomPlacement Placement, RoomDefinition Definition)> placed = [];
+        Dictionary<(int X, int Y), int> covered = [];
         foreach ((int x, int y, LevelCell cell) in Placed)
         {
             RoomDefinition definition = Definition(rooms, cell);
-            RoomTransform transform = new(new RoomPlacement(cell.Room, x, y, cell.Rotation), cellSize);
+            RoomPlacement placement = new(cell.Room, x, y, cell.Rotation) { CellsX = definition.CellsX, CellsY = definition.CellsY };
+            CheckFootprint(cell, placement);
+            foreach ((int cx, int cy, _, _) in placement.Covered())
+            {
+                covered[(cx, cy)] = placed.Count;
+            }
+
+            placed.Add((placement, definition));
+        }
+
+        // Every + is some larger room's (CheckFootprint held each room's
+        // other cells to + already).
+        for (int y = 0; y < Rows; y++)
+        {
+            for (int x = 0; x < Columns; x++)
+            {
+                if (this[x, y] is { IsCovered: true } mark && !covered.ContainsKey((x, y)))
+                {
+                    throw new LinkException(
+                        $"{mark.Where}{LevelCell.CoveredMark} is in no room's footprint; {LevelCell.CoveredMark} marks the cells a larger room covers besides its south-west one.");
+                }
+            }
+        }
+
+        List<RoomInstance> instances = [];
+        foreach ((RoomPlacement placement, RoomDefinition definition) in placed)
+        {
+            RoomTransform transform = new(placement, cellSize);
             List<(string, string)> joints = [];
             List<string> capped = [];
             foreach (RoomSocket socket in definition.Sockets)
             {
                 (int axis, int sign) = transform.WorldNormal(socket.Facing);
-                int nx = x + (axis == 0 ? sign : 0);
-                int ny = y + (axis == 1 ? sign : 0);
+                (_, (int X, int Y) across) = placement.SocketCells(definition, socket, cellSize);
                 string? theirs = null;
-                if (nx >= 0 && ny >= 0 && nx < Columns && ny < Rows && this[nx, ny] is { } other)
+                if (covered.TryGetValue(across, out int other))
                 {
-                    RoomDefinition neighbour = Definition(rooms, other);
-                    RoomTransform otherTransform = new(new RoomPlacement(other.Room, nx, ny, other.Rotation), cellSize);
+                    // Under a kit of several door slots, a joint is two
+                    // sockets at the same slot of the edge; a socket at a
+                    // slot the neighbour has no socket at is capped.
+                    (RoomPlacement otherPlacement, RoomDefinition neighbour) = placed[other];
+                    RoomTransform otherTransform = new(otherPlacement, cellSize);
+                    bool slotted = definition.Kit.Slots > 1;
+                    float along = slotted ? placement.SocketAlong(definition, socket, cellSize) : 0f;
                     foreach (RoomSocket candidate in neighbour.Sockets)
                     {
-                        if (otherTransform.WorldNormal(candidate.Facing) == (axis, -sign))
+                        if (otherTransform.WorldNormal(candidate.Facing) == (axis, -sign)
+                            && otherPlacement.SocketCells(neighbour, candidate, cellSize).Cell == across
+                            && (!slotted || RoomPlacement.SameSlot(along, otherPlacement.SocketAlong(neighbour, candidate, cellSize))))
                         {
                             theirs = candidate.Name;
                         }
@@ -236,10 +285,48 @@ public sealed class LevelGrid
                 }
             }
 
-            instances.Add(new RoomInstance(new RoomPlacement(cell.Room, x, y, cell.Rotation), joints, capped));
+            instances.Add(new RoomInstance(placement, joints, capped));
         }
 
         return new LevelLayout(Name, cellSize, kit, instances) { Columns = Columns, Rows = Rows, Transitions = Transitions };
+    }
+
+    /// <summary>
+    /// Holds a placed room's footprint to the grid (17.8): every cell it
+    /// covers is on the grid, and each one but its anchor (the south-west
+    /// cell, where the room is written) holds <see cref="LevelCell.CoveredMark"/>.
+    /// A room of one cell covers its anchor alone and passes.
+    /// </summary>
+    private void CheckFootprint(LevelCell cell, RoomPlacement placement)
+    {
+        if (!placement.IsLarge)
+        {
+            return;
+        }
+
+        if (placement.CellX + placement.SpanCellsX > Columns || placement.CellY + placement.SpanCellsY > Rows)
+        {
+            throw new LinkException(string.Create(CultureInfo.InvariantCulture,
+                $"{cell.Where}room {placement.Room} at cell ({placement.CellX}, {placement.CellY}) turned {placement.NormalizedRotation * 90}"
+                + $" covers {placement.SpanCellsX} x {placement.SpanCellsY} cells and runs off the {Rows}x{Columns} grid."));
+        }
+
+        foreach ((int x, int y, _, _) in placement.Covered())
+        {
+            if ((x, y) == (placement.CellX, placement.CellY))
+            {
+                continue;
+            }
+
+            if (this[x, y] is not { IsCovered: true } other)
+            {
+                string token = this[x, y] is { } holds ? holds.Room : LevelYaml.Empty;
+                throw new LinkException(string.Create(CultureInfo.InvariantCulture,
+                    $"{(this[x, y] ?? cell).Where}room {placement.Room} at cell ({placement.CellX}, {placement.CellY}) covers cell ({x}, {y}), which holds {token}; write {LevelCell.CoveredMark} there."));
+            }
+
+            _ = other;
+        }
     }
 
     private static RoomDefinition Definition(Func<string, RoomDefinition?> rooms, LevelCell cell) =>

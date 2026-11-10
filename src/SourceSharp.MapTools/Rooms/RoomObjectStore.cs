@@ -105,6 +105,31 @@ public static class RoomObjectStore
     private const string WidthKey = "width";
     private const string HeightKey = "height";
     private const string DepthKey = "depth";
+
+    /// <summary>
+    /// The kit's sill rule, written only for a kit that stands its door on
+    /// the floor (<see cref="DoorSill.Floor"/>), as <see cref="SillFloor"/>:
+    /// a centred kit's object is the three numbers it always was, so its
+    /// container keeps its bytes, and a build that knows no sill refuses a
+    /// floor kit's container by its unknown kit field instead of linking its
+    /// doors centred.
+    /// </summary>
+    private const string SillKey = "sill";
+
+    /// <summary>The <see cref="SillKey"/> value of a floor kit.</summary>
+    private const string SillFloor = "floor";
+
+    /// <summary>
+    /// The kit's door slots (<see cref="SocketKit.Slots"/>), written only for
+    /// a kit of more than one, as is each socket's <see cref="SlotKey"/>: a
+    /// one-slot kit's container keeps its bytes, and a build that knows no
+    /// slots refuses a slot kit's container by its unknown kit field instead
+    /// of linking its doors centred.
+    /// </summary>
+    private const string SlotsKey = "slots";
+
+    /// <summary>A socket's door slot, written only under a kit of several (<see cref="SlotsKey"/>).</summary>
+    private const string SlotKey = "slot";
     private const string SocketsKey = "sockets";
     private const string FacingKey = "facing";
     private const string SocketNameKey = "name";
@@ -216,7 +241,7 @@ public static class RoomObjectStore
 
         string? roomName = null;
         float? cellSize = null;
-        (float Width, float Height, float Depth)? kit = null;
+        SocketKit? kit = null;
         RoomSocket[]? sockets = null;
         int[] socketClusters = [];
         string? sourceHash = null;
@@ -282,9 +307,16 @@ public static class RoomObjectStore
         }
 
         RoomDefinition definition = new(
-            roomName, cellSize.Value, new SocketKit(kit.Value.Width, kit.Value.Height, kit.Value.Depth), sockets);
+            roomName, cellSize.Value, kit.Value, sockets);
 
-        definition.Validate();
+        // A larger room's container lists its sockets without their cell
+        // edges, which its shape section gives; it is held to its rules once
+        // they are applied (RoomShape.Apply validates it).
+        if (shape?.Cells is null)
+        {
+            definition.Validate();
+        }
+
         definition = RoomShape.Apply(shape, definition);
 
         BspData bsp = ParseBspBlob(bspBlob);
@@ -321,12 +353,22 @@ public static class RoomObjectStore
         // §10a: keys rebuild in RoomCompiler's format from the persisted strings,
         // so "same keys ⇒ same room bytes" keeps meaning the same thing here.
         string claimed = "room:" + roomName + "|" + CellText(definition.CellSize) + "|" + KitText(definition.Kit)
-            + (definition.IsShaped ? "|h" + CellText(definition.Height) : string.Empty);
+            + (definition.HasOwnHeight ? "|h" + CellText(definition.Height) : string.Empty)
+            + RoomCompiler.FootprintText(definition);
         IReadOnlyList<string> inputKeys = sourceHash is null
             ? [claimed]
             : ["vmf:" + sourceHash, claimed];
 
-        return new RoomObject(definition, bsp, vis, lint, inputKeys);
+        // A larger room's cell tree is walked from its compile, and held to
+        // what its pack recorded: a section and a container written apart.
+        RoomCellTree? cells = RoomCellTree.Derive(definition, bsp);
+        if (shape?.Cells is { } recorded && cells is not null
+            && (!recorded.Roots.SequenceEqual(cells.Roots) || !recorded.BlockNodes.SequenceEqual(cells.BlockNodes)))
+        {
+            throw new LinkException($"its \"{RoomShape.SectionTag}\" section's cell roots are not its compile's; the section and the container were written apart.");
+        }
+
+        return new RoomObject(definition, bsp, vis, lint, inputKeys) { CellTree = cells };
     }
 
     /// <summary>The manifest section's JSON, key order fixed so the bytes are stable.</summary>
@@ -343,6 +385,16 @@ public static class RoomObjectStore
             writer.WriteNumber(WidthKey, definition.Kit.Width);
             writer.WriteNumber(HeightKey, definition.Kit.Height);
             writer.WriteNumber(DepthKey, definition.Kit.Depth);
+            if (definition.Kit.Sill == DoorSill.Floor)
+            {
+                writer.WriteString(SillKey, SillFloor);
+            }
+
+            if (definition.Kit.Slots != 1)
+            {
+                writer.WriteNumber(SlotsKey, definition.Kit.Slots);
+            }
+
             writer.WriteEndObject();
             writer.WriteStartArray(SocketsKey);
             foreach (RoomSocket socket in definition.Sockets)
@@ -350,6 +402,11 @@ public static class RoomObjectStore
                 writer.WriteStartObject();
                 writer.WriteNumber(FacingKey, (int)socket.Facing);
                 writer.WriteString(SocketNameKey, socket.Name);
+                if (definition.Kit.Slots != 1)
+                {
+                    writer.WriteNumber(SlotKey, socket.Slot);
+                }
+
                 writer.WriteEndObject();
             }
 
@@ -809,7 +866,7 @@ public static class RoomObjectStore
         return number;
     }
 
-    private static (float Width, float Height, float Depth) ReadKit(JsonElement kit)
+    private static SocketKit ReadKit(JsonElement kit)
     {
         if (kit.ValueKind != JsonValueKind.Object)
         {
@@ -818,10 +875,17 @@ public static class RoomObjectStore
 
         float width = 0f, height = 0f, depth = 0f;
         bool seenWidth = false, seenHeight = false, seenDepth = false;
+        DoorSill sill = DoorSill.Centred;
+        int slots = 1;
         foreach (JsonProperty member in kit.EnumerateObject())
         {
             switch (member.Name)
             {
+                case SlotsKey:
+                    slots = member.Value.ValueKind == JsonValueKind.Number && member.Value.TryGetInt32(out int read) && read is 3 or 5
+                        ? read
+                        : throw new LinkException($"room manifest kit {SlotsKey} {member.Value} is not 3 or 5.");
+                    break;
                 case WidthKey:
                     width = ReadSingle(member.Value, WidthKey);
                     seenWidth = true;
@@ -834,6 +898,11 @@ public static class RoomObjectStore
                     depth = ReadSingle(member.Value, DepthKey);
                     seenDepth = true;
                     break;
+                case SillKey:
+                    sill = member.Value.ValueKind == JsonValueKind.String && member.Value.GetString() == SillFloor
+                        ? DoorSill.Floor
+                        : throw new LinkException($"room manifest kit {SillKey} is not \"{SillFloor}\".");
+                    break;
                 default:
                     throw new LinkException($"room manifest kit has an unknown field \"{member.Name}\".");
             }
@@ -844,7 +913,7 @@ public static class RoomObjectStore
             throw new LinkException("room manifest kit needs width, height and depth.");
         }
 
-        return (width, height, depth);
+        return new SocketKit(width, height, depth) { Sill = sill, Slots = slots };
     }
 
     private static RoomSocket[] ReadSockets(JsonElement sockets)
@@ -863,11 +932,17 @@ public static class RoomObjectStore
             }
 
             int facing = -1;
+            int slot = 0;
             string? name = null;
             foreach (JsonProperty member in socket.EnumerateObject())
             {
                 switch (member.Name)
                 {
+                    case SlotKey:
+                        slot = member.Value.ValueKind == JsonValueKind.Number && member.Value.TryGetInt32(out int read) && read is >= 0 and < SocketKit.MaxSlots
+                            ? read
+                            : throw new LinkException($"room manifest socket {SlotKey} {member.Value} is not a door slot.");
+                        break;
                     case FacingKey:
                         if (member.Value.ValueKind != JsonValueKind.Number || !member.Value.TryGetInt32(out int raw) || !Enum.IsDefined((RoomFacing)raw))
                         {
@@ -890,7 +965,7 @@ public static class RoomObjectStore
                 throw new LinkException("a room manifest socket needs both facing and name.");
             }
 
-            list.Add(new RoomSocket((RoomFacing)facing, name));
+            list.Add(new RoomSocket((RoomFacing)facing, name) { Slot = slot });
         }
 
         return [.. list];
@@ -923,5 +998,6 @@ public static class RoomObjectStore
     private static string KitText(SocketKit kit) =>
         kit.Width.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ","
         + kit.Height.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ","
-        + kit.Depth.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        + kit.Depth.ToString("R", System.Globalization.CultureInfo.InvariantCulture)
+        + RoomCompiler.SillText(kit);
 }
