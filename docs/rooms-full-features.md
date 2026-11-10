@@ -6427,13 +6427,25 @@ on an internal cell face is refused; PR 20's landed note (section 13) has the de
   layout's joint names), the level map's doors, transitions, `--flatten`.
   `ssmap layout` lays out libraries of one slot only and says so.
   `samples/rooms-slots` holds a room with two doors on one wall, a corridor
-  entering at a corner slot and a 2 x 2 room with every slot. Not done:
-  door light assumes a door in the middle of its edge for its bounced
-  response grid; a door three units from the corner measured near p95 0.18
-  against vrad (a centred door 0.012), so slot kits that light their doors
-  are not held to PR 10's tolerances. A door must also be at least the
-  navigation agent and a voxel wide where the grid meets it, or the nav
-  grid does not pass it.
+  entering at a corner slot and a 2 x 2 room with every slot. Door light
+  (measured 2026-11-10 against vrad of the linked level, near/far p95 in
+  PR 10's terms): the game's kit (cell 1024, door 208 x 192 on the floor)
+  is within 0.008 near at wall 16 and wall 8, one slot or the first of
+  three (51 units from the side wall). A wall that is not a whole number
+  of 16-unit luxels deep put the last cell of every face running up to the
+  doorway on the opening's plane, which shut it out of the door's light;
+  such a kit's receivers on the plane are now seen from just inside the
+  room (`RoomDoorLight.PullsBackFromThePlane`, keyed on the depth, so a
+  16-deep kit keeps every bit): wall 8 near p99 0.224 to 0.151, the
+  threshold line 0.45 to 0.30. What stays: that line, a luxel on the joint
+  under and over the door, up to 0.3 darker on a part-luxel wall; and a
+  door within a few units of the side wall (a 48-wide slot door 3 units
+  from the corner on a 256 cell measured near p95 0.22, a centred one
+  0.012), the wall beside it lit at grazing incidence. Authoring avoids
+  both: wall depth a multiple of 16, and slot doors a luxel or more of
+  wall from the side wall. A door must also be at least the navigation
+  agent and a voxel wide where the grid meets it, or the nav grid does not
+  pass it.
 
 ### 17.9 The generator: several libraries, heights, large areas
 
