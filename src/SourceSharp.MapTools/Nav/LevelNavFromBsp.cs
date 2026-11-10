@@ -472,70 +472,125 @@ public static class LevelNavFromBsp
         CellBuild?[] built, NavGeometry geometry, List<NavBrush> overhang, NavSettings settings, BspNavOptions options,
         int columns, int rows, int n, int nz, Vec3 origin, Nav3dBspBinding binding, CancellationToken cancellationToken)
     {
-        NavRecordTable levelRecords = new();
         int[] roots = new int[columns * rows];
         Array.Fill(roots, -1);
         int[]? heights = nz == n ? null : new int[columns * rows];
-        List<uint> columnStarts = [];
-        List<NavRun> runs = [];
+        int block = n * n;
+
+        // The placed cells in cell order: each owns the next block of
+        // columns, and its runs follow the runs of the cells before it in
+        // the order its columns hold them (y, then x, as its build laid them).
+        List<int> placed = [];
         for (int c = 0; c < built.Length; c++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (built[c] is not { } cellBuild)
+            if (built[c] is null)
             {
                 continue;
             }
 
+            roots[c] = placed.Count * block;
             if (heights is not null)
             {
                 heights[c] = nz;
             }
 
-            int[] map = new int[cellBuild.Records.Count];
-            Array.Fill(map, -1);
-            int Level(int record)
-            {
-                if (map[record] < 0)
-                {
-                    map[record] = record == NavRecordTable.BlockedIndex ? NavRecordTable.BlockedIndex
-                        : cellBuild.Records.HasBrushes(record) ? levelRecords.Add(Remap(cellBuild.Records[record], cellBuild.Brushes))
-                        : levelRecords.Add(cellBuild.Records[record]);
-                }
-
-                return map[record];
-            }
-
-            roots[c] = columnStarts.Count;
-            for (int y = 0; y < n; y++)
-            {
-                for (int x = 0; x < n; x++)
-                {
-                    columnStarts.Add((uint)runs.Count);
-                    foreach (NavRun run in cellBuild.Columns.Column(x, y))
-                    {
-                        runs.Add(run with { Key = run.Key with { PlayerRecord = Level(run.Key.PlayerRecord), NpcRecord = Level(run.Key.NpcRecord) } });
-                    }
-                }
-            }
+            placed.Add(c);
         }
 
-        columnStarts.Add((uint)runs.Count);
+        long[] runStart = new long[placed.Count + 1];
+        for (int i = 0; i < placed.Count; i++)
+        {
+            runStart[i + 1] = runStart[i] + built[placed[i]]!.Columns.Runs.Length;
+        }
+
+        // Each cell's records in the order its runs first name them (the
+        // player's, then the NPC's, run by run), each with its bytes as the
+        // level holds them (overhanging brushes renumbered) and their hash:
+        // the costly part, on the build's threads.
+        ParallelOptions parallel = new() { MaxDegreeOfParallelism = options.MaxDegree, CancellationToken = cancellationToken };
+        CellRecords[] cellRecords = new CellRecords[placed.Count];
+        System.Threading.Tasks.Parallel.For(0, placed.Count, parallel, i => cellRecords[i] = CellRecords.Of(built[placed[i]]!));
+
+        // The level's records, numbered in the order first met: cell by
+        // cell, each cell's in its own first-met order, a record already in
+        // the level taking its number. This is the order a walk over every
+        // run meets them in, so the numbers are the same.
+        List<byte[]> levelRecords = [Nav3dClearance.BlockedRecord.ToArray()];
+        Dictionary<HashedRecord, int> levelIndex = new(HashedRecord.Comparer)
+        {
+            [HashedRecord.Of(levelRecords[0])] = NavRecordTable.BlockedIndex,
+        };
+        int[][] maps = new int[placed.Count][];
+        for (int i = 0; i < placed.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CellRecords cell = cellRecords[i];
+            int[] map = new int[built[placed[i]]!.Records.Count];
+            for (int k = 0; k < cell.Order.Length; k++)
+            {
+                int record = cell.Order[k];
+                if (record == NavRecordTable.BlockedIndex)
+                {
+                    map[record] = NavRecordTable.BlockedIndex;
+                    continue;
+                }
+
+                if (!levelIndex.TryGetValue(cell.Records[k], out int number))
+                {
+                    number = levelRecords.Count;
+                    levelIndex.Add(cell.Records[k], number);
+                    levelRecords.Add(cell.Records[k].Bytes);
+                }
+
+                map[record] = number;
+            }
+
+            maps[i] = map;
+        }
+
         uint[] offsets = new uint[levelRecords.Count];
-        using MemoryStream clearance = new();
+        long length = 0;
         for (int r = 0; r < levelRecords.Count; r++)
         {
-            offsets[r] = (uint)clearance.Length;
-            clearance.Write(levelRecords[r]);
+            offsets[r] = (uint)length;
+            length += levelRecords[r].Length;
         }
 
-        Nav3dLeaf[] leaves = [.. runs.Select(run => new Nav3dLeaf(
-            run.ZLo, run.Height, run.Key.Flags, run.Key.Cost, offsets[run.Key.PlayerRecord], offsets[run.Key.NpcRecord],
-            run.Key.PlayerFloorZ, run.Key.NpcFloorZ))];
-        uint[] starts = [.. columnStarts];
+        byte[] clearance = new byte[length];
+        System.Threading.Tasks.Parallel.For(0, (levelRecords.Count + 4095) / 4096, parallel, k =>
+        {
+            for (int r = k * 4096; r < Math.Min(levelRecords.Count, (k + 1) * 4096); r++)
+            {
+                levelRecords[r].CopyTo(clearance, offsets[r]);
+            }
+        });
+
+        // The leaves and the column starts, each cell into its own place.
+        Nav3dLeaf[] leaves = new Nav3dLeaf[runStart[^1]];
+        uint[] starts = new uint[(placed.Count * block) + 1];
+        System.Threading.Tasks.Parallel.For(0, placed.Count, parallel, i =>
+        {
+            NavColumns cell = built[placed[i]]!.Columns;
+            int[] map = maps[i];
+            long first = runStart[i];
+            for (int k = 0; k < block; k++)
+            {
+                starts[(i * block) + k] = (uint)(first + cell.ColumnStarts[k]);
+            }
+
+            for (int k = 0; k < cell.Runs.Length; k++)
+            {
+                NavRun run = cell.Runs[k];
+                leaves[first + k] = new Nav3dLeaf(
+                    run.ZLo, run.Height, run.Key.Flags, run.Key.Cost, offsets[map[run.Key.PlayerRecord]], offsets[map[run.Key.NpcRecord]],
+                    run.Key.PlayerFloorZ, run.Key.NpcFloorZ);
+            }
+        });
+        starts[^1] = (uint)runStart[^1];
         options.Timer?.Mark("stitch");
         List<Nav3dJump> jumps = roots.Any(r => r >= 0)
             ? LevelNavLinker.FindJumps(
-                new LevelNavLinker.Grid(columns, rows, n, settings.VoxelSize, roots, starts, leaves, levelRecords, offsets),
+                new LevelNavLinker.Grid(columns, rows, n, settings.VoxelSize, roots, starts, leaves, offsets),
                 settings.StepHeight, settings.JumpHeight, settings.JumpDistance, options.MaxDegree, LevelNavLinker.JumpChunk, cancellationToken)
             : [];
         options.Timer?.Mark("jumps");
@@ -566,7 +621,7 @@ public static class LevelNavFromBsp
             Roots = roots,
             ColumnStarts = starts,
             Leaves = leaves,
-            Clearance = clearance.ToArray(),
+            Clearance = clearance,
             Obstacles = [.. geometry.Obstacles.Select(o => new Nav3dObstacle(
                 o.TargetName, o.ClassName, CellOf(o.Bounds), o.HammerId, o.Kind, o.Bounds.Mins, o.Bounds.Maxs))],
             Brushes = [.. overhang.Select(b => b.PlaneFloats())],
@@ -585,4 +640,61 @@ public static class LevelNavFromBsp
     }
 
     private sealed record CellBuild(NavColumns Columns, NavRecordTable Records, int[] Brushes);
+
+    /// <summary>
+    /// A cell's records as the stitch takes them: the cell's record numbers
+    /// in the order its runs first name them, and for each its bytes as the
+    /// level holds them, hashed.
+    /// </summary>
+    private sealed record CellRecords(int[] Order, HashedRecord[] Records)
+    {
+        public static CellRecords Of(CellBuild cell)
+        {
+            bool[] seen = new bool[cell.Records.Count];
+            List<int> order = [];
+            foreach (NavRun run in cell.Columns.Runs)
+            {
+                foreach (int record in (ReadOnlySpan<int>)[run.Key.PlayerRecord, run.Key.NpcRecord])
+                {
+                    if (!seen[record])
+                    {
+                        seen[record] = true;
+                        order.Add(record);
+                    }
+                }
+            }
+
+            HashedRecord[] records = new HashedRecord[order.Count];
+            for (int k = 0; k < order.Count; k++)
+            {
+                int record = order[k];
+                if (record != NavRecordTable.BlockedIndex)
+                {
+                    records[k] = HashedRecord.Of(cell.Records.HasBrushes(record) ? Remap(cell.Records[record], cell.Brushes) : cell.Records[record]);
+                }
+            }
+
+            return new CellRecords([.. order], records);
+        }
+    }
+
+    /// <summary>A record's bytes with their hash worked out once, compared by content.</summary>
+    private readonly record struct HashedRecord(byte[] Bytes, int Hash)
+    {
+        public static IEqualityComparer<HashedRecord> Comparer { get; } = new ContentComparer();
+
+        public static HashedRecord Of(byte[] bytes)
+        {
+            HashCode hash = new();
+            hash.AddBytes(bytes);
+            return new HashedRecord(bytes, hash.ToHashCode());
+        }
+
+        private sealed class ContentComparer : IEqualityComparer<HashedRecord>
+        {
+            public bool Equals(HashedRecord x, HashedRecord y) => x.Hash == y.Hash && x.Bytes.AsSpan().SequenceEqual(y.Bytes);
+
+            public int GetHashCode(HashedRecord obj) => obj.Hash;
+        }
+    }
 }

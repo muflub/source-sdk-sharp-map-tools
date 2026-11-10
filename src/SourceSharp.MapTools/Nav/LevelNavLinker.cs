@@ -280,7 +280,7 @@ public static class LevelNavLinker
         uint[] starts = [.. columnStarts];
         cancellationToken.ThrowIfCancellationRequested();
         List<Nav3dJump> jumps = FindJumps(
-            new Grid(columns, rows, n, first.VoxelSize, roots, starts, leaves, levelRecords, offsets),
+            new Grid(columns, rows, n, first.VoxelSize, roots, starts, leaves, offsets),
             first.StepHeight, first.JumpHeight, first.JumpDistance, cancellationToken);
 
         (List<Nav3dPoi> pois, int up, int down) = Pois(placed, doors);
@@ -785,8 +785,7 @@ public static class LevelNavLinker
 
     /// <summary>The stitched grid as the jump search reads it.</summary>
     internal sealed record Grid(
-        int Columns, int Rows, int CellVoxels, float VoxelSize, int[] Roots, uint[] ColumnStarts, Nav3dLeaf[] Leaves,
-        NavRecordTable Records, uint[] Offsets)
+        int Columns, int Rows, int CellVoxels, float VoxelSize, int[] Roots, uint[] ColumnStarts, Nav3dLeaf[] Leaves, uint[] Offsets)
     {
         private readonly int[] _leafColumn = LeafColumns(ColumnStarts, Leaves.Length);
         private readonly int[] _blockCell = BlockCells(Roots, CellVoxels);

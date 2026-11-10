@@ -43,6 +43,42 @@ public sealed class NavJumpSearchTests(BspNavMap map) : IClassFixture<BspNavMap>
         }
     }
 
+    /// <summary>
+    /// The stitched level's records, at four threads, are each stored once
+    /// and numbered in the order the leaves first name them (each leaf's
+    /// player record, then its NPC record), the blocked record first: the
+    /// order a walk over the runs cell by cell meets them in.
+    /// </summary>
+    [Fact]
+    public void TheLevelsRecordsAreStoredOnceInTheOrderTheLeavesFirstNameThem()
+    {
+        Nav3dLevel level = map.Build(new BspNavOptions { MaxDegree = 4 }).Level;
+        uint[] offsets = Offsets(level.Clearance);
+        Assert.True(offsets.Length > 10, $"{offsets.Length} records");
+        Assert.Equal(Nav3dClearance.BlockedRecord.ToArray(), level.Clearance.AsSpan(0, (int)offsets[1]).ToArray());
+
+        HashSet<string> distinct = [];
+        for (int r = 0; r < offsets.Length; r++)
+        {
+            int end = r + 1 < offsets.Length ? (int)offsets[r + 1] : level.Clearance.Length;
+            Assert.True(distinct.Add(Convert.ToHexString(level.Clearance, (int)offsets[r], end - (int)offsets[r])), $"record {r} is stored twice");
+        }
+
+        Dictionary<uint, int> number = offsets.Select((o, r) => (o, r)).ToDictionary(p => p.o, p => p.r);
+        int next = 1;
+        foreach (Nav3dLeaf leaf in level.Leaves)
+        {
+            foreach (uint offset in (uint[])[leaf.PlayerClearance, leaf.NpcClearance])
+            {
+                int r = number[offset];
+                Assert.True(r <= next, $"record {r} is named before record {next}");
+                next = Math.Max(next, r + 1);
+            }
+        }
+
+        Assert.Equal(offsets.Length, next);
+    }
+
     /// <summary>A degree or a chunk below one is refused.</summary>
     [Fact]
     public void ADegreeOrChunkBelowOneIsRefused()
@@ -57,7 +93,7 @@ public sealed class NavJumpSearchTests(BspNavMap map) : IClassFixture<BspNavMap>
         LevelNavLinker.FindJumps(
             new LevelNavLinker.Grid(
                 level.Columns, level.Rows, level.CellVoxels, level.VoxelSize, level.Roots, [.. level.ColumnStarts], [.. level.Leaves],
-                new NavRecordTable(), Offsets(level.Clearance)),
+                Offsets(level.Clearance)),
             level.StepHeight, level.JumpHeight, level.JumpDistance, degree, chunk, CancellationToken.None);
 
     /// <summary>Each record's offset in a clearance blob, in order: the blocked record first, as the build numbers them.</summary>
