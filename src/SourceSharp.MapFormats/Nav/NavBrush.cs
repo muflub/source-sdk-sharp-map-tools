@@ -561,6 +561,13 @@ public sealed class NavBrush
     }
 
     /// <summary>One candidate axis's separating conditions, folded into the threshold; true when the axis separates at every <c>t</c>.</summary>
+    /// <remarks>
+    /// Inlined: the growth test calls it two dozen times for a typical
+    /// slanted brush, and the call (ten arguments, two by reference) cost
+    /// more than the arithmetic. Inlining changes no rounding: the runtime
+    /// neither fuses nor reorders the floating-point operations.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool Axis(
         double ax, double ay, double az, double lo, double hi, in NavBox box, in NavGrowth g, bool twoSided,
         ref double threshold, ref double contactZ)
