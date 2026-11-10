@@ -316,6 +316,11 @@ public static class PreviewReportWriter
                 Strings(w, "escapes", escapes);
             }
 
+            if (r.Exits is { Count: > 0 } exits)
+            {
+                Strings(w, "exits", exits);
+            }
+
             w.WriteEndObject();
         }
 

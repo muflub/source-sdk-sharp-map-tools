@@ -224,6 +224,24 @@ public class MovementPreviewTests
         Assert.Equal(text, PreviewSession.TrapText(5, escapes?.Split(',', StringSplitOptions.RemoveEmptyEntries)));
 
     [Fact]
+    public void AnExitTriggerMakesATrapAPitAndIsWritten()
+    {
+        Assert.Equal("a pit no one walks or jumps out of (5 positions), left by its trigger: trigger_hurt hurts the player; trigger_teleport \"f\" teleports the player",
+            PreviewSession.TrapText(5, ["rocket_jump"], ["trigger_hurt hurts the player", "trigger_teleport \"f\" teleports the player"]));
+        Assert.Equal("a player who gets here cannot get out (5 positions)", PreviewSession.TrapText(5, null, []));
+
+        PreviewReport report = new("m", 20, [], new SceneCounts(0, 0, 0, 0, 0, 0), [], [], [],
+            new PreviewChecks([], [], new LightingReport(0, 0, 0, 0, 0, false), new SkyboxReport(null, 0), [], new SortedDictionary<string, int>(),
+                new MovementReport("p", 1, new Dictionary<int, int>(), [],
+                    [new RegionReport(5, [0, 0, 0], [0, 0, 0], [1, 1, 1], 1, null, ["trigger_hurt hurts the player"]), new RegionReport(3, [0, 0, 0], [0, 0, 0], [1, 1, 1], 2, null, [])], [], 0)));
+        using JsonDocument json = JsonDocument.Parse(PreviewReportWriter.Write(report));
+        JsonElement traps = json.RootElement.GetProperty("checks").GetProperty("movement").GetProperty("traps");
+
+        Assert.Equal("trigger_hurt hurts the player", traps[0].GetProperty("exits")[0].GetString());
+        Assert.False(traps[1].TryGetProperty("exits", out _));
+    }
+
+    [Fact]
     public void BlastOnlyFloorIsDrawnBlue()
     {
         (RgbaImage image, CameraView view, GBuffer buffer) = TopDown();

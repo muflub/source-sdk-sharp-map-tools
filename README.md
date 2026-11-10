@@ -638,7 +638,11 @@ engine sets them up: placed solid 6 with their model's `.phy`, placed
 solid 2 as their hull box, and not at all when placed solid 6 with no
 `.phy` (the engine logs "bogus solid type" and makes them non-solid; TF2's
 mining cart, track and minehead are such models). Those props are named in
-`collision_warnings` and printed as warnings. The profile is a TF2 soldier
+`collision_warnings` and printed as warnings. A trap whose floor touches a
+trigger that takes the player out (a `trigger_teleport`, `trigger_hurt` or
+`trigger_changelevel`, or a trigger whose touch fires a teleport or a
+level transition) is a pit the map means: its marker is a `pit` naming the
+trigger, and the trap's `exits` list it. The profile is a TF2 soldier
 for a TF2 game and the Half-Life 2 Deathmatch player otherwise; name a TF2
 class (`-movement scout`) or `hl2mp` to choose.
 

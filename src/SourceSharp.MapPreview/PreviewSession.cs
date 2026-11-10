@@ -325,14 +325,21 @@ public sealed class PreviewSession
             ? AirborneFuzzer.Analyze(world, profile, result, airOptions, cancellationToken)
             : null;
 
+        // A trap a trigger takes the player out of (a shaft whose floor
+        // teleports, a pit that kills, a fall into a level change) is a pit
+        // the map means, not a place a player is stuck: its marker says so.
+        IReadOnlyList<ExitTrigger> exitTriggers = ExitTriggers.FromBsp(bsp);
         List<RegionReport> traps = [];
         foreach (int t in Enumerable.Range(0, result.Traps.Count).OrderByDescending(t => result.Traps[t].Nodes.Count).ThenBy(t => result.Traps[t].Nodes[0]))
         {
             NodeGroup trap = result.Traps[t];
             IReadOnlyList<string>? escapes = air?.TrapEscapes[t];
+            string[] exits = [.. exitTriggers
+                .Where(x => trap.Nodes.Any(n => x.Touches(result.Nodes[n], profile.Mins(false), profile.Maxs(false))))
+                .Select(x => x.Describe())];
             int number = markers.Count + 1;
-            markers.Add(new PreviewMarker(number, "trap", TrapText(trap.Nodes.Count, escapes), trap.Sample));
-            traps.Add(new RegionReport(trap.Nodes.Count, V(trap.Sample), V(trap.Min), V(trap.Max), number, escapes));
+            markers.Add(new PreviewMarker(number, exits.Length > 0 ? "pit" : "trap", TrapText(trap.Nodes.Count, escapes, exits), trap.Sample));
+            traps.Add(new RegionReport(trap.Nodes.Count, V(trap.Sample), V(trap.Min), V(trap.Max), number, escapes, exits));
         }
 
         List<RegionReport> islands = [.. result.Islands
@@ -421,13 +428,20 @@ public sealed class PreviewSession
             : $"spawn team {team} starts inside the prop {prop.Model}";
     }
 
-    /// <summary>A trap marker's text: whether blast jumps get out, when that was tried.</summary>
-    internal static string TrapText(int positions, IReadOnlyList<string>? escapes) => escapes switch
-    {
-        null => $"a player who gets here cannot get out ({positions} positions)",
-        { Count: 0 } => $"a player who gets here cannot get out, not even by blast jumping ({positions} positions)",
-        _ => $"a player who gets here cannot walk or jump out ({positions} positions); {string.Join(", ", escapes)} gets out",
-    };
+    /// <summary>
+    /// A trap marker's text: the triggers that take a player out, when it
+    /// has any (then it is a pit the map means), else whether blast jumps
+    /// get out, when that was tried.
+    /// </summary>
+    internal static string TrapText(int positions, IReadOnlyList<string>? escapes, IReadOnlyList<string>? exits = null) =>
+        exits is { Count: > 0 }
+            ? $"a pit no one walks or jumps out of ({positions} positions), left by its trigger: {string.Join("; ", exits)}"
+            : escapes switch
+            {
+                null => $"a player who gets here cannot get out ({positions} positions)",
+                { Count: 0 } => $"a player who gets here cannot get out, not even by blast jumping ({positions} positions)",
+                _ => $"a player who gets here cannot walk or jump out ({positions} positions); {string.Join(", ", escapes)} gets out",
+            };
 
     private static SpotReport Spot(EventCluster c, HullTraceWorld world, int marker)
     {

@@ -58,4 +58,5 @@ public sealed record SpotReport(string Kind, int Count, float[] Centre, IReadOnl
 /// <param name="Max">Its upper bound.</param>
 /// <param name="Marker">The marker number drawn for it, or 0 when it has none.</param>
 /// <param name="Escapes">For a trap, the launches whose blast jumps get out of it (empty when none do); null for other regions or when no flights were tried.</param>
-public sealed record RegionReport(int Nodes, float[] Sample, float[] Min, float[] Max, int Marker, IReadOnlyList<string>? Escapes = null);
+/// <param name="Exits">For a trap, the triggers a player standing in it touches that take them out (a teleport, a level change, a hurt trigger), described; null or empty when none.</param>
+public sealed record RegionReport(int Nodes, float[] Sample, float[] Min, float[] Max, int Marker, IReadOnlyList<string>? Escapes = null, IReadOnlyList<string>? Exits = null);
