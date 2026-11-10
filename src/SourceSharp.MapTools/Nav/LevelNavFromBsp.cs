@@ -5,6 +5,7 @@
 //
 //=============================================================================//
 
+using System.Collections.Concurrent;
 using System.Globalization;
 
 using SourceSharp.MapFormats.Bsp;
@@ -295,10 +296,16 @@ public static class LevelNavFromBsp
 
         timer?.Mark("tree");
 
+        // Costliest first, one cell at a time: a cell's time grows with the
+        // slanted solids near it, and a few cells of a map can take many
+        // times the rest; started last, one of them would hold the build
+        // while the other threads wait. Each cell is built alone into its
+        // own slot, so the order cannot change a byte.
         CellBuild?[] built = new CellBuild?[columns * rows];
+        int[] order = CostliestFirst(geometry.Brushes, columns, rows, ox, oy, cell, options.Reach);
         ParallelOptions parallel = new() { MaxDegreeOfParallelism = options.MaxDegree, CancellationToken = cancellationToken };
         int done = 0;
-        System.Threading.Tasks.Parallel.For(0, built.Length, parallel, c =>
+        System.Threading.Tasks.Parallel.ForEach(Partitioner.Create(order, EnumerablePartitionerOptions.NoBuffering), parallel, c =>
         {
             long started = timer is null ? 0 : System.Diagnostics.Stopwatch.GetTimestamp();
             NavRegion region = new(ox + ((c % columns) * cell), oy + ((c / columns) * cell), oz, n, n, nz, voxel);
@@ -418,6 +425,46 @@ public static class LevelNavFromBsp
         NavVoxelKey[] keys = grid.Keys;
         int[] brushes = [.. NavClearanceBuilder.OverhangBrushes(near).Select(b => overhangIndex[b])];
         return new CellBuild(NavColumns.Of(region, keys, records), records, brushes);
+    }
+
+    /// <summary>
+    /// The grid's cells, costliest first by an estimate: how many slanted
+    /// solids (sloped and overhanging brushes, whose tests are a voxel's
+    /// costly part) are within the reach of each cell's footprint, ties in
+    /// cell order.
+    /// </summary>
+    /// <remarks>
+    /// Only the order the cells are built in follows from it, never what a
+    /// cell holds, so an estimate is enough: a solid is counted in every
+    /// cell its footprint grown by the reach touches, a box test the cell's
+    /// own filter makes too, give or take its open and closed ends.
+    /// </remarks>
+    internal static int[] CostliestFirst(IReadOnlyList<NavBrush> brushes, int columns, int rows, double ox, double oy, double cell, double reach)
+    {
+        long[] cost = new long[columns * rows];
+        foreach (NavBrush brush in brushes)
+        {
+            if (brush.IsAxial)
+            {
+                continue;
+            }
+
+            int cx0 = Math.Clamp((int)Math.Floor((brush.MinX - reach - ox) / cell), 0, columns - 1);
+            int cx1 = Math.Clamp((int)Math.Floor((brush.MaxX + reach - ox) / cell), 0, columns - 1);
+            int cy0 = Math.Clamp((int)Math.Floor((brush.MinY - reach - oy) / cell), 0, rows - 1);
+            int cy1 = Math.Clamp((int)Math.Floor((brush.MaxY + reach - oy) / cell), 0, rows - 1);
+            for (int cy = cy0; cy <= cy1; cy++)
+            {
+                for (int cx = cx0; cx <= cx1; cx++)
+                {
+                    cost[(cy * columns) + cx]++;
+                }
+            }
+        }
+
+        int[] order = [.. Enumerable.Range(0, cost.Length)];
+        Array.Sort(order, (a, b) => cost[a] != cost[b] ? cost[b].CompareTo(cost[a]) : a.CompareTo(b));
+        return order;
     }
 
     /// <summary>The cells stitched in cell order into one level, with its jump links.</summary>
