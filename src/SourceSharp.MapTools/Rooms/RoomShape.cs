@@ -152,11 +152,8 @@ internal static class RoomShape
     /// <summary>Whether a <c>SHAP</c> section describes a room larger than one cell (its revision), which only a version 6 pack holds.</summary>
     /// <param name="section">The section.</param>
     /// <returns>True for a larger room's section.</returns>
-    public static bool IsLarge(RoomPackSectionData section)
-    {
-        ArgumentNullException.ThrowIfNull(section);
-        return section.Tag == SectionTag && IsLarge(new ArraySegment<byte>(section.Bytes.ToArray()));
-    }
+    public static bool IsLarge(RoomPackSectionData section) =>
+        section.Tag == SectionTag && IsLarge(new ArraySegment<byte>(section.Bytes.ToArray()));
 
     /// <summary>Whether a <c>SHAP</c> section's bytes are a larger room's (revision <see cref="LargeRevision"/>).</summary>
     /// <param name="bytes">The section's bytes, as stored.</param>
