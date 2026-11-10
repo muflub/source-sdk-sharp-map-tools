@@ -580,7 +580,7 @@ first 20 places that have none, the count, and fails when there is any
 ### `preview`
 
 ```sh
-ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera "x y z pitch yaw [fov] [label]"]... [-movement [class]]
+ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera "x y z pitch yaw [fov] [label]"]... [-cameras <file>]... [-no-figure] [-movement [class]]
 ```
 
 Renders a compiled map with its textures, models and baked lighting, for an
@@ -599,12 +599,17 @@ gets:
 
 The views are an overview straight down with everything above the highest
 spawn plus 200 units cut away (so roofs do not hide interiors), an
-isometric view, a player's-eye view from one spawn per team, then each
+isometric view, player's-eye views from up to four spawns (one per team
+first, then one per named group of spawns, such as arrivals from another
+level, then spawns far from those shown; a spawn a few steps along the
+same row facing the same way adds no view), then each
 `-camera`: a position, Source angles (pitch positive down), an optional
-horizontal field of view and an optional label. Every view is labelled; the
-orthographic ones get a scale bar and the others a wireframe figure the size
-of the player's hull standing in the scene (TF2's 48 x 82 for a TF2 game
-directory, else 32 x 72). Problems are drawn rather than refused: a missing
+horizontal field of view and an optional label, and each line of a
+`-cameras` file in the same form (blank lines and `#` comments skipped).
+Every view is labelled; the orthographic ones get a scale bar and the others
+a wireframe figure the size of the player's hull standing in the scene,
+ahead of the camera and right of centre (TF2's 48 x 82 for a TF2 game
+directory, else 32 x 72; `-no-figure` leaves it out). Problems are drawn rather than refused: a missing
 material is the engine's magenta checker, a missing model a magenta box,
 each with a numbered marker that `index.json` lists with its coordinates.
 
@@ -630,9 +635,19 @@ sampled every 32 units, and walks and running crouch-jumps in eight
 directions from each say where a player ends up. The result is a reach
 tile on the sheet (green: floor every team's spawns reach; yellow: only
 some teams; grey: none; red: a trap), numbered markers for traps (places
-a player can get into but not out of) and spawns that start inside a
-solid, and a `movement` section in `index.json` with the counts, the
-traps and the largest unreached islands. The profile is a TF2 soldier
+a player can get into but not out of) and stuck spawns (the marker says
+whether the spawn starts inside a brush, inside a named prop, or has no
+floor under it), and a `movement` section in `index.json` with the counts,
+the traps and the largest unreached islands. Static props collide as the
+engine sets them up: placed solid 6 with their model's `.phy`, placed
+solid 2 as their hull box, and not at all when placed solid 6 with no
+`.phy` (the engine logs "bogus solid type" and makes them non-solid; TF2's
+mining cart, track and minehead are such models). Those props are named in
+`collision_warnings` and printed as warnings. A trap whose floor touches a
+trigger that takes the player out (a `trigger_teleport`, `trigger_hurt` or
+`trigger_changelevel`, or a trigger whose touch fires a teleport or a
+level transition) is a pit the map means: its marker is a `pit` naming the
+trigger, and the trap's `exits` list it. The profile is a TF2 soldier
 for a TF2 game and the Half-Life 2 Deathmatch player otherwise; name a TF2
 class (`-movement scout`) or `hl2mp` to choose.
 

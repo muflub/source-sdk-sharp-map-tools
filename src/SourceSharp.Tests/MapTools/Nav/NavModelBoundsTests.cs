@@ -77,6 +77,28 @@ public sealed class NavModelBoundsTests
         Assert.Null(hulls["not a path\0"]);
     }
     /// <summary>
+    /// Loading <c>.phy</c> pieces tells a model with none (empty: the engine
+    /// makes a vphysics-solid prop of it non-solid) from one whose
+    /// <c>.phy</c> is unreadable (null: unknown, the hull box stands in).
+    /// </summary>
+    [Fact]
+    public async Task LoadingPiecesTellsNoPhyFromAnUnreadableOne()
+    {
+        await using ContentFileSystem content = await StudioModelWriterTests.MountAsync(new Dictionary<string, byte[]>
+        {
+            ["models/cart.mdl"] = Mdl(new Vec3(-8, -4, 0), new Vec3(8, 4, 20)),
+            ["models/odd.mdl"] = Mdl(new Vec3(-8, -4, 0), new Vec3(8, 4, 20)),
+            ["models/odd.phy"] = "not a phy"u8.ToArray(),
+        });
+
+        IReadOnlyDictionary<string, IReadOnlyList<NavPiece>?> pieces = await NavModelBounds.LoadPiecesAsync(content, ["models/cart.mdl", "models/odd.mdl", "not a path\0"]);
+
+        Assert.Empty(pieces["models/cart.mdl"]!);
+        Assert.Null(pieces["models/odd.mdl"]);
+        Assert.Null(pieces["not a path\0"]);
+    }
+
+    /// <summary>
     /// A cooked <c>.phy</c> of two posts with a gap between them: the
     /// collision pieces are the two posts' boxes, not one box over the gap.
     /// Bytes that are not a <c>.phy</c>, and a <c>.phy</c> whose solid is not

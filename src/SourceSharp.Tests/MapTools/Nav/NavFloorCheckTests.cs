@@ -164,4 +164,69 @@ public sealed class NavFloorCheckTests(BspNavMap map) : IClassFixture<BspNavMap>
         Assert.DoesNotContain(bare, AtTheProp);
         Assert.Equal(["static prop model \"models/props_test/box.mdl\" has no collision the content gives, so its 1 solid prop is left out of the check."], warnings);
     }
+
+    private static bool AtTheProp(NavBrush b) => b.MinX >= 55 && b.MaxX <= 73 && b.MinY >= 167 && b.MaxY <= 185 && b.MinZ >= 15;
+
+    private static readonly NavPiece[] Wedge =
+    [
+        new([new(-8, -8, 0), new(8, -8, 0), new(-8, 8, 0), new(8, 8, 0), new(8, -8, 32), new(8, 8, 32)],
+            [0, 1, 3, 0, 3, 2, 0, 4, 1, 2, 3, 5, 1, 4, 5, 1, 5, 3, 0, 2, 5, 0, 5, 4]),
+    ];
+
+    /// <summary>
+    /// A prop placed vphysics-solid whose model the content has but with no
+    /// <c>.phy</c> is non-solid, as the engine makes it ("bogus solid type"),
+    /// and the warning says so; it does not stand in as its hull box. TF2's
+    /// mining cart is such a model, and its box once made a spawn look stuck
+    /// inside a cart players walk through.
+    /// </summary>
+    [Fact]
+    public void AVphysicsPropWithNoPhyIsNotSolid()
+    {
+        (IReadOnlyList<NavBrush> solids, IReadOnlyList<string> warnings) = NavFloorCheck.Collision(map.Bsp, BspNavMap.Hull, _ => [], Nav3dClipClass.Player);
+
+        Assert.DoesNotContain(solids, AtTheProp);
+        string warning = Assert.Single(warnings);
+        Assert.Contains("\"models/props_test/box.mdl\"", warning, StringComparison.Ordinal);
+        Assert.Contains("non-solid", warning, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// With no <c>.phy</c> and no model either, nothing is known of the
+    /// prop: it is left out as one the content lacks, not called non-solid.
+    /// </summary>
+    [Fact]
+    public void AVphysicsPropWhoseModelIsMissingIsLacking()
+    {
+        (IReadOnlyList<NavBrush> solids, IReadOnlyList<string> warnings) = NavFloorCheck.Collision(map.Bsp, null, _ => [], Nav3dClipClass.Player);
+
+        Assert.DoesNotContain(solids, AtTheProp);
+        Assert.Contains("has no collision the content gives", Assert.Single(warnings), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A prop placed bounding-box solid collides as its hull box even when
+    /// its model has a <c>.phy</c>: the engine reads the <c>.phy</c> only for
+    /// vphysics. Any other solid type the engine makes non-solid.
+    /// </summary>
+    [Theory]
+    [InlineData("2", true)]
+    [InlineData("1", false)]
+    public async Task ABoundingBoxPropIsItsHullAndOtherSolidTypesAreNot(string solid, bool boxed)
+    {
+        BspData bsp = await BspFile.LoadAsync(new MemoryStream(await BspNavMap.CompileAsync(BspNavMap.Vmf(solid)), writable: false));
+
+        (IReadOnlyList<NavBrush> solids, IReadOnlyList<string> warnings) = NavFloorCheck.Collision(bsp, BspNavMap.Hull, _ => Wedge, Nav3dClipClass.Player);
+
+        if (boxed)
+        {
+            Assert.True(Assert.Single(solids, AtTheProp).IsAxial);
+            Assert.Empty(warnings);
+        }
+        else
+        {
+            Assert.DoesNotContain(solids, AtTheProp);
+            Assert.Contains("non-solid", Assert.Single(warnings), StringComparison.Ordinal);
+        }
+    }
 }

@@ -10,6 +10,7 @@ using System.Globalization;
 using SourceSharp.MapFormats.Bsp;
 using SourceSharp.MapFormats.Bsp.Structs;
 using SourceSharp.MapFormats.Geometry;
+using SourceSharp.MapFormats.Nav;
 using SourceSharp.MapFormats.Imaging;
 using SourceSharp.MapPreview.Cameras;
 using SourceSharp.MapPreview.Materials;
@@ -55,6 +56,12 @@ public sealed record PreviewOptions
 
     /// <summary>Gets the player hull width the scale figure is drawn at.</summary>
     public float PlayerWidth { get; init; } = 32f;
+
+    /// <summary>
+    /// Gets a value indicating whether perspective views get the scale
+    /// figure; false leaves close-ups of a subject clear.
+    /// </summary>
+    public bool ScaleFigure { get; init; } = true;
 
     /// <summary>Gets the player hull height the scale figure is drawn at.</summary>
     public float PlayerHeight { get; init; } = 72f;
@@ -214,12 +221,9 @@ public sealed class PreviewSession
             {
                 Annotator.ScaleBar(rendered.Image, view, scale);
             }
-            else
+            else if (o.ScaleFigure)
             {
-                Vec3 ahead = new Vec3(view.Forward.X, view.Forward.Y, 0);
-                float length = ahead.Length();
-                ahead = length > 0 ? ahead * (1f / length) : new Vec3(1, 0, 0);
-                Vec3 feet = planned1.Camera.Position - new Vec3(0, 0, o.Cameras.EyeHeight) + (ahead * 128f);
+                Vec3 feet = FigureFeet(planned1.Camera.Position, view.Forward, o.Cameras.EyeHeight);
                 Annotator.ScaleFigure(rendered.Image, view, rendered.Buffer, feet, o.PlayerWidth, o.PlayerHeight);
             }
 
@@ -301,7 +305,7 @@ public sealed class PreviewSession
             return (null, null, null);
         }
 
-        (HullTraceWorld world, _) = await HullTraceWorld.FromBspAsync(bsp, content, cancellationToken).ConfigureAwait(false);
+        (HullTraceWorld world, IReadOnlyList<string> collisionWarnings) = await HullTraceWorld.FromBspAsync(bsp, content, cancellationToken).ConfigureAwait(false);
         (Vec3 min, Vec3 max) = CameraPlanner.ContentBounds(scene);
         ReachSpawn[] spawns = [.. scene.Spawns.Select(s => new ReachSpawn(s.Team, s.Origin))];
         ReachabilityResult result = Reachability.Analyze(
@@ -313,7 +317,7 @@ public sealed class PreviewSession
             if (result.SpawnNodes[i] < 0)
             {
                 int number = markers.Count + 1;
-                markers.Add(new PreviewMarker(number, "stuck_spawn", $"spawn team {spawns[i].Team} stands on no floor", spawns[i].Origin));
+                markers.Add(new PreviewMarker(number, "stuck_spawn", StuckText(spawns[i].Team, world, profile, spawns[i].Origin, scene.Props), spawns[i].Origin));
                 stuck.Add(new RegionReport(0, V(spawns[i].Origin), V(spawns[i].Origin), V(spawns[i].Origin), number));
             }
         }
@@ -324,14 +328,21 @@ public sealed class PreviewSession
             ? AirborneFuzzer.Analyze(world, profile, result, airOptions, cancellationToken)
             : null;
 
+        // A trap a trigger takes the player out of (a shaft whose floor
+        // teleports, a pit that kills, a fall into a level change) is a pit
+        // the map means, not a place a player is stuck: its marker says so.
+        IReadOnlyList<ExitTrigger> exitTriggers = ExitTriggers.FromBsp(bsp);
         List<RegionReport> traps = [];
         foreach (int t in Enumerable.Range(0, result.Traps.Count).OrderByDescending(t => result.Traps[t].Nodes.Count).ThenBy(t => result.Traps[t].Nodes[0]))
         {
             NodeGroup trap = result.Traps[t];
             IReadOnlyList<string>? escapes = air?.TrapEscapes[t];
+            string[] exits = [.. exitTriggers
+                .Where(x => trap.Nodes.Any(n => x.Touches(result.Nodes[n], profile.Mins(false), profile.Maxs(false))))
+                .Select(x => x.Describe())];
             int number = markers.Count + 1;
-            markers.Add(new PreviewMarker(number, "trap", TrapText(trap.Nodes.Count, escapes), trap.Sample));
-            traps.Add(new RegionReport(trap.Nodes.Count, V(trap.Sample), V(trap.Min), V(trap.Max), number, escapes));
+            markers.Add(new PreviewMarker(number, exits.Length > 0 ? "pit" : "trap", TrapText(trap.Nodes.Count, escapes, exits), trap.Sample));
+            traps.Add(new RegionReport(trap.Nodes.Count, V(trap.Sample), V(trap.Min), V(trap.Max), number, escapes, exits));
         }
 
         List<RegionReport> islands = [.. result.Islands
@@ -375,7 +386,7 @@ public sealed class PreviewSession
             airReport = new AirborneReport(air.Trajectories, air.ExplosiveOnly.Count, problems, bonks, blastOnly);
         }
 
-        return (result, new MovementReport(profile.Name, result.Nodes.Count, reached, stuck, traps, islands, result.Islands.Count, airReport), air);
+        return (result, new MovementReport(profile.Name, result.Nodes.Count, reached, stuck, traps, islands, result.Islands.Count, airReport, collisionWarnings), air);
     }
 
     /// <summary>How many blast-only areas get a marker.</summary>
@@ -384,13 +395,85 @@ public sealed class PreviewSession
     /// <summary>How many floor positions a blast-only area needs for a marker: smaller ones are a crate top or a sill.</summary>
     private const int BlastOnlyMarkerNodes = 16;
 
-    /// <summary>A trap marker's text: whether blast jumps get out, when that was tried.</summary>
-    internal static string TrapText(int positions, IReadOnlyList<string>? escapes) => escapes switch
+    /// <summary>Where the scale figure stands in front of a perspective camera, horizontally away from it.</summary>
+    public const float FigureAhead = 128f;
+
+    /// <summary>
+    /// How far right of the view's centre line the figure stands: half the
+    /// visible half-width at <see cref="FigureAhead"/> for a 90-degree view,
+    /// so it stands beside what the view is looking at, not in front of it.
+    /// </summary>
+    public const float FigureAside = 64f;
+
+    /// <summary>
+    /// The scale figure's feet: a player's eye height below the camera,
+    /// <see cref="FigureAhead"/> along the view's horizontal heading and
+    /// <see cref="FigureAside"/> to its right (a view straight down heads
+    /// along +X).
+    /// </summary>
+    /// <param name="camera">The camera's position.</param>
+    /// <param name="forward">The view's forward direction.</param>
+    /// <param name="eyeHeight">The player's eye height.</param>
+    /// <returns>The feet.</returns>
+    internal static Vec3 FigureFeet(Vec3 camera, Vec3 forward, float eyeHeight)
     {
-        null => $"a player who gets here cannot get out ({positions} positions)",
-        { Count: 0 } => $"a player who gets here cannot get out, not even by blast jumping ({positions} positions)",
-        _ => $"a player who gets here cannot walk or jump out ({positions} positions); {string.Join(", ", escapes)} gets out",
-    };
+        Vec3 ahead = new(forward.X, forward.Y, 0);
+        float length = ahead.Length();
+        ahead = length > 0 ? ahead * (1f / length) : new Vec3(1, 0, 0);
+        Vec3 right = new(ahead.Y, -ahead.X, 0);
+        return camera - new Vec3(0, 0, eyeHeight) + (ahead * FigureAhead) + (right * FigureAside);
+    }
+
+    /// <summary>
+    /// A stuck spawn's marker text: why no floor position takes it. Either
+    /// the player's box starts inside something, named when it is a prop
+    /// (the prop nearest the solid it hit), or it is clear but has no floor
+    /// under it within a step.
+    /// </summary>
+    /// <param name="team">The spawn's team.</param>
+    /// <param name="world">The collision.</param>
+    /// <param name="profile">The player, for the standing box.</param>
+    /// <param name="origin">The spawn's origin.</param>
+    /// <param name="props">The map's props, to name one the box is inside.</param>
+    /// <returns>The text.</returns>
+    internal static string StuckText(int team, HullTraceWorld world, MovementProfile profile, Vec3 origin, IReadOnlyList<PreviewProp> props)
+    {
+        HullTrace inside = world.Trace(origin, origin, profile.Mins(false), profile.Maxs(false));
+        if (!inside.StartSolid || inside.Brush < 0)
+        {
+            return $"spawn team {team} has no floor under it";
+        }
+
+        // A prop's pieces lie about its origin; the prop nearest the hit
+        // solid, with its origin no more than a player's width outside it,
+        // is the one the box is in.
+        NavBrush solid = world.Solids[inside.Brush];
+        const double reach = 48;
+        PreviewProp? prop = props
+            .Where(p => p.Origin.X >= solid.MinX - reach && p.Origin.X <= solid.MaxX + reach
+                && p.Origin.Y >= solid.MinY - reach && p.Origin.Y <= solid.MaxY + reach
+                && p.Origin.Z >= solid.MinZ - reach && p.Origin.Z <= solid.MaxZ + reach)
+            .OrderBy(p => (p.Origin - origin).LengthSquared())
+            .FirstOrDefault();
+        return prop is null
+            ? $"spawn team {team} starts inside a brush"
+            : $"spawn team {team} starts inside the prop {prop.Model}";
+    }
+
+    /// <summary>
+    /// A trap marker's text: the triggers that take a player out, when it
+    /// has any (then it is a pit the map means), else whether blast jumps
+    /// get out, when that was tried.
+    /// </summary>
+    internal static string TrapText(int positions, IReadOnlyList<string>? escapes, IReadOnlyList<string>? exits = null) =>
+        exits is { Count: > 0 }
+            ? $"a pit no one walks or jumps out of ({positions} positions), left by its trigger: {string.Join("; ", exits)}"
+            : escapes switch
+            {
+                null => $"a player who gets here cannot get out ({positions} positions)",
+                { Count: 0 } => $"a player who gets here cannot get out, not even by blast jumping ({positions} positions)",
+                _ => $"a player who gets here cannot walk or jump out ({positions} positions); {string.Join(", ", escapes)} gets out",
+            };
 
     private static SpotReport Spot(EventCluster c, HullTraceWorld world, int marker)
     {

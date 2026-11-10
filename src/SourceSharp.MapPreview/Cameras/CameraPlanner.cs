@@ -78,7 +78,8 @@ public static class CameraPlanner
         foreach ((PreviewSpawn spawn, int n) in PickSpawns(scene.Spawns, o.MaxSpawns).Select((s, i) => (s, i)))
         {
             string team = spawn.Team switch { 2 => "red", 3 => "blue", 0 => string.Empty, _ => "team " + spawn.Team.ToString(CultureInfo.InvariantCulture) };
-            string description = $"spawn {spawn.ClassName} {team}".TrimEnd() + $" at {Format(spawn.Origin)} yaw {spawn.Yaw:0}";
+            string named = spawn.Name.Length > 0 ? $" \"{spawn.Name}\"" : string.Empty;
+            string description = $"spawn {spawn.ClassName}{named} {team}".TrimEnd() + $" at {Format(spawn.Origin)} yaw {spawn.Yaw:0}";
             PreviewCamera camera = PreviewCamera.FromAngles(
                 $"spawn{n + 1}",
                 CameraKind.Spawn,
@@ -197,9 +198,22 @@ public static class CameraPlanner
     }
 
     /// <summary>
-    /// Picks spawns to view: the first of each team in lump order, then more
-    /// in lump order until the cap, so every team is shown before any team
-    /// is shown twice.
+    /// How far apart two spawns facing the same way must stand for both to
+    /// get a view: spawns are laid out in rows a player width or two apart,
+    /// and four views from one row show the same street four times.
+    /// </summary>
+    public const float SpawnViewSpread = 384f;
+
+    /// <summary>How far apart in yaw two spawns' views must look to count as different views from the same place.</summary>
+    public const float SpawnViewTurn = 45f;
+
+    /// <summary>
+    /// Picks spawns to view, so the views show different places: the first
+    /// of each team in lump order; then the first of each named group of a
+    /// team not yet shown (a map's arrival spawns, say); then, while under
+    /// the cap, the spawn farthest from those picked, as long as it does not
+    /// stand within <see cref="SpawnViewSpread"/> of a picked spawn facing
+    /// within <see cref="SpawnViewTurn"/> of the same way.
     /// </summary>
     /// <param name="spawns">The map's spawns.</param>
     /// <param name="max">The most to pick.</param>
@@ -217,20 +231,49 @@ public static class CameraPlanner
             }
         }
 
+        HashSet<(int, string)> groups = [.. picked.Select(s => (s.Team, s.Name))];
         foreach (PreviewSpawn spawn in spawns)
         {
-            if (picked.Count >= max)
-            {
-                break;
-            }
-
-            if (!picked.Contains(spawn))
+            if (picked.Count < max && groups.Add((spawn.Team, spawn.Name)))
             {
                 picked.Add(spawn);
             }
         }
 
+        while (picked.Count < max)
+        {
+            PreviewSpawn? next = null;
+            float best = -1;
+            foreach (PreviewSpawn spawn in spawns)
+            {
+                if (picked.Contains(spawn) || picked.Any(p => SameView(p, spawn)))
+                {
+                    continue;
+                }
+
+                float nearest = picked.Count == 0 ? float.MaxValue : picked.Min(p => (p.Origin - spawn.Origin).LengthSquared());
+                if (nearest > best)
+                {
+                    (next, best) = (spawn, nearest);
+                }
+            }
+
+            if (next is not { } chosen)
+            {
+                break;
+            }
+
+            picked.Add(chosen);
+        }
+
         return picked;
+    }
+
+    /// <summary>Whether two spawns' views would show nearly the same thing: close together and facing nearly the same way.</summary>
+    private static bool SameView(PreviewSpawn a, PreviewSpawn b)
+    {
+        float turn = MathF.Abs(((a.Yaw - b.Yaw) % 360f + 540f) % 360f - 180f);
+        return (a.Origin - b.Origin).LengthSquared() < SpawnViewSpread * SpawnViewSpread && turn < SpawnViewTurn;
     }
 
     private static string Format(Vec3 v) =>

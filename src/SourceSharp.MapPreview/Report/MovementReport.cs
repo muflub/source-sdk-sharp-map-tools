@@ -16,6 +16,11 @@ namespace SourceSharp.MapPreview.Report;
 /// <param name="Islands">Floor no spawn reaches, largest first (the ten largest).</param>
 /// <param name="IslandCount">How many islands there are in all.</param>
 /// <param name="Airborne">The airborne fuzz, when it ran.</param>
+/// <param name="CollisionWarnings">
+/// What the collision could not take as the engine would: a static prop
+/// model the content lacks, or one placed solid with no collision model,
+/// which the engine makes non-solid.
+/// </param>
 public sealed record MovementReport(
     string Profile,
     int Nodes,
@@ -24,7 +29,8 @@ public sealed record MovementReport(
     IReadOnlyList<RegionReport> Traps,
     IReadOnlyList<RegionReport> Islands,
     int IslandCount,
-    AirborneReport? Airborne = null);
+    AirborneReport? Airborne = null,
+    IReadOnlyList<string>? CollisionWarnings = null);
 
 /// <summary>What the airborne fuzz found.</summary>
 /// <param name="Trajectories">Flights run.</param>
@@ -52,4 +58,5 @@ public sealed record SpotReport(string Kind, int Count, float[] Centre, IReadOnl
 /// <param name="Max">Its upper bound.</param>
 /// <param name="Marker">The marker number drawn for it, or 0 when it has none.</param>
 /// <param name="Escapes">For a trap, the launches whose blast jumps get out of it (empty when none do); null for other regions or when no flights were tried.</param>
-public sealed record RegionReport(int Nodes, float[] Sample, float[] Min, float[] Max, int Marker, IReadOnlyList<string>? Escapes = null);
+/// <param name="Exits">For a trap, the triggers a player standing in it touches that take them out (a teleport, a level change, a hurt trigger), described; null or empty when none.</param>
+public sealed record RegionReport(int Nodes, float[] Sample, float[] Min, float[] Max, int Marker, IReadOnlyList<string>? Escapes = null, IReadOnlyList<string>? Exits = null);

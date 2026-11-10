@@ -13,6 +13,7 @@ using SourceSharp.MapFormats.Bsp;
 using SourceSharp.MapPreview;
 using SourceSharp.MapPreview.Cameras;
 using SourceSharp.MapPreview.Render;
+using SourceSharp.MapPreview.Report;
 using SourceSharp.MapPreview.Scene;
 using SourceSharp.MapTools.Io;
 using SourceSharp.MapTools.Movement;
@@ -20,7 +21,7 @@ using SourceSharp.MapTools.Movement;
 namespace SourceSharp.MapCompile;
 
 /// <summary>
-/// <c>ssmap preview &lt;map.bsp&gt; [-game &lt;dir&gt;] [-out &lt;dir&gt;] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure X] [-threads N]</c>:
+/// <c>ssmap preview &lt;map.bsp&gt; [-game &lt;dir&gt;] [-out &lt;dir&gt;] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure X] [-threads N] [-camera ...] [-cameras file] [-no-figure]</c>:
 /// renders a compiled map's standard views with its textures, models and
 /// baked lighting, and writes a contact sheet and a JSON report.
 /// </summary>
@@ -44,7 +45,7 @@ namespace SourceSharp.MapCompile;
 public static class PreviewCommand
 {
     private const string Usage =
-        "usage: ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera \"x y z pitch yaw [fov] [label]\"]... [-movement [class]] [-airborne <flights>]";
+        "usage: ssmap preview <map.bsp> [-game <dir>] [-out <dir>] [-size WxH] [-individual] [-no-sheet] [-hdr] [-tools] [-exposure <x>] [-threads <n>] [-camera \"x y z pitch yaw [fov] [label]\"]... [-cameras <file>]... [-no-figure] [-movement [class]] [-airborne <flights>]";
 
     /// <summary>Runs the command.</summary>
     /// <param name="disk">Where the map, the game and the output live.</param>
@@ -76,6 +77,28 @@ public static class PreviewCommand
         {
             await output.WriteLineAsync(Usage).ConfigureAwait(false);
             return Program.ExitUsage;
+        }
+
+        foreach (string file in parsed.CameraFiles)
+        {
+            string fileText = Path.GetFullPath(file);
+            string? error;
+            try
+            {
+                error = VPath.TryCreate(fileText, out VPath filePath)
+                    ? AddCameras(await ReadTextAsync(disk, filePath, cancellationToken).ConfigureAwait(false), parsed.Cameras)
+                    : "not a path";
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                error = exception.Message;
+            }
+
+            if (error is not null)
+            {
+                await output.WriteLineAsync($"ssmap preview: {fileText}: {error}").ConfigureAwait(false);
+                return Program.ExitUsage;
+            }
         }
 
         string mapName = Path.GetFileNameWithoutExtension(mapText);
@@ -143,6 +166,7 @@ public static class PreviewCommand
                 return RoomCommands.ExitFailed;
             }
 
+            await WriteWarningsAsync(output, result.Report).ConfigureAwait(false);
             await output.WriteLineAsync(string.Create(
                 CultureInfo.InvariantCulture,
                 $"ssmap preview: {result.Report.Cameras.Count} views, {result.Report.Markers.Count} markers, "
@@ -151,6 +175,25 @@ public static class PreviewCommand
         }
 
         return Program.ExitSuccess;
+    }
+
+    /// <summary>
+    /// Writes the report's warnings a map's author should act on, one line
+    /// each: the collision the movement check could not take as the engine
+    /// would (a solid static prop with no collision model, which the engine
+    /// makes non-solid; a model the content lacks).
+    /// </summary>
+    /// <param name="output">Where the lines go.</param>
+    /// <param name="report">The preview's report.</param>
+    /// <returns>A task that completes when the lines are written.</returns>
+    public static async Task WriteWarningsAsync(TextWriter output, PreviewReport report)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(report);
+        foreach (string warning in report.Checks.Movement?.CollisionWarnings ?? [])
+        {
+            await output.WriteLineAsync($"ssmap preview: warning: {warning}").ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -178,6 +221,7 @@ public static class PreviewCommand
             Individual = a.Individual || !a.Sheet,
             Scene = new PreviewSceneOptions { Hdr = a.Hdr, IncludeTools = a.Tools },
             Render = RenderSettings.Default with { Exposure = a.Exposure, MaxDegreeOfParallelism = a.Threads },
+            ScaleFigure = a.Figure,
         };
         if (a.Size is { } size)
         {
@@ -260,6 +304,14 @@ public static class PreviewCommand
             {
                 a.Cameras.Add(camera);
             }
+            else if (Is(arg, "cameras") && hasValue)
+            {
+                a.CameraFiles.Add(args[++i]);
+            }
+            else if (Is(arg, "no-figure"))
+            {
+                a.Figure = false;
+            }
             else if (Is(arg, "movement"))
             {
                 // An optional class follows: a TF2 class name, or hl2mp.
@@ -308,6 +360,44 @@ public static class PreviewCommand
 
         parsed = a;
         return true;
+    }
+
+    /// <summary>
+    /// Adds a camera file's cameras: one per line in <c>-camera</c>'s form,
+    /// numbered on from those already given; blank lines and lines starting
+    /// <c>#</c> are skipped.
+    /// </summary>
+    /// <param name="text">The file's text.</param>
+    /// <param name="cameras">The cameras so far, added to.</param>
+    /// <returns>Null when every line parsed, else what is wrong and on which line.</returns>
+    public static string? AddCameras(string text, List<PreviewCamera> cameras)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(cameras);
+        string[] lines = text.Split('\n');
+        for (int line = 0; line < lines.Length; line++)
+        {
+            string trimmed = lines[line].Trim();
+            if (trimmed.Length == 0 || trimmed.StartsWith('#'))
+            {
+                continue;
+            }
+
+            if (!TryParseCamera(trimmed, cameras.Count + 1, out PreviewCamera? camera))
+            {
+                return string.Create(CultureInfo.InvariantCulture, $"line {line + 1} is not \"x y z pitch yaw [fov] [label]\": {trimmed}");
+            }
+
+            cameras.Add(camera);
+        }
+
+        return null;
+    }
+
+    private static async Task<string> ReadTextAsync(IFileSystem disk, VPath path, CancellationToken cancellationToken)
+    {
+        using System.Buffers.IMemoryOwner<byte> bytes = await disk.ReadAllAsync(path, cancellationToken).ConfigureAwait(false);
+        return System.Text.Encoding.UTF8.GetString(bytes.Memory.Span);
     }
 
     /// <summary>
@@ -436,6 +526,10 @@ public static class PreviewCommand
         public bool Tools { get; set; }
 
         public List<PreviewCamera> Cameras { get; } = [];
+
+        public List<string> CameraFiles { get; } = [];
+
+        public bool Figure { get; set; } = true;
 
         public bool Movement { get; set; }
 
