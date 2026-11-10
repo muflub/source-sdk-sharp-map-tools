@@ -977,7 +977,7 @@ public static partial class RoomCommands
                         throw new IOException($"\"{path}\" is not a usable path");
                     }
 
-                    files.Add((levelPath, LevelYaml.Write(level, LevelGenerator.Header(own, level))));
+                    files.Add((levelPath, LevelYaml.Write(level, LevelGenerator.Header(own, level, definitions.Count(d => d.IsLarge)))));
                 }
 
                 text = string.Empty;
@@ -1000,7 +1000,7 @@ public static partial class RoomCommands
                 LevelGrid level = finish(LevelGenerator.Generate(
                     definitions, options, name, library, budget,
                     new LayoutTransitions(roles) { NoUp = noUp, NoDown = noDown, MinDistance = distance }).WithTransitions(transitions));
-                text = LevelYaml.Write(level, LevelGenerator.Header(options, level));
+                text = LevelYaml.Write(level, LevelGenerator.Header(options, level, definitions.Count(d => d.IsLarge)));
             }
         }
         catch (PackKeyException exception)

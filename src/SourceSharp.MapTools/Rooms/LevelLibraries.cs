@@ -244,6 +244,14 @@ public static class LevelLibraries
                 continue;
             }
 
+            // A + names no room: it is checked against the footprints when
+            // the rooms are known (LevelGrid.ToLayout).
+            if (cell.IsCovered)
+            {
+                cells[c] = cell;
+                continue;
+            }
+
             string resolved;
             if (libraries is null)
             {
@@ -284,7 +292,7 @@ public static class LevelLibraries
         HashSet<string> keys = new(libraries.Select(l => l.Key), StringComparer.Ordinal);
         LevelCell?[] cells = [.. resolved.Cells.Select(cell =>
         {
-            if (cell is null || !TrySplit(cell.Room, out string key, out string room))
+            if (cell is null || cell.IsCovered || !TrySplit(cell.Room, out string key, out string room))
             {
                 return cell;
             }

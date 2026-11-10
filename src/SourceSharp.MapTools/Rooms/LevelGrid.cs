@@ -20,6 +20,17 @@ public sealed record LevelCell(string Room, int Rotation, int Line = 0, int Colu
     public string Where => Line > 0
         ? string.Create(CultureInfo.InvariantCulture, $"line {Line}, column {Column}: ")
         : string.Empty;
+
+    /// <summary>
+    /// The mark of a cell a larger room covers besides its anchor (the rooms
+    /// design, 17.8 and O29): <c>+</c>. Not a room name (names start with a
+    /// letter, a digit or <c>_</c>), so a build that knows no larger rooms
+    /// refuses a level holding one with its room-name message.
+    /// </summary>
+    public const string CoveredMark = "+";
+
+    /// <summary>Whether the cell is a <see cref="CoveredMark"/>: part of a larger room placed elsewhere, not a placement.</summary>
+    public bool IsCovered => Room == CoveredMark;
 }
 
 /// <summary>One library of a level that names several (<c>libraries:</c>): its key and its VMF.</summary>
@@ -178,7 +189,7 @@ public sealed class LevelGrid
             {
                 for (int x = 0; x < Columns; x++)
                 {
-                    if (this[x, y] is { } cell)
+                    if (this[x, y] is { IsCovered: false } cell)
                     {
                         yield return (x, y, cell);
                     }
@@ -210,12 +221,27 @@ public sealed class LevelGrid
         {
             RoomDefinition definition = Definition(rooms, cell);
             RoomPlacement placement = new(cell.Room, x, y, cell.Rotation) { CellsX = definition.CellsX, CellsY = definition.CellsY };
+            CheckFootprint(cell, placement);
             foreach ((int cx, int cy, _, _) in placement.Covered())
             {
                 covered[(cx, cy)] = placed.Count;
             }
 
             placed.Add((placement, definition));
+        }
+
+        // Every + is some larger room's (CheckFootprint held each room's
+        // other cells to + already).
+        for (int y = 0; y < Rows; y++)
+        {
+            for (int x = 0; x < Columns; x++)
+            {
+                if (this[x, y] is { IsCovered: true } mark && !covered.ContainsKey((x, y)))
+                {
+                    throw new LinkException(
+                        $"{mark.Where}{LevelCell.CoveredMark} is in no room's footprint; {LevelCell.CoveredMark} marks the cells a larger room covers besides its south-west one.");
+                }
+            }
         }
 
         List<RoomInstance> instances = [];
@@ -257,6 +283,44 @@ public sealed class LevelGrid
         }
 
         return new LevelLayout(Name, cellSize, kit, instances) { Columns = Columns, Rows = Rows, Transitions = Transitions };
+    }
+
+    /// <summary>
+    /// Holds a placed room's footprint to the grid (17.8): every cell it
+    /// covers is on the grid, and each one but its anchor (the south-west
+    /// cell, where the room is written) holds <see cref="LevelCell.CoveredMark"/>.
+    /// A room of one cell covers its anchor alone and passes.
+    /// </summary>
+    private void CheckFootprint(LevelCell cell, RoomPlacement placement)
+    {
+        if (!placement.IsLarge)
+        {
+            return;
+        }
+
+        if (placement.CellX + placement.SpanCellsX > Columns || placement.CellY + placement.SpanCellsY > Rows)
+        {
+            throw new LinkException(string.Create(CultureInfo.InvariantCulture,
+                $"{cell.Where}room {placement.Room} at cell ({placement.CellX}, {placement.CellY}) turned {placement.NormalizedRotation * 90}"
+                + $" covers {placement.SpanCellsX} x {placement.SpanCellsY} cells and runs off the {Rows}x{Columns} grid."));
+        }
+
+        foreach ((int x, int y, _, _) in placement.Covered())
+        {
+            if ((x, y) == (placement.CellX, placement.CellY))
+            {
+                continue;
+            }
+
+            if (this[x, y] is not { IsCovered: true } other)
+            {
+                string token = this[x, y] is { } holds ? holds.Room : LevelYaml.Empty;
+                throw new LinkException(string.Create(CultureInfo.InvariantCulture,
+                    $"{(this[x, y] ?? cell).Where}room {placement.Room} at cell ({placement.CellX}, {placement.CellY}) covers cell ({x}, {y}), which holds {token}; write {LevelCell.CoveredMark} there."));
+            }
+
+            _ = other;
+        }
     }
 
     private static RoomDefinition Definition(Func<string, RoomDefinition?> rooms, LevelCell cell) =>

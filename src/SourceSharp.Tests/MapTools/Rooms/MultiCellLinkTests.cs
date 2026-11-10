@@ -46,7 +46,7 @@ public sealed class MultiCellLinkTests
     {
         VmfDocument library = RoomHarness.LibraryVmf(Hall, Hub);
         RoomLibrary rooms = await RoomPropHarness.CompileAsync(library);
-        LevelGrid level = RoomHeightHarness.Level("hub, hub, hub", "~, ~, hub", $"hall@{rotation}, ~, hub");
+        LevelGrid level = RoomHeightHarness.Level("hub, hub, hub", "+, +, hub", $"hall@{rotation}, +, hub");
         LinkedLevel linked = await RoomPropHarness.LinkAsync(rooms, level);
         BspData flat = await RoomHeightHarness.CompileFlatAsync(library, level);
 
@@ -151,7 +151,7 @@ public sealed class MultiCellLinkTests
     {
         VmfDocument library = RoomHarness.LibraryVmf(Hall, Gallery, Hub);
         RoomLibrary rooms = await RoomPropHarness.CompileAsync(library);
-        LevelGrid level = RoomHeightHarness.Level("~, ~, ~", "gallery, hall, ~");
+        LevelGrid level = RoomHeightHarness.Level("+, +, +", "gallery, hall, +");
         LevelLayout layout = RoomPropHarness.Layout(rooms, level);
         Assert.Equal([("east1", "west1")], layout.Rooms.Single(r => r.Placement.Room == "gallery").Joints);
         Assert.Equal([("west1", "east1")], layout.Rooms.Single(r => r.Placement.Room == "hall").Joints);
@@ -166,6 +166,66 @@ public sealed class MultiCellLinkTests
             Assert.Equal(1f, probe.Trace(new Vec3(128, 256 + 128, 60), new Vec3(256 + 128, 256 + 128, 60), (int)BrushContents.Solid));
             Assert.True(probe.Trace(new Vec3(128, 128, 60), new Vec3(256 + 128, 128, 60), (int)BrushContents.Solid) < 1f);
         }
+    }
+
+    // ---- the level file -----------------------------------------------------------------------
+
+    /// <summary>
+    /// A larger room is written in its anchor cell and <c>+</c> in every
+    /// other cell it covers; the file reads and writes back to its own text,
+    /// and the layout places the room once, covering its cells.
+    /// </summary>
+    [Fact]
+    public void ALevelFileMarksTheCellsALargerRoomCovers()
+    {
+        string text = RoomHarness.LevelText("rooms.vmf", "+, +, hub", "hall@90, +, hub");
+        LevelGrid level = LevelYaml.Parse(text, "level");
+        string written = LevelYaml.Write(level);
+        Assert.Contains("  - [hall@90, +, hub]\n", written, StringComparison.Ordinal);
+        Assert.Equal(written, LevelYaml.Write(LevelYaml.Parse(written, "level")));
+        Assert.Equal(["hall", "hub", "hub"], level.Placed.Select(p => p.Cell.Room));
+        Assert.True(level[1, 1]!.IsCovered);
+
+        LevelLayout layout = level.ToLayout(name => name == "hall" ? Hall : Hub, 256, RoomHarness.WalkableKit);
+        RoomPlacement hall = layout.Rooms[0].Placement;
+        Assert.Equal((2, 2, 1), (hall.CellsX, hall.CellsY, hall.Rotation));
+        Assert.Equal([(0, 0), (0, 1), (1, 0), (1, 1)], hall.Covered().Select(c => (c.X, c.Y)).Order());
+    }
+
+    /// <summary>
+    /// Every way a level file can mark a larger room's cells wrongly is
+    /// refused with the rooms design's 17.3 texts, the cell's line and column
+    /// in front: a <c>+</c> with a turn, a <c>+</c> no room covers, a covered
+    /// cell holding a room or nothing, and a footprint running off the grid.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { "+, +@90, hub", "hall, +, hub" }, "line 5, column 9: \"+@90\" is not a cell; + marks a cell a larger room covers, alone, with no rotation.")]
+    [InlineData(new[] { "+, +, +", "hall, +, hub" }, "line 5, column 12: + is in no room's footprint; + marks the cells a larger room covers besides its south-west one.")]
+    [InlineData(new[] { "+, hub, hub", "hall, +, hub" }, "line 5, column 9: room hall at cell (0, 0) covers cell (1, 1), which holds hub; write + there.")]
+    [InlineData(new[] { "+, ~, hub", "hall, +, hub" }, "line 6, column 6: room hall at cell (0, 0) covers cell (1, 1), which holds ~; write + there.")]
+    [InlineData(new[] { "hub, hub, hub", "hub, hub, hall" }, "line 6, column 16: room hall at cell (2, 0) turned 0 covers 2 x 2 cells and runs off the 2x3 grid.")]
+    public void AMisMarkedFootprintIsRefused(string[] rows, string message)
+    {
+        Exception refused = Assert.ThrowsAny<Exception>(() =>
+            LevelYaml.Parse(RoomHarness.LevelText("rooms.vmf", rows), "level").ToLayout(name => name == "hall" ? Hall : Hub, 256, RoomHarness.WalkableKit));
+        Assert.Equal(message, refused.Message);
+    }
+
+    /// <summary>
+    /// The generator lays out rooms of one cell only: a library holding a
+    /// larger room generates the level it generates without it, and the
+    /// header says how many it left out.
+    /// </summary>
+    [Fact]
+    public void TheGeneratorLeavesLargerRoomsOut()
+    {
+        RoomDefinition[] small = [Hub, RoomHarness.WalkableRoom("end", RoomFacing.PositiveX)];
+        LevelGeneratorOptions options = new(3, 3, 7);
+        LevelGrid without = LevelGenerator.Generate(small, options, "level", "rooms.vmf", null);
+        LevelGrid with = LevelGenerator.Generate([Hub, Hall, small[1]], options, "level", "rooms.vmf", null);
+        Assert.Equal(LevelYaml.Write(without), LevelYaml.Write(with));
+        Assert.Equal(LevelGenerator.Header(options, without), LevelGenerator.Header(options, with, 0));
+        Assert.EndsWith(", 1 room(s) larger than one cell left out", LevelGenerator.Header(options, with, 1)[0], StringComparison.Ordinal);
     }
 
     /// <summary>Walks model 0's tree from its head: every node is reached exactly once (no node has two parents); returns the count.</summary>
