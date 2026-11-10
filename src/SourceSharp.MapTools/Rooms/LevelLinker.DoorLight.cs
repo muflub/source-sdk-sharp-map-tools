@@ -220,7 +220,7 @@ public static partial class LevelLinker
         (int Leaf, Vec3 Position)[] samples = RoomDoorLight.SamplePositions(own, leaves[name]);
         DoorLightTerms terms = new() { Ambient = new Vec3[]?[samples.Length] };
         float cell = room.Definition.CellSize, wall = room.Definition.Kit.Depth;
-        double[] nodeFlux = DoorLightMath.NodeFlux(room.Definition.Kit.Width, room.Definition.Kit.Height, cell, wall);
+        double[] nodeFlux = DoorLightMath.NodeFlux(room.Definition.Kit.Width, room.Definition.Kit.Height, cell, wall, DoorLightMath.Lift(room.Definition.Kit, cell));
         foreach ((int mine, int a, int theirs) in joints)
         {
             ResolvedPlacement sender = resolved[a];
@@ -472,6 +472,7 @@ public static partial class LevelLinker
         (int Leaf, Vec3 Position)[] samples)
     {
         float cell = room.Definition.CellSize, wall = room.Definition.Kit.Depth;
+        float lift = DoorLightMath.Lift(room.Definition.Kit, cell);
         Span<Vec3> shares = stackalloc Vec3[DoorLightMath.EmitterCount];
         shares.Clear();
         foreach (DoorSource source in sources)
@@ -484,7 +485,7 @@ public static partial class LevelLinker
             double flux = DoorLightMath.SourceFlux(source with { Intensity = new Vec3(1, 1, 1) }, to.Width, to.Height, to.Depth);
             if (flux > 0)
             {
-                DoorLightMath.Project(source, source.Intensity * (float)flux, nodeFlux, cell, wall, shares);
+                DoorLightMath.Project(source, source.Intensity * (float)flux, nodeFlux, cell, wall, shares, lift);
             }
         }
 

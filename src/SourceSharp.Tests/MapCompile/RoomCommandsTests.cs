@@ -1438,6 +1438,24 @@ public sealed class RoomCommandsTests
         Assert.Equal($"  east \"front\": ({pitch + 240}, 80, 16) to ({pitch + 256}, 176, 240), 96 wide x 224 high x 16 deep", lines[7]);
     }
 
+    /// <summary>
+    /// A kit whose doors stand on the floor (<c>door_sill floor</c>) says so
+    /// after each door's size; its plug box runs from the wall depth up by
+    /// the door.
+    /// </summary>
+    [Fact]
+    public async Task AFloorDoorIsListedAsOnTheFloor()
+    {
+        SocketKit floor = new(96, 128, 16) { Sill = DoorSill.Floor };
+        InMemoryFileSystem fs = Game(new RoomDefinition("hub", RoomHarness.Cell, floor, [new RoomSocket(RoomFacing.PositiveX, "east")]));
+        using StringWriter output = new();
+
+        Assert.Equal(Program.ExitSuccess, await RoomCommands.RunRoomsAsync(fs, ["/game/maps/rooms.vmf"], output));
+
+        string[] lines = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal("  east: (240, 80, 16) to (256, 176, 144), 96 wide x 128 high x 16 deep, on the floor", lines[2]);
+    }
+
     /// <summary>Anything but one library path is a usage error.</summary>
     [Theory]
     [InlineData("")]

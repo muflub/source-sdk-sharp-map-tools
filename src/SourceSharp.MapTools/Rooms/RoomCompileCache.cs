@@ -202,6 +202,13 @@ public static class RoomCacheKey
             fold.Text(room.MapLabel);
         }
 
+        // A kit that stands its doors on the floor, folded only for such a
+        // kit, so every centred kit's room keeps its key and its row.
+        if (definition.Kit.Sill == DoorSill.Floor)
+        {
+            fold.Text("door_sill/floor");
+        }
+
         // A room's own height (17.6), folded only for a shaped room, so a
         // cube room keeps the key, and the cache row, it always had.
         if (definition.IsShaped)

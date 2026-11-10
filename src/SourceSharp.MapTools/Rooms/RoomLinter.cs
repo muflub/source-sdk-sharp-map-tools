@@ -229,7 +229,8 @@ public static class RoomLinter
                     $"rule {(int)RoomRule.SocketsFromFixedKit} ({nameof(RoomRule.SocketsFromFixedKit)}):"
                     + $" room {definition.Name} has a door-plug (trigger) brush at ({Fmt(box.Mins)})-({Fmt(box.Maxs)})"
                     + " that is not the kit's plug on any of its socket walls: a plug fills the"
-                    + $" {Fmt1(definition.Kit.Width)} by {Fmt1(definition.Kit.Height)} opening centred on its wall,"
+                    + $" {Fmt1(definition.Kit.Width)} by {Fmt1(definition.Kit.Height)} opening"
+                    + (definition.Kit.Sill == DoorSill.Floor ? " standing on the floor of its wall," : " centred on its wall,")
                     + $" {Fmt1(definition.Kit.Depth)} deep.");
             }
         }
@@ -637,18 +638,18 @@ public static class RoomLinter
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        (float u0, float v0, float u1, float v1) = definition.Kit.OpeningUnit(cell);
+        (float u0, _, float u1, _) = definition.Kit.OpeningUnit(cell);
         float depth = definition.Kit.Depth;
 
         // The plug is INWARD from the face, its outer side exactly on the cell
         // face, so the room's brushes never cross the face at all (guarantee 1
         // stays absolute) and two jointed rooms' plugs meet face to face in the
         // wall — which is what keeps a legal assembly sealed before any door is
-        // hung.
+        // hung. Its height is the kit's opening as the kit stands it
+        // (SocketKit.OpeningZ: centred, or on the floor).
         float nu0 = u0 * cell;
         float nu1 = u1 * cell;
-        float nv0 = v0 * cell;
-        float nv1 = v1 * cell;
+        (float nv0, float nv1) = definition.Kit.OpeningZ(cell);
 
         return socket.Facing switch
         {

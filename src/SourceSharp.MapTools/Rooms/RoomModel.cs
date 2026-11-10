@@ -219,11 +219,10 @@ public static class RoomModel
             return [(0f, 0f, cell, top)];
         }
 
-        (float u0, float v0, float u1, float v1) = definition.Kit.OpeningUnit(cell);
+        (float u0, _, float u1, _) = definition.Kit.OpeningUnit(cell);
         float a0 = u0 * cell;
-        float b0 = v0 * cell;
         float a1 = u1 * cell;
-        float b1 = v1 * cell;
+        (float b0, float b1) = definition.Kit.OpeningZ(cell);
 
         List<(float, float, float, float)> bands = [];
         if (a0 > 0.001f)

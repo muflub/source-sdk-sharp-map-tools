@@ -540,7 +540,7 @@ public static class LevelLibraries
             if (KitDifference(x.Kit, y.Kit) is { } kit)
             {
                 throw new LinkException(
-                    $"libraries {level.Key} ({level.Path}) and {b.Key} ({b.Path}) have different door kits: {kit.Key} {Format(kit.X)} against {Format(kit.Y)};"
+                    $"libraries {level.Key} ({level.Path}) and {b.Key} ({b.Path}) have different door kits: {kit.Key} {kit.X} against {kit.Y};"
                     + " the rooms of a level join through one kit.");
             }
         }
@@ -991,11 +991,19 @@ public static class LevelLibraries
     }
 
     /// <summary>The first of the kit's keys two kits differ in, in the order the library writes them.</summary>
-    private static (string Key, float X, float Y)? KitDifference(SocketKit x, SocketKit y) =>
-        x.Width != y.Width ? (RoomLibraryVmf.DoorWidthKey, x.Width, y.Width)
-        : x.Height != y.Height ? (RoomLibraryVmf.DoorHeightKey, x.Height, y.Height)
-        : x.Depth != y.Depth ? (RoomLibraryVmf.WallDepthKey, x.Depth, y.Depth)
+    /// <remarks>
+    /// The sill comes last, after the three numbers, as the key does on a
+    /// marker; it is spelt as the key's values are (<c>centre</c>,
+    /// <c>floor</c>), so the message names what each library wrote.
+    /// </remarks>
+    private static (string Key, string X, string Y)? KitDifference(SocketKit x, SocketKit y) =>
+        x.Width != y.Width ? (RoomLibraryVmf.DoorWidthKey, Format(x.Width), Format(y.Width))
+        : x.Height != y.Height ? (RoomLibraryVmf.DoorHeightKey, Format(x.Height), Format(y.Height))
+        : x.Depth != y.Depth ? (RoomLibraryVmf.WallDepthKey, Format(x.Depth), Format(y.Depth))
+        : x.Sill != y.Sill ? (RoomLibraryVmf.DoorSillKey, SillName(x.Sill), SillName(y.Sill))
         : null;
+
+    private static string SillName(DoorSill sill) => sill == DoorSill.Floor ? RoomLibraryVmf.DoorSillFloor : RoomLibraryVmf.DoorSillCentre;
 
     private static string IdentityOf(List<KeyValuePair<string, string>> pairs) =>
         RoomLibraryEntities.IdentityOf(RoomLibraryEntities.LastValue(pairs, "classname") ?? string.Empty, RoomLibraryEntities.NameOf(pairs));

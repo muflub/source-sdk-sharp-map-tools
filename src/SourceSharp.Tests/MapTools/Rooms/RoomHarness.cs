@@ -239,6 +239,11 @@ internal static class RoomHarness
         marker.AddKey(RoomLibraryVmf.DoorWidthKey, VmfPlacement.Format(room.Kit.Width));
         marker.AddKey(RoomLibraryVmf.DoorHeightKey, VmfPlacement.Format(room.Kit.Height));
         marker.AddKey(RoomLibraryVmf.WallDepthKey, VmfPlacement.Format(room.Kit.Depth));
+        if (room.Kit.Sill == DoorSill.Floor)
+        {
+            marker.AddKey(RoomLibraryVmf.DoorSillKey, RoomLibraryVmf.DoorSillFloor);
+        }
+
         if (room.IsShaped)
         {
             marker.AddKey(RoomLibraryVmf.RoomHeightKey, VmfPlacement.Format(room.Height));

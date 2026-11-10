@@ -1105,7 +1105,7 @@ internal sealed partial class RoomDoorLight
     {
         RoomDefinition definition = room.Definition;
         bool flat = emitter >= DoorLightMath.NodesPerClass;
-        Vec3 node = frame.ToRoom(DoorLightMath.Node(emitter % DoorLightMath.NodesPerClass, definition.CellSize, definition.Kit.Depth));
+        Vec3 node = frame.ToRoom(DoorLightMath.Node(emitter % DoorLightMath.NodesPerClass, definition.CellSize, definition.Kit.Depth, DoorLightMath.Lift(definition.Kit, definition.CellSize)));
         List<BspEntity> entities = Unlit(room.Bsp);
         BspEntity light = new();
         light.Pairs.Add(new BspKeyValue("classname", "light"));

@@ -24,7 +24,7 @@ namespace SourceSharp.MapTools.Rooms;
 /// room's floor.
 /// </para>
 /// <para>
-/// The kit's opening is centred on its cell face (see
+/// A centred kit's opening is centred on its cell face (see
 /// <see cref="SocketKit.OpeningUnit"/>), so its sill sits at
 /// <c>(cell − height) / 2</c>. The room's floor is its shell, as thick as the
 /// kit's wall depth, so the floor's top is at <c>depth</c>. A door stands on
@@ -32,6 +32,12 @@ namespace SourceSharp.MapTools.Rooms;
 /// room's interior height, <c>cell − 2 × depth</c>: a shorter centred door
 /// has a sill a player would have to climb, and none of the room rules lets
 /// a room put steps in its doorway.
+/// </para>
+/// <para>
+/// A floor kit (<see cref="DoorSill.Floor"/>) stands its door on the floor
+/// by construction, its sill at the wall depth whatever its height, so only
+/// the door's own size is held to the player; that it fits under the cell's
+/// ceiling is the library's fit check (<see cref="RoomLibraryVmf"/>).
 /// </para>
 /// </remarks>
 public static class PlayerHull
@@ -63,13 +69,18 @@ public static class PlayerHull
                 $"is {kit.Height:0.###} tall; a standing player needs a door at least {Height:0} tall");
         }
 
+        if (kit.Sill == DoorSill.Floor)
+        {
+            return null;
+        }
+
         float sill = (cellSize - kit.Height) / 2f;
         if (Math.Abs(sill - kit.Depth) > SillTolerance)
         {
             return string.Create(CultureInfo.InvariantCulture,
                 $"puts the door's sill at z = {sill:0.###} but the floor's top at z = {kit.Depth:0.###} (the wall depth),"
                 + $" so a player cannot step through; a door stands on the floor when its height is"
-                + $" cell size - 2 x wall depth = {cellSize - (2 * kit.Depth):0.###}");
+                + $" cell size - 2 x wall depth = {cellSize - (2 * kit.Depth):0.###}, or at any height with door_sill floor");
         }
 
         return null;

@@ -1531,7 +1531,8 @@ public static partial class RoomCommands
                 string name = socket.Name == wall ? wall : $"{wall} \"{socket.Name}\"";
                 text.Append(CultureInfo.InvariantCulture,
                     $"  {name}: ({Num(mins)}) to ({Num(maxs)}), "
-                    + $"{Num(definition.Kit.Width)} wide x {Num(definition.Kit.Height)} high x {Num(definition.Kit.Depth)} deep\n");
+                    + $"{Num(definition.Kit.Width)} wide x {Num(definition.Kit.Height)} high x {Num(definition.Kit.Depth)} deep"
+                    + $"{(definition.Kit.Sill == DoorSill.Floor ? ", on the floor" : string.Empty)}\n");
             }
         }
 

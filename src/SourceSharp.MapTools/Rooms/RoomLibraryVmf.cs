@@ -141,6 +141,7 @@ public sealed class RoomLibraryException : Exception
 /// <item><term><c>door_width</c></term><description>The door opening's width along its wall.</description></item>
 /// <item><term><c>door_height</c></term><description>The door opening's height.</description></item>
 /// <item><term><c>wall_depth</c></term><description>The shell's thickness, which is also how deep a door plug reaches in from the cell face.</description></item>
+/// <item><term><c>door_sill</c></term><description>Optional: <c>floor</c> stands every door on the floor, its sill at the wall depth whatever its height (<see cref="DoorSill.Floor"/>); <c>centre</c>, the default, centres it up the cell face, which a player walks through only when the door is the room's interior height.</description></item>
 /// <item><term><c>socket_east</c>, <c>socket_west</c>, <c>socket_north</c>, <c>socket_south</c></term><description>Optional: a name for the socket on that wall, where the default is the wall's own name. East is +x, north is +y.</description></item>
 /// <item><term><c>room_role</c></term><description>Optional: <c>up</c> or <c>down</c> for a room that moves the player between levels (<see cref="LibraryRoom.Role"/>).</description></item>
 /// <item><term><c>water_east</c>, <c>water_west</c>, <c>water_north</c>, <c>water_south</c></term><description>Optional: a water socket, the height of the water's surface above the cell's floor and its material, such as <c>48 nature/water_canals_cheap001</c> (<see cref="LibraryRoom.WaterSockets"/>).</description></item>
@@ -214,6 +215,20 @@ public static class RoomLibraryVmf
 
     /// <summary>The shell's thickness and the plug's depth.</summary>
     public const string WallDepthKey = "wall_depth";
+
+    /// <summary>
+    /// Where the kit's doors stand, optional: <see cref="DoorSillFloor"/> or
+    /// <see cref="DoorSillCentre"/>, the default (<see cref="DoorSill"/>).
+    /// Part of the kit, so every room of a library, and every library of a
+    /// level, must agree on it.
+    /// </summary>
+    public const string DoorSillKey = "door_sill";
+
+    /// <summary>The <see cref="DoorSillKey"/> value that stands the door on the floor.</summary>
+    public const string DoorSillFloor = "floor";
+
+    /// <summary>The <see cref="DoorSillKey"/> value that centres the door up its wall, the default.</summary>
+    public const string DoorSillCentre = "centre";
 
     /// <summary>
     /// The room's own height, optional: the cell size when absent (the rooms
@@ -899,7 +914,10 @@ public static class RoomLibraryVmf
 
         string who = $"room \"{name}\"";
         float cell = Positive(entity, CellSizeKey, who);
-        SocketKit kit = new(Positive(entity, DoorWidthKey, who), Positive(entity, DoorHeightKey, who), Positive(entity, WallDepthKey, who));
+        SocketKit kit = new(Positive(entity, DoorWidthKey, who), Positive(entity, DoorHeightKey, who), Positive(entity, WallDepthKey, who))
+        {
+            Sill = Sill(entity, who),
+        };
         try
         {
             kit.Validate();
@@ -910,8 +928,13 @@ public static class RoomLibraryVmf
             throw new RoomLibraryException($"{who}: the door kit {kit} is not a kit: {exception.Message}");
         }
 
+        // A centred door fits when its unit rectangle stays in the face; a
+        // door on the floor when its top stays under the ceiling slab of a
+        // room as tall as its cell, the lowest room the kit then allows
+        // being the door plus the floor and ceiling (RoomDefinition.HeightProblem).
         (_, _, float u1, float v1) = kit.OpeningUnit(cell);
-        if (u1 > 1f || v1 > 1f || kit.Depth * 2 >= cell)
+        bool tooTall = kit.Sill == DoorSill.Floor ? kit.Depth + kit.Height > cell - kit.Depth : v1 > 1f;
+        if (u1 > 1f || tooTall || kit.Depth * 2 >= cell)
         {
             throw new RoomLibraryException(string.Create(CultureInfo.InvariantCulture,
                 $"{who}: the door kit {kit} does not fit in a {cell:0.###}-unit cell."));
@@ -1027,6 +1050,25 @@ public static class RoomLibraryVmf
         return RoomDefinition.HeightProblem(height, kit) is { } problem
             ? throw new RoomLibraryException($"room {room}: {RoomHeightKey} {problem}")
             : height;
+    }
+
+    /// <summary>
+    /// A marker's <c>door_sill</c>: <see cref="DoorSill.Centred"/> without the
+    /// key or with <c>centre</c>, <see cref="DoorSill.Floor"/> with
+    /// <c>floor</c>, ignoring case; anything else is refused.
+    /// </summary>
+    private static DoorSill Sill(VmfChunk entity, string who)
+    {
+        if (entity.GetValue(DoorSillKey) is not { } text)
+        {
+            return DoorSill.Centred;
+        }
+
+        string value = text.Trim();
+        return string.Equals(value, DoorSillFloor, StringComparison.OrdinalIgnoreCase) ? DoorSill.Floor
+            : string.Equals(value, DoorSillCentre, StringComparison.OrdinalIgnoreCase) ? DoorSill.Centred
+            : throw new RoomLibraryException(
+                $"{who}: \"{DoorSillKey}\" is \"{text}\"; a door stands on the floor ({DoorSillFloor}) or is centred up its wall ({DoorSillCentre}, the default).");
     }
 
     private static float Positive(VmfChunk entity, string key, string who)

@@ -568,14 +568,39 @@ internal static class DoorLightMath
     /// <param name="node">The node, 0 to <see cref="NodesPerClass"/> - 1, x fastest.</param>
     /// <param name="cell">The cell size.</param>
     /// <param name="wall">The shell's depth (the kit's plug depth).</param>
-    public static Vec3 Node(int node, float cell, float wall)
+    /// <param name="lift">How far the neighbour's interior centre stands above the opening's centre (<see cref="Lift"/>): 0 for a centred door.</param>
+    public static Vec3 Node(int node, float cell, float wall, float lift = 0)
     {
         (float x0, float x1, float y, float z) = Extent(cell, wall);
         int i = node % GridNodes, j = (node / GridNodes) % GridNodes, k = node / (GridNodes * GridNodes);
+        float up = -z + ((k + 0.5f) / GridNodes * 2 * z);
         return new Vec3(
             x0 + ((i + 0.5f) / GridNodes * (x1 - x0)),
             -y + ((j + 0.5f) / GridNodes * 2 * y),
-            -z + ((k + 0.5f) / GridNodes * 2 * z));
+            lift == 0 ? up : up + lift);
+    }
+
+    /// <summary>
+    /// How far the middle of a cell's interior stands above the middle of
+    /// its kit's opening: what the response grid is lifted by, door-local,
+    /// so that it covers the room across the joint wherever the door stands.
+    /// </summary>
+    /// <param name="kit">The door kit.</param>
+    /// <param name="cell">The cell size.</param>
+    /// <returns>0 for a centred door, whose opening's middle is the cell's; for a door on the floor, the cell's half height less the opening's middle.</returns>
+    /// <remarks>
+    /// A centred kit takes exactly 0, which every use skips rather than adds,
+    /// so the grid of every centred kit is the bits it always was.
+    /// </remarks>
+    public static float Lift(SocketKit kit, float cell)
+    {
+        if (kit.Sill != DoorSill.Floor)
+        {
+            return 0;
+        }
+
+        (float z0, float z1) = kit.OpeningZ(cell);
+        return (cell / 2) - ((z0 + z1) / 2);
     }
 
     /// <summary>The neighbour's interior, door-local: its depth range beyond the joint and its half extents across and up.</summary>
@@ -587,14 +612,14 @@ internal static class DoorLightMath
     /// intensity (inverse-square nodes first, then constant ones): what
     /// matches an emitter to the light a source sends through the opening.
     /// </summary>
-    public static double[] NodeFlux(float width, float height, float cell, float wall)
+    public static double[] NodeFlux(float width, float height, float cell, float wall, float lift = 0)
     {
         const int su = 48, sv = 112;
         double[] flux = new double[EmitterCount];
         double area = width * height / (double)(su * sv);
         for (int n = 0; n < NodesPerClass; n++)
         {
-            Vec3 node = Node(n, cell, wall);
+            Vec3 node = Node(n, cell, wall, lift);
             double inverseSquare = 0, constant = 0;
             for (int b = 0; b < sv; b++)
             {
@@ -659,10 +684,11 @@ internal static class DoorLightMath
     /// <param name="cell">The cell size.</param>
     /// <param name="wall">The shell's depth.</param>
     /// <param name="shares">Adds to: per emitter, the colour it takes.</param>
-    public static void Project(in DoorSource source, Vec3 flux, ReadOnlySpan<double> nodeFlux, float cell, float wall, Span<Vec3> shares)
+    /// <param name="lift">The grid's lift (<see cref="Lift"/>), as <see cref="Node"/> took it.</param>
+    public static void Project(in DoorSource source, Vec3 flux, ReadOnlySpan<double> nodeFlux, float cell, float wall, Span<Vec3> shares, float lift = 0)
     {
         (float x0, float x1, float y, float z) = Extent(cell, wall);
-        Vec3 s = source.Origin;
+        Vec3 s = lift == 0 ? source.Origin : source.Origin - new Vec3(0, 0, lift);
         float gx = Math.Clamp(((s.X - x0) / (x1 - x0) * GridNodes) - 0.5f, 0, GridNodes - 1);
         float gy = Math.Clamp(((s.Y + y) / (2 * y) * GridNodes) - 0.5f, 0, GridNodes - 1);
         float gz = Math.Clamp(((s.Z + z) / (2 * z) * GridNodes) - 0.5f, 0, GridNodes - 1);

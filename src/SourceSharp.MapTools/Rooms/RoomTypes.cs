@@ -28,6 +28,38 @@ public enum RoomFacing : byte
 }
 
 /// <summary>
+/// Where a kit's door stands up its wall: the <c>info_room</c> key
+/// <c>door_sill</c> (<see cref="RoomLibraryVmf.DoorSillKey"/>).
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Why two rules.</b> The first kits centred the door up the cell face,
+/// which put the sill on the floor only for a door exactly the room's
+/// interior height (<c>cell − 2 × wall_depth</c>, <see cref="PlayerHull"/>):
+/// a lower door would hang in the wall. A kit that wants a door lower than
+/// that, or rooms lower than their cell with doors that still reach the
+/// floor, stands its door on the floor instead: the sill is the wall depth
+/// (the floor slab's top) whatever the door's height.
+/// </para>
+/// <para>
+/// <b>Why centred stays the default.</b> For the one door height the centred
+/// rule accepts, the two rules agree only to within
+/// <see cref="PlayerHull.SillTolerance"/>, not to the bit: switching every
+/// kit to the floor rule could move a plug box by its last bit and change
+/// every room's compile. So a kit is centred unless it says otherwise, and a
+/// library that says nothing packs and links to the bytes it always did.
+/// </para>
+/// </remarks>
+public enum DoorSill : byte
+{
+    /// <summary>The door is centred up its cell face; it stands on the floor only when it is the room's interior height. The default.</summary>
+    Centred = 0,
+
+    /// <summary>The door stands on the floor: its sill is the wall depth, whatever its height.</summary>
+    Floor = 1,
+}
+
+/// <summary>
 /// The one door shape a room library ships: the socket kit.
 /// </summary>
 /// <param name="Width">The opening's width along the face it sits on.</param>
@@ -37,12 +69,13 @@ public enum RoomFacing : byte
 /// <para>
 /// Rooms join only at standard door sockets, so the
 /// opening in a room's shell is not free-form — it is this rectangle, at the
-/// centre of one of the cell's four vertical faces. The linter refuses a room
-/// whose opening is any other size or anywhere else, and the linker matches
-/// sockets by geometry: a socket on one face of the shared wall meeting the
-/// same socket on the other side is a join, and the two sockets' plug brushes
-/// touch inside the wall, which is what makes the sealed pair stay sealed
-/// before the door is placed.
+/// centre of one of the cell's four vertical faces (or of one cell edge of a
+/// larger room's perimeter), standing as <see cref="Sill"/> says. The linter
+/// refuses a room whose opening is any other size or anywhere else, and the
+/// linker matches sockets by geometry: a socket on one face of the shared
+/// wall meeting the same socket on the other side is a join, and the two
+/// sockets' plug brushes touch inside the wall, which is what makes the
+/// sealed pair stay sealed before the door is placed.
 /// </para>
 /// <para>
 /// <see cref="Depth"/> reaches inward from the cell face on both sides of the
@@ -55,21 +88,65 @@ public readonly record struct SocketKit(float Width, float Height, float Depth)
     /// <summary>The RPG's standard socket: a 96×96 opening, 8 units deep.</summary>
     public static SocketKit Standard { get; } = new(96, 96, 8);
 
+    /// <summary>
+    /// Where the door stands up its wall (<see cref="DoorSill"/>): centred,
+    /// the default, or on the floor. Part of the kit, so it is compared
+    /// wherever kits are (rooms of a library, libraries of a level, a layout
+    /// against its library), and two rooms only join when their doors stand
+    /// alike.
+    /// </summary>
+    /// <remarks>
+    /// An init property with the centred default, rather than a constructor
+    /// argument, so every kit built before the rule existed, and every kit
+    /// that does not ask, is the kit it always was: equal, printed and
+    /// recorded the same.
+    /// </remarks>
+    public DoorSill Sill { get; init; }
+
     /// <summary>The opening's rectangle on the unit cell <c>[0,1]²</c> of a face.</summary>
     /// <remarks>
-    /// Always centred: <c>(0.5 - w/2c, 0.5 - h/2c)</c> to
-    /// <c>(0.5 + w/2c, 0.5 + h/2c)</c>, first axis along the face, second up.
+    /// Across the face the opening is always centred, <c>0.5 ∓ w/2c</c>. Up
+    /// it, a centred kit's is <c>0.5 ∓ h/2c</c>; a floor kit's runs from the
+    /// wall depth to the wall depth plus the door, divided by the cell. The
+    /// heights in units are <see cref="OpeningZ"/>, which every plug box is
+    /// built from.
     /// </remarks>
     public (float U0, float V0, float U1, float V1) OpeningUnit(float cellSize)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(cellSize, 0f);
         float halfU = Width / (2 * cellSize);
+        if (Sill == DoorSill.Floor)
+        {
+            return (0.5f - halfU, Depth / cellSize, 0.5f + halfU, (Depth + Height) / cellSize);
+        }
+
         float halfV = Height / (2 * cellSize);
         return (0.5f - halfU, 0.5f - halfV, 0.5f + halfU, 0.5f + halfV);
     }
 
+    /// <summary>The opening's sill and top, in units above the floor's underside (z = 0).</summary>
+    /// <param name="cellSize">The cell the kit's doors are cut in.</param>
+    /// <returns>The sill and the top of the opening.</returns>
+    /// <remarks>
+    /// A centred kit's is the unit rectangle's times the cell, the very
+    /// product every plug box has always been built from, so its bits do not
+    /// move; a floor kit's is the wall depth and the wall depth plus the
+    /// door, exact, with no division in between.
+    /// </remarks>
+    public (float Z0, float Z1) OpeningZ(float cellSize)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(cellSize, 0f);
+        if (Sill == DoorSill.Floor)
+        {
+            return (Depth, Depth + Height);
+        }
+
+        (_, float v0, _, float v1) = OpeningUnit(cellSize);
+        return (v0 * cellSize, v1 * cellSize);
+    }
+
     /// <summary>Validates the kit as a socket: positive, finite, and it fits in a face.</summary>
-    /// <exception cref="ArgumentOutOfRangeException">A dimension is not a positive finite number.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A dimension is not a positive finite number, or the sill is not a rule.</exception>
     /// <exception cref="ArgumentException">The opening does not fit inside one face.</exception>
     /// <remarks>
     /// Every comparison against NaN is false, so a plain "not positive" check
@@ -84,6 +161,33 @@ public readonly record struct SocketKit(float Width, float Height, float Depth)
         {
             throw new ArgumentException("The socket kit is larger than any cell can hold.", nameof(Width));
         }
+
+        if ((byte)Sill > (byte)DoorSill.Floor)
+        {
+            throw new ArgumentOutOfRangeException(nameof(Sill), Sill, "A door is centred or stands on the floor.");
+        }
+    }
+
+    /// <summary>
+    /// The kit as messages print it: <c>Width = 96, Height = 224, Depth = 16</c>,
+    /// with <c>, Sill = Floor</c> only for a floor kit, so a centred kit
+    /// prints exactly as it did before kits had a sill.
+    /// </summary>
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("Width = ");
+        builder.Append(Width);
+        builder.Append(", Height = ");
+        builder.Append(Height);
+        builder.Append(", Depth = ");
+        builder.Append(Depth);
+        if (Sill != DoorSill.Centred)
+        {
+            builder.Append(", Sill = ");
+            builder.Append(Sill.ToString());
+        }
+
+        return true;
     }
 }
 

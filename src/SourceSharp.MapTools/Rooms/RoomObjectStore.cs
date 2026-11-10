@@ -105,6 +105,19 @@ public static class RoomObjectStore
     private const string WidthKey = "width";
     private const string HeightKey = "height";
     private const string DepthKey = "depth";
+
+    /// <summary>
+    /// The kit's sill rule, written only for a kit that stands its door on
+    /// the floor (<see cref="DoorSill.Floor"/>), as <see cref="SillFloor"/>:
+    /// a centred kit's object is the three numbers it always was, so its
+    /// container keeps its bytes, and a build that knows no sill refuses a
+    /// floor kit's container by its unknown kit field instead of linking its
+    /// doors centred.
+    /// </summary>
+    private const string SillKey = "sill";
+
+    /// <summary>The <see cref="SillKey"/> value of a floor kit.</summary>
+    private const string SillFloor = "floor";
     private const string SocketsKey = "sockets";
     private const string FacingKey = "facing";
     private const string SocketNameKey = "name";
@@ -216,7 +229,7 @@ public static class RoomObjectStore
 
         string? roomName = null;
         float? cellSize = null;
-        (float Width, float Height, float Depth)? kit = null;
+        SocketKit? kit = null;
         RoomSocket[]? sockets = null;
         int[] socketClusters = [];
         string? sourceHash = null;
@@ -282,7 +295,7 @@ public static class RoomObjectStore
         }
 
         RoomDefinition definition = new(
-            roomName, cellSize.Value, new SocketKit(kit.Value.Width, kit.Value.Height, kit.Value.Depth), sockets);
+            roomName, cellSize.Value, kit.Value, sockets);
 
         definition.Validate();
         definition = RoomShape.Apply(shape, definition);
@@ -343,6 +356,11 @@ public static class RoomObjectStore
             writer.WriteNumber(WidthKey, definition.Kit.Width);
             writer.WriteNumber(HeightKey, definition.Kit.Height);
             writer.WriteNumber(DepthKey, definition.Kit.Depth);
+            if (definition.Kit.Sill == DoorSill.Floor)
+            {
+                writer.WriteString(SillKey, SillFloor);
+            }
+
             writer.WriteEndObject();
             writer.WriteStartArray(SocketsKey);
             foreach (RoomSocket socket in definition.Sockets)
@@ -809,7 +827,7 @@ public static class RoomObjectStore
         return number;
     }
 
-    private static (float Width, float Height, float Depth) ReadKit(JsonElement kit)
+    private static SocketKit ReadKit(JsonElement kit)
     {
         if (kit.ValueKind != JsonValueKind.Object)
         {
@@ -818,6 +836,7 @@ public static class RoomObjectStore
 
         float width = 0f, height = 0f, depth = 0f;
         bool seenWidth = false, seenHeight = false, seenDepth = false;
+        DoorSill sill = DoorSill.Centred;
         foreach (JsonProperty member in kit.EnumerateObject())
         {
             switch (member.Name)
@@ -834,6 +853,11 @@ public static class RoomObjectStore
                     depth = ReadSingle(member.Value, DepthKey);
                     seenDepth = true;
                     break;
+                case SillKey:
+                    sill = member.Value.ValueKind == JsonValueKind.String && member.Value.GetString() == SillFloor
+                        ? DoorSill.Floor
+                        : throw new LinkException($"room manifest kit {SillKey} is not \"{SillFloor}\".");
+                    break;
                 default:
                     throw new LinkException($"room manifest kit has an unknown field \"{member.Name}\".");
             }
@@ -844,7 +868,7 @@ public static class RoomObjectStore
             throw new LinkException("room manifest kit needs width, height and depth.");
         }
 
-        return (width, height, depth);
+        return new SocketKit(width, height, depth) { Sill = sill };
     }
 
     private static RoomSocket[] ReadSockets(JsonElement sockets)
@@ -923,5 +947,6 @@ public static class RoomObjectStore
     private static string KitText(SocketKit kit) =>
         kit.Width.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ","
         + kit.Height.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ","
-        + kit.Depth.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        + kit.Depth.ToString("R", System.Globalization.CultureInfo.InvariantCulture)
+        + RoomCompiler.SillText(kit);
 }
