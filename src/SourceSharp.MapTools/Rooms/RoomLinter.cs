@@ -657,8 +657,18 @@ public static class RoomLinter
         // is a one-cell room's moved along the face by whole cells, and the
         // face itself is the footprint's far side. A one-cell room adds and
         // multiplies nothing, so its plug boxes are the bits they always were.
+        //
+        // A kit of several door slots moves the opening along its cell edge
+        // to the slot's place (SocketKit.SlotLow); a kit of one slot, and
+        // the middle slot of any, keeps the centred door's bits.
         float nu0 = u0 * cell;
         float nu1 = u1 * cell;
+        if (definition.Kit.Slots > 1)
+        {
+            nu0 = definition.Kit.SlotLow(cell, socket.Slot);
+            nu1 = nu0 + definition.Kit.Width;
+        }
+
         if (socket.Offset != 0)
         {
             float along = socket.Offset * cell;

@@ -116,6 +116,13 @@ public sealed record RoomNav
     /// <summary>Whether the grid covers more than one cell: a larger room's navigation.</summary>
     public bool IsLarge => CellsX != 1 || CellsY != 1;
 
+    /// <summary>
+    /// The room's kit's door slots per cell edge (<see cref="SocketKit.Slots"/>),
+    /// 1 for a kit of one: with more, each socket's <see cref="RoomSocket.Slot"/>
+    /// is part of where its door stands, and the section stores it.
+    /// </summary>
+    public int Slots { get; init; } = 1;
+
     /// <summary>Voxels along x of the whole grid.</summary>
     public int SizeX => CellsX * CellVoxels;
 

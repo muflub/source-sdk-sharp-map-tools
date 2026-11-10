@@ -249,6 +249,11 @@ internal static class RoomHarness
             marker.AddKey(RoomLibraryVmf.DoorSillKey, RoomLibraryVmf.DoorSillFloor);
         }
 
+        if (room.Kit.Slots != 1)
+        {
+            marker.AddKey(RoomLibraryVmf.DoorSlotsKey, room.Kit.Slots.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
         if (room.HasOwnHeight)
         {
             marker.AddKey(RoomLibraryVmf.RoomHeightKey, VmfPlacement.Format(room.Height));
@@ -263,7 +268,7 @@ internal static class RoomHarness
         // author would; the default name needs no key.
         foreach (RoomSocket socket in room.Sockets)
         {
-            string wall = RoomLibraryVmf.DefaultSocketName(room.IsLarge, socket.Facing, socket.Offset);
+            string wall = RoomLibraryVmf.DefaultSocketName(room.IsLarge, socket.Facing, socket.Offset, room.Kit.Slots, socket.Slot);
             if (socket.Name != wall)
             {
                 marker.AddKey(RoomLibraryVmf.SocketKeyPrefix + wall, socket.Name);

@@ -184,6 +184,7 @@ public static class RoomNavBuilder
             ColumnVoxels = nz,
             CellsX = definition.CellsX,
             CellsY = definition.CellsY,
+            Slots = definition.Kit.Slots,
             FloorNormalZ = settings.FloorNormalZ,
             StepHeight = settings.StepHeight,
             JumpHeight = settings.JumpHeight,

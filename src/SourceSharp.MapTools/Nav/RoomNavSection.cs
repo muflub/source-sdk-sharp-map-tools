@@ -93,6 +93,15 @@ public static class RoomNavSection
     /// </summary>
     public const int LargeRevision = 4;
 
+    /// <summary>
+    /// The payload revision of a room under a kit of several door slots
+    /// (<see cref="RoomNav.Slots"/>): <see cref="LargeRevision"/>'s fields,
+    /// written for a room of any footprint, then the kit's slots right after
+    /// the cells along y, and each socket's slot right after its cell
+    /// offset. A one-slot room's section keeps its revision and bytes.
+    /// </summary>
+    public const int SlottedRevision = 5;
+
     /// <summary>The codec byte and the <c>int64</c> decoded length every section starts with.</summary>
     private const int HeaderBytes = 1 + 8;
 
@@ -119,20 +128,27 @@ public static class RoomNavSection
     {
         ArgumentNullException.ThrowIfNull(nav);
         Writer w = new();
-        w.I32(nav.IsLarge ? LargeRevision : nav.IsShaped ? ShapedRevision : Revision);
+        bool slotted = nav.Slots > 1;
+        bool cells = nav.IsLarge || slotted;
+        w.I32(slotted ? SlottedRevision : nav.IsLarge ? LargeRevision : nav.IsShaped ? ShapedRevision : Revision);
         w.U8((byte)nav.Turn);
         w.F32(nav.CellSize);
         w.F32(nav.VoxelSize);
         w.I32(nav.CellVoxels);
-        if (nav.IsShaped || nav.IsLarge)
+        if (nav.IsShaped || cells)
         {
             w.I32(nav.ColumnVoxels);
         }
 
-        if (nav.IsLarge)
+        if (cells)
         {
             w.I32(nav.CellsX);
             w.I32(nav.CellsY);
+        }
+
+        if (slotted)
+        {
+            w.U8((byte)nav.Slots);
         }
 
         w.F32(nav.FloorNormalZ);
@@ -157,9 +173,14 @@ public static class RoomNavSection
             w.U8((byte)nav.Sockets[s].Facing);
             w.Str(nav.Sockets[s].Name);
             w.Vec(nav.SocketData[s].DoorPoint);
-            if (nav.IsLarge)
+            if (cells)
             {
                 w.I32(nav.Sockets[s].Offset);
+            }
+
+            if (slotted)
+            {
+                w.U8((byte)nav.Sockets[s].Slot);
             }
         }
 
@@ -277,10 +298,12 @@ public static class RoomNavSection
         byte[] raw = NavCompression.Decompress((NavCodec)section[0], section[HeaderBytes..], (int)length);
         Reader r = new(raw);
         int revision = r.I32();
-        if (revision is not (Revision or ShapedRevision or LargeRevision))
+        if (revision is not (Revision or ShapedRevision or LargeRevision or SlottedRevision))
         {
             return null;
         }
+
+        bool cells = revision is LargeRevision or SlottedRevision;
 
         int turn = r.U8();
         if (turn > 3)
@@ -291,12 +314,18 @@ public static class RoomNavSection
         float cell = r.F32();
         float voxel = r.F32();
         int n = r.I32();
-        int nz = revision is ShapedRevision or LargeRevision ? r.I32() : n;
-        int cellsX = revision == LargeRevision ? r.I32() : 1;
-        int cellsY = revision == LargeRevision ? r.I32() : 1;
+        int nz = revision is ShapedRevision || cells ? r.I32() : n;
+        int cellsX = cells ? r.I32() : 1;
+        int cellsY = cells ? r.I32() : 1;
         if (cellsX is < 1 or > RoomDefinition.MaxFootprint || cellsY is < 1 or > RoomDefinition.MaxFootprint || (revision == LargeRevision && cellsX == 1 && cellsY == 1))
         {
             throw new InvalidDataException($"a room nav section of revision {revision} over {cellsX} x {cellsY} cells.");
+        }
+
+        int slots = revision == SlottedRevision ? r.U8() : 1;
+        if (slots is < 1 or > SocketKit.MaxSlots || (revision == SlottedRevision && slots == 1))
+        {
+            throw new InvalidDataException($"a room nav section of revision {revision} with {slots} door slots.");
         }
 
         int sizeX = n * cellsX, sizeY = n * cellsY;
@@ -348,13 +377,19 @@ public static class RoomNavSection
 
             string socketName = r.Str();
             doorPoints.Add(r.Vec());
-            int offset = revision == LargeRevision ? r.I32() : 0;
+            int offset = cells ? r.I32() : 0;
             if (offset is < 0 or >= RoomDefinition.MaxFootprint)
             {
                 throw new InvalidDataException($"a room nav socket at cell {offset} of its face.");
             }
 
-            sockets.Add(new RoomSocket((RoomFacing)facing, socketName) { Offset = offset });
+            int slot = revision == SlottedRevision ? r.U8() : 0;
+            if (slot >= slots)
+            {
+                throw new InvalidDataException($"a room nav socket at door slot {slot} of {slots}.");
+            }
+
+            sockets.Add(new RoomSocket((RoomFacing)facing, socketName) { Offset = offset, Slot = slot });
         }
 
         List<RoomNavPoi> pois = [];
@@ -523,6 +558,7 @@ public static class RoomNavSection
             Pois = pois,
             Records = records,
             CellsX = cellsX,
+            Slots = slots,
             CellsY = cellsY,
             Columns = new NavColumns(sizeX, sizeY, starts, runs),
             SocketData = [.. caps.Select((c, s) => new RoomNavSocket(c, doorPoints[s]))],

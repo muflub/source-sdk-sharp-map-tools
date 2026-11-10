@@ -257,12 +257,18 @@ public sealed class LevelGrid
                 string? theirs = null;
                 if (covered.TryGetValue(across, out int other))
                 {
+                    // Under a kit of several door slots, a joint is two
+                    // sockets at the same slot of the edge; a socket at a
+                    // slot the neighbour has no socket at is capped.
                     (RoomPlacement otherPlacement, RoomDefinition neighbour) = placed[other];
                     RoomTransform otherTransform = new(otherPlacement, cellSize);
+                    bool slotted = definition.Kit.Slots > 1;
+                    float along = slotted ? placement.SocketAlong(definition, socket, cellSize) : 0f;
                     foreach (RoomSocket candidate in neighbour.Sockets)
                     {
                         if (otherTransform.WorldNormal(candidate.Facing) == (axis, -sign)
-                            && otherPlacement.SocketCells(neighbour, candidate, cellSize).Cell == across)
+                            && otherPlacement.SocketCells(neighbour, candidate, cellSize).Cell == across
+                            && (!slotted || RoomPlacement.SameSlot(along, otherPlacement.SocketAlong(neighbour, candidate, cellSize))))
                         {
                             theirs = candidate.Name;
                         }

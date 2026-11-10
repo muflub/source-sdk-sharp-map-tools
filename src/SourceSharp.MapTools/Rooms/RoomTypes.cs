@@ -103,6 +103,113 @@ public readonly record struct SocketKit(float Width, float Height, float Depth)
     /// </remarks>
     public DoorSill Sill { get; init; }
 
+    /// <summary>The most door slots a cell edge may have.</summary>
+    public const int MaxSlots = 5;
+
+    /// <summary>
+    /// How many places along each cell edge a door may stand (the library's
+    /// <c>door_slots</c>): 1, the default, the door centred on the edge as it
+    /// always was; or 3 or 5, the edge divided evenly with a door centred in
+    /// each part (<see cref="SlotLow"/>). Odd, so the middle slot is the
+    /// one-slot door and the slots mirror onto each other about it: turned
+    /// or mirrored, a slot lands on a slot. Part of the kit, so it is
+    /// compared wherever kits are, and two rooms only join at the same
+    /// slot.
+    /// </summary>
+    /// <remarks>
+    /// Stored as the count less one, so a kit that does not ask (or asks for
+    /// 1) is equal, printed and recorded as the kit it always was.
+    /// </remarks>
+    public int Slots
+    {
+        get => _extraSlots + 1;
+        init => _extraSlots = value - 1;
+    }
+
+    private readonly int _extraSlots;
+
+    /// <summary>
+    /// Where slot <paramref name="slot"/>'s door starts along a cell edge, in
+    /// units from the edge's own start (the room's south on an east or west
+    /// face, its west on a north or south face).
+    /// </summary>
+    /// <param name="cellSize">The cell the doors are cut in.</param>
+    /// <param name="slot">The slot, 0 to <see cref="Slots"/> less one.</param>
+    /// <returns>The door's low edge along the cell edge.</returns>
+    /// <remarks>
+    /// <para>
+    /// The middle slot's is the one-slot door's, the unit rectangle's start
+    /// times the cell, the very product every plug box has always been built
+    /// from. Each slot before it is the middle of its part of the evenly
+    /// divided edge, less half the door, rounded to a whole unit; each slot
+    /// after it is the mirror of the slot as far before the middle,
+    /// <c>cell - low - width</c>. So slot <c>k</c> and slot
+    /// <c>Slots - 1 - k</c> are each other's reflection exactly, which is
+    /// what a turn of a half or a mirror does to an edge, and two rooms
+    /// facing across an edge meet at the same place whichever way each is
+    /// turned.
+    /// </para>
+    /// <para>
+    /// Whole units, because a third or a fifth of a cell is not one: the
+    /// rounding moves a door less than a unit from the exact division, and
+    /// keeps every plug's faces on whole coordinates, as a hand-built room's
+    /// are.
+    /// </para>
+    /// </remarks>
+    public float SlotLow(float cellSize, int slot)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(slot);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(slot, Slots);
+        int middle = (Slots - 1) / 2;
+        if (slot == middle)
+        {
+            (float u0, _, _, _) = OpeningUnit(cellSize);
+            return u0 * cellSize;
+        }
+
+        if (slot > middle)
+        {
+            return cellSize - SlotLow(cellSize, Slots - 1 - slot) - Width;
+        }
+
+        double part = (double)cellSize / Slots;
+        return (float)Math.Round(((slot + 0.5) * part) - (Width / 2.0), MidpointRounding.AwayFromZero);
+    }
+
+    /// <summary>
+    /// Why the kit's slots do not fit its cell edge, or null: the first door
+    /// leaves at least the wall depth of wall to the corner.
+    /// </summary>
+    /// <param name="cellSize">The cell the doors are cut in.</param>
+    /// <returns>The reason with its numbers, or null for a kit of one slot or slots that fit.</returns>
+    /// <remarks>
+    /// One test holds every gap. The first door's corner gap is a part's
+    /// half less half a door, <c>c/2N - w/2</c>; the wall between two doors
+    /// is a part less a door, <c>c/N - w</c>, twice it. Rounding each door
+    /// to a whole unit moves a gap by less than one, so a corner of at least
+    /// the wall depth leaves at least twice the depth less one between doors
+    /// (the wall depth or more for any depth of a unit or more): plugs never
+    /// overlap or meet, and every corner keeps a wall. The edge a kit of
+    /// <c>N</c> slots needs is <c>N × (w + 2 × depth)</c>.
+    /// </remarks>
+    public string? SlotProblem(float cellSize)
+    {
+        if (Slots == 1)
+        {
+            return null;
+        }
+
+        float corner = SlotLow(cellSize, 0);
+        return corner >= Depth
+            ? null
+            : string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"door_slots {Slots} puts the first door {corner:0.###} units from the corner of a {cellSize:0.###}-unit cell edge, less than the wall depth {Depth:0.###};")
+            + string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $" {Slots} doors {Width:0.###} wide need an edge of at least {Slots} x ({Width:0.###} + 2 x {Depth:0.###}) = {Slots * (Width + (2 * Depth)):0.###}, or fewer slots.");
+    }
+
     /// <summary>The opening's rectangle on the unit cell <c>[0,1]²</c> of a face.</summary>
     /// <remarks>
     /// Across the face the opening is always centred, <c>0.5 ∓ w/2c</c>. Up
@@ -166,6 +273,11 @@ public readonly record struct SocketKit(float Width, float Height, float Depth)
         {
             throw new ArgumentOutOfRangeException(nameof(Sill), Sill, "A door is centred or stands on the floor.");
         }
+
+        if (Slots < 1 || Slots > MaxSlots || Slots % 2 == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(Slots), Slots, "A cell edge has 1, 3 or 5 door slots.");
+        }
     }
 
     /// <summary>
@@ -185,6 +297,12 @@ public readonly record struct SocketKit(float Width, float Height, float Depth)
         {
             builder.Append(", Sill = ");
             builder.Append(Sill.ToString());
+        }
+
+        if (Slots != 1)
+        {
+            builder.Append(", Slots = ");
+            builder.Append(Slots);
         }
 
         return true;
@@ -227,6 +345,15 @@ public readonly record struct RoomSocket(RoomFacing Facing, string Name)
     /// </summary>
     public int Offset { get; init; }
 
+    /// <summary>
+    /// The door slot along its cell edge (<see cref="SocketKit.Slots"/>): 0
+    /// for a kit of one slot, and 0 to the kit's slots less one otherwise,
+    /// counted the way <see cref="Offset"/> is, from the room's own south
+    /// (east and west faces) or west (north and south faces). A socket's
+    /// place is (face, offset, slot).
+    /// </summary>
+    public int Slot { get; init; }
+
     /// <summary>Validates the socket.</summary>
     /// <exception cref="ArgumentException">The name is blank.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The facing is not one of four, or the offset is negative.</exception>
@@ -246,6 +373,11 @@ public readonly record struct RoomSocket(RoomFacing Facing, string Name)
         {
             throw new ArgumentOutOfRangeException(nameof(Offset), Offset, "A socket's cell offset counts from 0.");
         }
+
+        if (Slot < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(Slot), Slot, "A socket's door slot counts from 0.");
+        }
     }
 
     /// <summary>
@@ -263,6 +395,12 @@ public readonly record struct RoomSocket(RoomFacing Facing, string Name)
         {
             builder.Append(", Offset = ");
             builder.Append(Offset);
+        }
+
+        if (Slot != 0)
+        {
+            builder.Append(", Slot = ");
+            builder.Append(Slot);
         }
 
         return true;
@@ -419,7 +557,7 @@ public sealed record RoomDefinition(string Name, float CellSize, SocketKit Kit, 
                     $"room {Name}: a footprint of {CellsX} x {CellsY} cells; a room covers 1 to {MaxFootprint} cells each way."));
         }
 
-        HashSet<(RoomFacing, int)> seen = [];
+        HashSet<(RoomFacing, int, int)> seen = [];
         foreach (RoomSocket socket in Sockets)
         {
             socket.Validate();
@@ -430,10 +568,20 @@ public sealed record RoomDefinition(string Name, float CellSize, SocketKit Kit, 
                         $"socket \"{socket.Name}\" is at cell {socket.Offset} of a face {EdgesOn(socket.Facing)} cell(s) long."));
             }
 
-            if (!seen.Add((socket.Facing, socket.Offset)))
+            if (socket.Slot >= Kit.Slots)
+            {
+                throw new ArgumentOutOfRangeException(nameof(Sockets), socket.Slot,
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                        $"socket \"{socket.Name}\" is at door slot {socket.Slot} of a kit with {Kit.Slots}."));
+            }
+
+            if (!seen.Add((socket.Facing, socket.Offset, socket.Slot)))
             {
                 throw new ArgumentException(
-                    IsLarge
+                    Kit.Slots > 1
+                        ? string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                            $"Two sockets at one door slot: {socket.Facing} at cell {socket.Offset}, slot {socket.Slot}.")
+                        : IsLarge
                         ? string.Create(System.Globalization.CultureInfo.InvariantCulture,
                             $"Two sockets at one cell edge: {socket.Facing} at cell {socket.Offset}.")
                         : string.Concat("Two sockets on the same face: ", socket.Facing.ToString(), "."),
@@ -614,6 +762,33 @@ public readonly record struct RoomPlacement(string Room, int CellX, int CellY, i
         (int axis, int sign) = new RoomTransform(this, cellSize).WorldNormal(socket.Facing);
         return ((x, y), axis == 0 ? (x + sign, y) : (x, y + sign));
     }
+
+    /// <summary>
+    /// Where along its world cell edge a socket of the placed room stands:
+    /// the world coordinate, across the edge's normal, of its plug's middle.
+    /// Two sockets facing each other across an edge meet when these are
+    /// equal, which under a kit of several door slots is the same slot seen
+    /// from both sides (slot <c>k</c> of one room meets slot <c>k</c> or
+    /// <c>slots - 1 - k</c> of the other, as their turns have it).
+    /// </summary>
+    /// <param name="definition">The placed room.</param>
+    /// <param name="socket">The socket.</param>
+    /// <param name="cellSize">The grid's cell size.</param>
+    /// <returns>The world coordinate along the edge.</returns>
+    public float SocketAlong(RoomDefinition definition, RoomSocket socket, float cellSize)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        RoomTransform transform = new(this, cellSize);
+        Box plug = RoomLinter.SealBox(definition, socket, cellSize);
+        Vec3 middle = transform.Apply((plug.Mins + plug.Maxs) * 0.5f);
+        return transform.WorldNormal(socket.Facing).Axis == 0 ? middle.Y : middle.X;
+    }
+
+    /// <summary>Whether two sockets' plugs stand at the same place along their shared edge (<see cref="SocketAlong"/>), to within half a unit.</summary>
+    /// <param name="ours">This placement's along-edge coordinate.</param>
+    /// <param name="theirs">The other's.</param>
+    /// <returns>True when they meet.</returns>
+    public static bool SameSlot(float ours, float theirs) => Math.Abs(ours - theirs) < 0.5f;
 
     /// <summary>
     /// The placement as messages print it: room, cell and rotation, with its

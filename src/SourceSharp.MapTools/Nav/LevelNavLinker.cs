@@ -524,13 +524,19 @@ public static class LevelNavLinker
                     2 => (-1, 0),
                     _ => (0, -1),
                 };
+                // The door across is the socket the layout joins this one
+                // to: on the shared edge, facing back, and (under a kit of
+                // several door slots, with several doors on that edge) the
+                // one the joint names.
                 int other = -1;
+                string theirs = placed[i].Instance.Joints.First(j => j.Socket == door.Name).NeighborSocket;
                 (int X, int Y) across = (doorCell[i][s].X + dx, doorCell[i][s].Y + dy);
                 if (byCell.TryGetValue(across, out int j))
                 {
                     for (int t = 0; t < placed[j].Nav.Sockets.Count; t++)
                     {
-                        if (records[index[j][t]].Direction == (door.Direction + 2) % 4 && records[index[j][t]].Joined && doorCell[j][t] == across)
+                        if (records[index[j][t]].Direction == (door.Direction + 2) % 4 && records[index[j][t]].Joined && doorCell[j][t] == across
+                            && placed[j].Nav.Sockets[t].Name == theirs)
                         {
                             other = index[j][t];
                         }

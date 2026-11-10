@@ -118,6 +118,18 @@ public static class RoomObjectStore
 
     /// <summary>The <see cref="SillKey"/> value of a floor kit.</summary>
     private const string SillFloor = "floor";
+
+    /// <summary>
+    /// The kit's door slots (<see cref="SocketKit.Slots"/>), written only for
+    /// a kit of more than one, as is each socket's <see cref="SlotKey"/>: a
+    /// one-slot kit's container keeps its bytes, and a build that knows no
+    /// slots refuses a slot kit's container by its unknown kit field instead
+    /// of linking its doors centred.
+    /// </summary>
+    private const string SlotsKey = "slots";
+
+    /// <summary>A socket's door slot, written only under a kit of several (<see cref="SlotsKey"/>).</summary>
+    private const string SlotKey = "slot";
     private const string SocketsKey = "sockets";
     private const string FacingKey = "facing";
     private const string SocketNameKey = "name";
@@ -378,6 +390,11 @@ public static class RoomObjectStore
                 writer.WriteString(SillKey, SillFloor);
             }
 
+            if (definition.Kit.Slots != 1)
+            {
+                writer.WriteNumber(SlotsKey, definition.Kit.Slots);
+            }
+
             writer.WriteEndObject();
             writer.WriteStartArray(SocketsKey);
             foreach (RoomSocket socket in definition.Sockets)
@@ -385,6 +402,11 @@ public static class RoomObjectStore
                 writer.WriteStartObject();
                 writer.WriteNumber(FacingKey, (int)socket.Facing);
                 writer.WriteString(SocketNameKey, socket.Name);
+                if (definition.Kit.Slots != 1)
+                {
+                    writer.WriteNumber(SlotKey, socket.Slot);
+                }
+
                 writer.WriteEndObject();
             }
 
@@ -854,10 +876,16 @@ public static class RoomObjectStore
         float width = 0f, height = 0f, depth = 0f;
         bool seenWidth = false, seenHeight = false, seenDepth = false;
         DoorSill sill = DoorSill.Centred;
+        int slots = 1;
         foreach (JsonProperty member in kit.EnumerateObject())
         {
             switch (member.Name)
             {
+                case SlotsKey:
+                    slots = member.Value.ValueKind == JsonValueKind.Number && member.Value.TryGetInt32(out int read) && read is 3 or 5
+                        ? read
+                        : throw new LinkException($"room manifest kit {SlotsKey} {member.Value} is not 3 or 5.");
+                    break;
                 case WidthKey:
                     width = ReadSingle(member.Value, WidthKey);
                     seenWidth = true;
@@ -885,7 +913,7 @@ public static class RoomObjectStore
             throw new LinkException("room manifest kit needs width, height and depth.");
         }
 
-        return new SocketKit(width, height, depth) { Sill = sill };
+        return new SocketKit(width, height, depth) { Sill = sill, Slots = slots };
     }
 
     private static RoomSocket[] ReadSockets(JsonElement sockets)
@@ -904,11 +932,17 @@ public static class RoomObjectStore
             }
 
             int facing = -1;
+            int slot = 0;
             string? name = null;
             foreach (JsonProperty member in socket.EnumerateObject())
             {
                 switch (member.Name)
                 {
+                    case SlotKey:
+                        slot = member.Value.ValueKind == JsonValueKind.Number && member.Value.TryGetInt32(out int read) && read is >= 0 and < SocketKit.MaxSlots
+                            ? read
+                            : throw new LinkException($"room manifest socket {SlotKey} {member.Value} is not a door slot.");
+                        break;
                     case FacingKey:
                         if (member.Value.ValueKind != JsonValueKind.Number || !member.Value.TryGetInt32(out int raw) || !Enum.IsDefined((RoomFacing)raw))
                         {
@@ -931,7 +965,7 @@ public static class RoomObjectStore
                 throw new LinkException("a room manifest socket needs both facing and name.");
             }
 
-            list.Add(new RoomSocket((RoomFacing)facing, name));
+            list.Add(new RoomSocket((RoomFacing)facing, name) { Slot = slot });
         }
 
         return [.. list];

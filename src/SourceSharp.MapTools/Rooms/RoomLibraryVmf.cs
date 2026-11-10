@@ -257,6 +257,32 @@ public static class RoomLibraryVmf
     public static string DefaultSocketName(bool large, RoomFacing facing, int offset) =>
         large ? WallName(facing) + offset.ToString(CultureInfo.InvariantCulture) : WallName(facing);
 
+    /// <summary>
+    /// A socket's default name under a kit of <paramref name="slots"/> door
+    /// slots: <see cref="DefaultSocketName(bool, RoomFacing, int)"/> for one
+    /// slot; for more, that name, an underscore and the slot's letter from
+    /// <c>a</c>, counted as the offset is, from the room's own south (east
+    /// and west walls) or west (north and south walls): <c>east_a</c>,
+    /// <c>east_b</c>, <c>east_c</c> in a room of one cell, <c>east0_a</c>
+    /// and on in a larger one.
+    /// </summary>
+    /// <param name="large">Whether the room covers more than one cell.</param>
+    /// <param name="facing">The socket's face.</param>
+    /// <param name="offset">Its cell edge along the face.</param>
+    /// <param name="slots">The kit's door slots.</param>
+    /// <param name="slot">The socket's slot.</param>
+    /// <returns>The name.</returns>
+    public static string DefaultSocketName(bool large, RoomFacing facing, int offset, int slots, int slot) =>
+        slots == 1 ? DefaultSocketName(large, facing, offset) : DefaultSocketName(large, facing, offset) + "_" + (char)('a' + slot);
+
+    /// <summary>
+    /// The kit's door slots per cell edge, optional: 1, 3 or 5
+    /// (<see cref="SocketKit.Slots"/>), 1 without the key. Part of the kit,
+    /// so every room of a library, and every library of a level, must agree
+    /// on it.
+    /// </summary>
+    public const string DoorSlotsKey = "door_slots";
+
     /// <summary>The prefix of the optional socket-name keys: <c>socket_east</c> and so on.</summary>
     public const string SocketKeyPrefix = "socket_";
 
@@ -683,7 +709,7 @@ public static class RoomLibraryVmf
         Dictionary<string, RoomWaterSocket> sockets = new(StringComparer.Ordinal);
         foreach ((string wall, RoomWaterSocket water) in marker.WaterWalls)
         {
-            List<RoomSocket> onWall = [.. definition.Sockets.Where(s => DefaultSocketName(definition.IsLarge, s.Facing, s.Offset) == wall)];
+            List<RoomSocket> onWall = [.. definition.Sockets.Where(s => DefaultSocketName(definition.IsLarge, s.Facing, s.Offset, definition.Kit.Slots, s.Slot) == wall)];
             if (onWall.Count == 0)
             {
                 throw new RoomLibraryException(
@@ -722,12 +748,16 @@ public static class RoomLibraryVmf
         List<RoomSocket> sockets = [];
         foreach (RoomFacing facing in Enum.GetValues<RoomFacing>())
         {
-            for (int offset = 0; offset < bare.EdgesOn(facing); offset++)
+            for (int at = 0; at < bare.EdgesOn(facing) * marker.Kit.Slots; at++)
             {
-                Box plug = RoomLinter.SealBox(bare, new RoomSocket(facing, "probe") { Offset = offset }, marker.CellSize);
+                // Along a wall in order: cell edge by cell edge, and on each
+                // the kit's door slots from the room's own south or west.
+                int offset = at / marker.Kit.Slots;
+                int slot = at % marker.Kit.Slots;
+                Box plug = RoomLinter.SealBox(bare, new RoomSocket(facing, "probe") { Offset = offset, Slot = slot }, marker.CellSize);
                 int found = localSolids.Count(box => Same(box, plug));
-                string wall = DefaultSocketName(large, facing, offset);
-                string side = large ? $"{wall} cell edge" : $"{wall} wall";
+                string wall = DefaultSocketName(large, facing, offset, marker.Kit.Slots, slot);
+                string side = marker.Kit.Slots > 1 ? $"{wall} door slot" : large ? $"{wall} cell edge" : $"{wall} wall";
                 marker.SocketNames.TryGetValue(wall, out string? named);
                 if (found == 0)
                 {
@@ -743,12 +773,14 @@ public static class RoomLibraryVmf
 
                 if (found > 1)
                 {
-                    throw new RoomLibraryException(large
+                    throw new RoomLibraryException(marker.Kit.Slots > 1
+                        ? $"room \"{marker.Name}\" has {found} door plugs at its {side}; a door slot has one socket."
+                        : large
                         ? $"room \"{marker.Name}\" has {found} door plugs on its {side}; a cell edge has one socket."
                         : $"room \"{marker.Name}\" has {found} door plugs on its {wall} wall; a wall has one socket.");
                 }
 
-                sockets.Add(new RoomSocket(facing, named ?? wall) { Offset = offset });
+                sockets.Add(new RoomSocket(facing, named ?? wall) { Offset = offset, Slot = slot });
             }
         }
 
@@ -952,6 +984,7 @@ public static class RoomLibraryVmf
         SocketKit kit = new(Positive(entity, DoorWidthKey, who), Positive(entity, DoorHeightKey, who), Positive(entity, WallDepthKey, who))
         {
             Sill = Sill(entity, who),
+            Slots = Slots(entity, who),
         };
         try
         {
@@ -975,8 +1008,13 @@ public static class RoomLibraryVmf
                 $"{who}: the door kit {kit} does not fit in a {cell:0.###}-unit cell."));
         }
 
+        if (kit.SlotProblem(cell) is { } slotProblem)
+        {
+            throw new RoomLibraryException($"{who}: the door kit {kit}: {slotProblem}");
+        }
+
         (int cellsX, int cellsY) = Footprint(entity, name);
-        HashSet<string> edges = EdgeNames(cellsX, cellsY);
+        HashSet<string> edges = EdgeNames(cellsX, cellsY, kit.Slots);
         Dictionary<string, string> socketNames = new(StringComparer.Ordinal);
         foreach (VmfKey key in entity.Keys)
         {
@@ -988,7 +1026,9 @@ public static class RoomLibraryVmf
             string wall = key.Name[SocketKeyPrefix.Length..].ToLowerInvariant();
             if (!edges.Contains(wall))
             {
-                throw new RoomLibraryException(cellsX == 1 && cellsY == 1
+                throw new RoomLibraryException(kit.Slots > 1
+                    ? $"{who} has a key \"{key.Name}\"; {SlotList(cellsX, cellsY, kit.Slots, SocketKeyPrefix)}"
+                    : cellsX == 1 && cellsY == 1
                     ? $"{who} has a key \"{key.Name}\"; a socket is named by {SocketKeyPrefix}east, west, north or south."
                     : $"{who} has a key \"{key.Name}\"; {EdgeList(cellsX, cellsY, SocketKeyPrefix)}");
             }
@@ -1023,7 +1063,9 @@ public static class RoomLibraryVmf
             string wall = key.Name[WaterKeyPrefix.Length..].ToLowerInvariant();
             if (!edges.Contains(wall))
             {
-                throw new RoomLibraryException(cellsX == 1 && cellsY == 1
+                throw new RoomLibraryException(kit.Slots > 1
+                    ? $"{who} has a key \"{key.Name}\"; {SlotList(cellsX, cellsY, kit.Slots, WaterKeyPrefix)}"
+                    : cellsX == 1 && cellsY == 1
                     ? $"{who} has a key \"{key.Name}\"; a water socket is declared by {WaterKeyPrefix}east, {WaterKeyPrefix}west, {WaterKeyPrefix}north or {WaterKeyPrefix}south."
                     : $"{who} has a key \"{key.Name}\"; {EdgeList(cellsX, cellsY, WaterKeyPrefix)}");
             }
@@ -1069,7 +1111,7 @@ public static class RoomLibraryVmf
     }
 
     /// <summary>Every default socket name a room of the footprint has: the key suffixes its socket and water keys may use.</summary>
-    private static HashSet<string> EdgeNames(int cellsX, int cellsY)
+    private static HashSet<string> EdgeNames(int cellsX, int cellsY, int slots)
     {
         bool large = cellsX != 1 || cellsY != 1;
         HashSet<string> names = new(StringComparer.Ordinal);
@@ -1078,11 +1120,43 @@ public static class RoomLibraryVmf
             int edges = facing is RoomFacing.PositiveX or RoomFacing.NegativeX ? cellsY : cellsX;
             for (int k = 0; k < edges; k++)
             {
-                _ = names.Add(DefaultSocketName(large, facing, k));
+                for (int slot = 0; slot < slots; slot++)
+                {
+                    _ = names.Add(DefaultSocketName(large, facing, k, slots, slot));
+                }
             }
         }
 
         return names;
+    }
+
+    /// <summary>The keys the sockets of a room under a kit of several door slots are named or given water by, as the refusal of another key lists them.</summary>
+    private static string SlotList(int cellsX, int cellsY, int slots, string prefix)
+    {
+        bool large = cellsX != 1 || cellsY != 1;
+        char last = (char)('a' + slots - 1);
+        return large
+            ? string.Create(CultureInfo.InvariantCulture,
+                $"a room of {cellsX} x {cellsY} cells under a kit of {slots} door slots names a door slot by {prefix}<wall><cell>_<slot>, like {prefix}east0_a to {prefix}east{cellsY - 1}_{last}, the slot a to {last} from the room's own south or west.")
+            : string.Create(CultureInfo.InvariantCulture,
+                $"a room under a kit of {slots} door slots names a door slot by {prefix}<wall>_<slot>, like {prefix}east_a to {prefix}east_{last}, the slot a to {last} from the room's own south or west.");
+    }
+
+    /// <summary>
+    /// A marker's <c>door_slots</c>: 1 without the key, else 1, 3 or 5
+    /// (<see cref="SocketKit.MaxSlots"/>); anything else is refused.
+    /// </summary>
+    private static int Slots(VmfChunk entity, string who)
+    {
+        if (entity.GetValue(DoorSlotsKey) is not { } text)
+        {
+            return 1;
+        }
+
+        return int.TryParse(text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int slots) && slots is 1 or 3 or 5
+            ? slots
+            : throw new RoomLibraryException(
+                $"{who}: \"{DoorSlotsKey}\" is \"{text}\"; a cell edge has 1, 3 or {SocketKit.MaxSlots} door slots, an odd number so the middle slot is the centred door and the slots mirror onto each other.");
     }
 
     /// <summary>The keys a larger room's sockets are named or given water by, as the refusal of another key lists them.</summary>

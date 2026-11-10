@@ -174,7 +174,7 @@ public static class RoomModel
 
         foreach (RoomFacing facing in Enum.GetValues<RoomFacing>())
         {
-            List<RoomSocket> onFace = [.. definition.Sockets.Where(s => s.Facing == facing).OrderBy(s => s.Offset)];
+            List<RoomSocket> onFace = [.. definition.Sockets.Where(s => s.Facing == facing).OrderBy(s => s.Offset).ThenBy(s => s.Slot)];
             foreach ((float, float, float, float) band in WallBands(definition, facing, onFace))
             {
                 (Vec3 mins, Vec3 maxs) = WallBox(facing, spanX, spanY, wall, band);
@@ -222,6 +222,12 @@ public static class RoomModel
         {
             float a0 = u0 * cell;
             float a1 = u1 * cell;
+            if (definition.Kit.Slots > 1)
+            {
+                a0 = definition.Kit.SlotLow(cell, socket.Slot);
+                a1 = a0 + definition.Kit.Width;
+            }
+
             if (socket.Offset != 0)
             {
                 a0 += socket.Offset * cell;

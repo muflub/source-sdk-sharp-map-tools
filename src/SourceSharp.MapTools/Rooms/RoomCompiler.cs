@@ -440,7 +440,9 @@ public static class RoomCompiler
                 + string.Join(",", definition.Sockets.Select(s => s.Offset.ToString(System.Globalization.CultureInfo.InvariantCulture)))
             : string.Empty;
 
-    internal static string SillText(SocketKit kit) => kit.Sill == DoorSill.Floor ? ",floor" : string.Empty;
+    internal static string SillText(SocketKit kit) =>
+        (kit.Sill == DoorSill.Floor ? ",floor" : string.Empty)
+        + (kit.Slots != 1 ? ",slots" + kit.Slots.ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty);
 
     private static IReadOnlyList<string> InputKeysOf(VmfDocument document, RoomDefinition definition, VbspContext context)
     {

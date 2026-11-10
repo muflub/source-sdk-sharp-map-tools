@@ -2055,6 +2055,17 @@ public static partial class LevelLinker
                         + $" socket \"{socket}\" meets cell ({nx}, {ny}) socket \"{neighborSocket}\""
                         + " from the wrong side: the two sockets do not face each other on the shared wall.");
                 }
+
+                if (room.Definition.Kit.Slots > 1
+                    && !RoomPlacement.SameSlot(
+                        instance.Placement.SocketAlong(room.Definition, mine, layout.CellSize),
+                        neighbour.Placement.SocketAlong(neighbourRoom.Definition, theirs, layout.CellSize)))
+                {
+                    throw new LinkException(
+                        $"the joint at cell ({instance.Placement.CellX}, {instance.Placement.CellY})"
+                        + $" socket \"{socket}\" meets cell ({nx}, {ny}) socket \"{neighborSocket}\""
+                        + " at another door slot: the two doors do not stand at the same place on the shared wall.");
+                }
             }
         }
     }

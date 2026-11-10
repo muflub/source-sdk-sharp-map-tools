@@ -1009,6 +1009,7 @@ public static class LevelLibraries
         : x.Height != y.Height ? (RoomLibraryVmf.DoorHeightKey, Format(x.Height), Format(y.Height))
         : x.Depth != y.Depth ? (RoomLibraryVmf.WallDepthKey, Format(x.Depth), Format(y.Depth))
         : x.Sill != y.Sill ? (RoomLibraryVmf.DoorSillKey, SillName(x.Sill), SillName(y.Sill))
+        : x.Slots != y.Slots ? (RoomLibraryVmf.DoorSlotsKey, x.Slots.ToString(CultureInfo.InvariantCulture), y.Slots.ToString(CultureInfo.InvariantCulture))
         : null;
 
     private static string SillName(DoorSill sill) => sill == DoorSill.Floor ? RoomLibraryVmf.DoorSillFloor : RoomLibraryVmf.DoorSillCentre;
