@@ -118,10 +118,12 @@ public static class RoomNavBuilder
 
         // The room's own box (17.6): its cell's footprint, its height up; a
         // cube's n x n x n.
+        // A room larger than one cell (17.8) has one grid over its whole
+        // footprint, n voxels to each of its cells.
         float cell = definition.CellSize;
         int n = settings.CellVoxels(cell);
         int nz = settings.ColumnVoxels(definition);
-        NavRegion region = new(0, 0, 0, n, n, nz, settings.VoxelSize);
+        NavRegion region = new(0, 0, 0, n * definition.CellsX, n * definition.CellsY, nz, settings.VoxelSize);
 
         // The plugs, found by their boxes, and everything else.
         int[] plugOf = new int[definition.Sockets.Count];
@@ -180,6 +182,8 @@ public static class RoomNavBuilder
             VoxelSize = settings.VoxelSize,
             CellVoxels = n,
             ColumnVoxels = nz,
+            CellsX = definition.CellsX,
+            CellsY = definition.CellsY,
             FloorNormalZ = settings.FloorNormalZ,
             StepHeight = settings.StepHeight,
             JumpHeight = settings.JumpHeight,
@@ -312,25 +316,28 @@ public static class RoomNavBuilder
     /// </remarks>
     internal static List<NavBrush> Outside(RoomDefinition definition, int capped)
     {
-        float c = definition.CellSize;
+        // The footprint's far sides (17.8): the cell itself for a room of one
+        // cell, whose boxes are then the ones it always had.
+        float cx = definition.SpanX;
+        float cy = definition.SpanY;
         float h = definition.Height;
-        float big = (2 * Math.Max(c, h)) + 4096;
+        float big = (2 * Math.Max(Math.Max(cx, cy), h)) + 4096;
         float depth = definition.Kit.Depth;
         int solid = 1;
         List<NavBrush> boxes =
         [
-            NavBrush.Box(new Vec3(-big, -big, -big), new Vec3(c + big, c + big, 0), solid),
-            NavBrush.Box(new Vec3(-big, -big, h), new Vec3(c + big, c + big, h + big), solid),
+            NavBrush.Box(new Vec3(-big, -big, -big), new Vec3(cx + big, cy + big, 0), solid),
+            NavBrush.Box(new Vec3(-big, -big, h), new Vec3(cx + big, cy + big, h + big), solid),
         ];
 
         foreach (RoomFacing facing in Enum.GetValues<RoomFacing>())
         {
-            int socket = -1;
+            List<Box> open = [];
             for (int s = 0; s < definition.Sockets.Count; s++)
             {
-                if (definition.Sockets[s].Facing == facing)
+                if (definition.Sockets[s].Facing == facing && s != capped)
                 {
-                    socket = s;
+                    open.Add(RoomLinter.SealBox(definition, definition.Sockets[s], definition.CellSize));
                 }
             }
 
@@ -342,20 +349,35 @@ public static class RoomNavBuilder
                 _ => (1, false),
             };
 
-            (float nearLo, float nearHi) = high ? (c, c + depth) : (-depth, 0f);
-            if (socket < 0 || socket == capped)
+            float face = axis == 0 ? cx : cy;
+            float along = axis == 0 ? cy : cx;
+            (float nearLo, float nearHi) = high ? (face, face + depth) : (-depth, 0f);
+            if (open.Count == 0)
             {
-                boxes.Add(Slab(axis, high ? c : -big, high ? c + big : 0, -big, c + big, -big, c + big));
+                boxes.Add(Slab(axis, high ? face : -big, high ? face + big : 0, -big, along + big, -big, along + big));
                 continue;
             }
 
-            Box plug = RoomLinter.SealBox(definition, definition.Sockets[socket], c);
-            (float u0, float u1) = axis == 0 ? (plug.Mins.Y, plug.Maxs.Y) : (plug.Mins.X, plug.Maxs.X);
-            (float v0, float v1) = (plug.Mins.Z, plug.Maxs.Z);
-            boxes.Add(Slab(axis, nearLo, nearHi, -big, u0, -big, c + big));
-            boxes.Add(Slab(axis, nearLo, nearHi, u1, c + big, -big, c + big));
-            boxes.Add(Slab(axis, nearLo, nearHi, u0, u1, -big, v0));
-            boxes.Add(Slab(axis, nearLo, nearHi, u0, u1, v1, c + big));
+            // The neighbour's side of the wall, cut by every open door on
+            // this face: the strips between and beside the doors, then the
+            // parts below and above each. One door gives the four boxes a
+            // room of one cell always had, in their order.
+            open.Sort((a, b) => (axis == 0 ? a.Mins.Y : a.Mins.X).CompareTo(axis == 0 ? b.Mins.Y : b.Mins.X));
+            float from = -big;
+            foreach (Box plug in open)
+            {
+                float u0 = axis == 0 ? plug.Mins.Y : plug.Mins.X;
+                boxes.Add(Slab(axis, nearLo, nearHi, from, u0, -big, along + big));
+                from = axis == 0 ? plug.Maxs.Y : plug.Maxs.X;
+            }
+
+            boxes.Add(Slab(axis, nearLo, nearHi, from, along + big, -big, along + big));
+            foreach (Box plug in open)
+            {
+                (float u0, float u1) = axis == 0 ? (plug.Mins.Y, plug.Maxs.Y) : (plug.Mins.X, plug.Maxs.X);
+                boxes.Add(Slab(axis, nearLo, nearHi, u0, u1, -big, plug.Mins.Z));
+                boxes.Add(Slab(axis, nearLo, nearHi, u0, u1, plug.Maxs.Z, along + big));
+            }
         }
 
         return boxes;
@@ -391,18 +413,19 @@ public static class RoomNavBuilder
     /// </summary>
     internal static Vec3 DoorPoint(RoomDefinition definition, RoomSocket socket, NavGrid grid)
     {
-        float c = definition.CellSize;
-        Box plug = RoomLinter.SealBox(definition, socket, c);
-        int n = grid.Region.SizeX;
+        // On the footprint's side at the socket's cell edge (17.8): the
+        // cell's own face for a room of one cell.
+        Box plug = RoomLinter.SealBox(definition, socket, definition.CellSize);
+        int nx = grid.Region.SizeX, ny = grid.Region.SizeY;
         double s = grid.Region.VoxelSize;
         float middleX = (plug.Mins.X + plug.Maxs.X) / 2;
         float middleY = (plug.Mins.Y + plug.Maxs.Y) / 2;
         (float px, float py, int vx, int vy) = socket.Facing switch
         {
-            RoomFacing.PositiveX => (c, middleY, n - 1, VoxelOf(middleY, s, n)),
-            RoomFacing.NegativeX => (0f, middleY, 0, VoxelOf(middleY, s, n)),
-            RoomFacing.PositiveY => (middleX, c, VoxelOf(middleX, s, n), n - 1),
-            _ => (middleX, 0f, VoxelOf(middleX, s, n), 0),
+            RoomFacing.PositiveX => (definition.SpanX, middleY, nx - 1, VoxelOf(middleY, s, ny)),
+            RoomFacing.NegativeX => (0f, middleY, 0, VoxelOf(middleY, s, ny)),
+            RoomFacing.PositiveY => (middleX, definition.SpanY, VoxelOf(middleX, s, nx), ny - 1),
+            _ => (middleX, 0f, VoxelOf(middleX, s, nx), 0),
         };
 
         float floor = plug.Mins.Z;
@@ -473,9 +496,8 @@ public static class RoomNavBuilder
                 mask = 1u << player;
             }
 
-            int n = grid.Region.SizeX;
-            int x = VoxelOf(poi.Origin.X, grid.Region.VoxelSize, n);
-            int y = VoxelOf(poi.Origin.Y, grid.Region.VoxelSize, n);
+            int x = VoxelOf(poi.Origin.X, grid.Region.VoxelSize, grid.Region.SizeX);
+            int y = VoxelOf(poi.Origin.Y, grid.Region.VoxelSize, grid.Region.SizeY);
             int z = VoxelOf(poi.Origin.Z, grid.Region.VoxelSize, grid.Region.SizeZ);
             for (int a = 0; a < settings.Agents.Count; a++)
             {

@@ -101,6 +101,27 @@ public sealed record RoomNav
         init => _columnVoxels = value;
     }
 
+    /// <summary>
+    /// The cells the grid covers along x at <see cref="Turn"/>: 1 for a room
+    /// of one cell; for a room larger than one cell (the rooms design, 17.8)
+    /// its footprint as turned, so a quarter turn swaps it with
+    /// <see cref="CellsY"/>. The grid is one over the footprint,
+    /// <see cref="CellVoxels"/> to a cell.
+    /// </summary>
+    public int CellsX { get; init; } = 1;
+
+    /// <summary>The cells the grid covers along y at <see cref="Turn"/> (<see cref="CellsX"/>).</summary>
+    public int CellsY { get; init; } = 1;
+
+    /// <summary>Whether the grid covers more than one cell: a larger room's navigation.</summary>
+    public bool IsLarge => CellsX != 1 || CellsY != 1;
+
+    /// <summary>Voxels along x of the whole grid.</summary>
+    public int SizeX => CellsX * CellVoxels;
+
+    /// <summary>Voxels along y of the whole grid.</summary>
+    public int SizeY => CellsY * CellVoxels;
+
     /// <summary>Whether the room's columns are not its cell's edge: a shaped room's navigation.</summary>
     public bool IsShaped => ColumnVoxels != CellVoxels;
 
@@ -172,37 +193,46 @@ public sealed record RoomNav
             return this;
         }
 
-        int n = CellVoxels;
-        List<NavRun>[] columns = new List<NavRun>[n * n];
-        for (int y = 0; y < n; y++)
+        // A larger room's grid is a rectangle (17.8): a quarter turn swaps
+        // its sides, and the room moves back by its footprint, as its
+        // placement's transform does. A grid of one cell is the square it was.
+        int sx = SizeX, sy = SizeY;
+        (int tsx, int tsy) = (r & 1) == 0 ? (sx, sy) : (sy, sx);
+        List<NavRun>[] columns = new List<NavRun>[sx * sy];
+        for (int y = 0; y < sy; y++)
         {
-            for (int x = 0; x < n; x++)
+            for (int x = 0; x < sx; x++)
             {
-                (int tx, int ty) = TurnColumn(x, y, n, r);
-                columns[(ty * n) + tx] = [.. Columns.Column(x, y).ToArray()];
+                (int tx, int ty) = TurnColumn(x, y, sx, sy, r);
+                columns[(ty * tsx) + tx] = [.. Columns.Column(x, y).ToArray()];
             }
         }
 
-        int[] starts = new int[(n * n) + 1];
+        int[] starts = new int[(sx * sy) + 1];
         List<NavRun> runs = [];
-        for (int c = 0; c < n * n; c++)
+        for (int c = 0; c < sx * sy; c++)
         {
             starts[c] = runs.Count;
             runs.AddRange(columns[c]);
         }
 
         starts[^1] = runs.Count;
-        RoomTransform turn = new(new RoomPlacement("turn", 0, 0, r), CellSize);
+        RoomTransform turn = new(new RoomPlacement("turn", 0, 0, r) { CellsX = CellsX, CellsY = CellsY }, CellSize);
+        float spanX = CellsX == 1 ? CellSize : CellsX * CellSize, spanY = CellsY == 1 ? CellSize : CellsY * CellSize;
         return this with
         {
             Turn = (Turn + r) % 4,
-            Columns = new NavColumns(n, n, starts, [.. runs]),
+            CellsX = (r & 1) == 0 ? CellsX : CellsY,
+            CellsY = (r & 1) == 0 ? CellsY : CellsX,
+            Columns = new NavColumns(tsx, tsy, starts, [.. runs]),
             SocketData = [.. SocketData.Select(s => new RoomNavSocket(
-                [.. s.Capped.Select(c => c with { Voxel = TurnVoxel(c.Voxel, n, r) }).OrderBy(c => c.Voxel)],
+                [.. s.Capped.Select(c => c with { Voxel = TurnVoxel(c.Voxel, sx, sy, r) }).OrderBy(c => c.Voxel)],
                 turn.Apply(s.DoorPoint)))],
             Pois = [.. Pois.Select(p => p with { Position = turn.Apply(p.Position), Yaw = TurnYaw(p.Yaw, r) })],
             Obstacles = [.. Obstacles.Select(o => o with { Bounds = TurnBox(o.Bounds, turn) })],
-            Brushes = [.. Brushes.Select(b => NavBrush.FromPlaneFloats(b, 1)!.Turned(r, CellSize).PlaneFloats())],
+            Brushes = [.. Brushes.Select(b => (IsLarge
+                ? NavBrush.FromPlaneFloats(b, 1)!.Turned(r, spanX, spanY)
+                : NavBrush.FromPlaneFloats(b, 1)!.Turned(r, CellSize)).PlaneFloats())],
         };
     }
 
@@ -227,12 +257,26 @@ public sealed record RoomNav
     /// <param name="n">Voxels along the cell's edge.</param>
     /// <param name="quarterTurns">Counter-clockwise quarter turns.</param>
     /// <returns>The turned column.</returns>
-    public static (int X, int Y) TurnColumn(int x, int y, int n, int quarterTurns)
+    public static (int X, int Y) TurnColumn(int x, int y, int n, int quarterTurns) => TurnColumn(x, y, n, n, quarterTurns);
+
+    /// <summary>
+    /// Where a column of a grid of <paramref name="sizeX"/> by
+    /// <paramref name="sizeY"/> goes under quarter turns: <c>(x, y) → (sizeY − 1 − y, x)</c>
+    /// each turn, the sides swapping as the grid turns.
+    /// </summary>
+    /// <param name="x">The column along x.</param>
+    /// <param name="y">Along y.</param>
+    /// <param name="sizeX">The grid's voxels along x before the turns.</param>
+    /// <param name="sizeY">Along y.</param>
+    /// <param name="quarterTurns">Counter-clockwise quarter turns.</param>
+    /// <returns>The turned column.</returns>
+    public static (int X, int Y) TurnColumn(int x, int y, int sizeX, int sizeY, int quarterTurns)
     {
         int r = ((quarterTurns % 4) + 4) % 4;
         for (int t = 0; t < r; t++)
         {
-            (x, y) = (n - 1 - y, x);
+            (x, y) = (sizeY - 1 - y, x);
+            (sizeX, sizeY) = (sizeY, sizeX);
         }
 
         return (x, y);
@@ -243,13 +287,22 @@ public sealed record RoomNav
     /// <param name="n">Voxels along the cell's edge.</param>
     /// <param name="quarterTurns">Counter-clockwise quarter turns.</param>
     /// <returns>The turned index.</returns>
-    public static int TurnVoxel(int voxel, int n, int quarterTurns)
+    public static int TurnVoxel(int voxel, int n, int quarterTurns) => TurnVoxel(voxel, n, n, quarterTurns);
+
+    /// <summary>A voxel index of a grid of <paramref name="sizeX"/> by <paramref name="sizeY"/> turned by quarter turns.</summary>
+    /// <param name="voxel">The index, x fastest.</param>
+    /// <param name="sizeX">The grid's voxels along x before the turns.</param>
+    /// <param name="sizeY">Along y.</param>
+    /// <param name="quarterTurns">Counter-clockwise quarter turns.</param>
+    /// <returns>The turned index, in the turned grid.</returns>
+    public static int TurnVoxel(int voxel, int sizeX, int sizeY, int quarterTurns)
     {
-        int x = voxel % n;
-        int y = voxel / n % n;
-        int z = voxel / (n * n);
-        (int tx, int ty) = TurnColumn(x, y, n, quarterTurns);
-        return (((z * n) + ty) * n) + tx;
+        int x = voxel % sizeX;
+        int y = voxel / sizeX % sizeY;
+        int z = voxel / (sizeX * sizeY);
+        (int tx, int ty) = TurnColumn(x, y, sizeX, sizeY, quarterTurns);
+        int turnedX = (quarterTurns & 1) == 0 ? sizeX : sizeY, turnedY = (quarterTurns & 1) == 0 ? sizeY : sizeX;
+        return (((z * turnedY) + ty) * turnedX) + tx;
     }
 
     private static Box TurnBox(Box box, RoomTransform turn)

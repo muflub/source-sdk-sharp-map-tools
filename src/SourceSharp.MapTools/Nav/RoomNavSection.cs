@@ -85,6 +85,14 @@ public static class RoomNavSection
     /// <summary>The payload revision of a shaped room's navigation: <see cref="Revision"/> and its columns' height.</summary>
     public const int ShapedRevision = 3;
 
+    /// <summary>
+    /// The payload revision of a room larger than one cell (the rooms design,
+    /// 17.8): <see cref="ShapedRevision"/>'s fields (the columns' height
+    /// always written) and the grid's cells along x and y at the section's
+    /// turn; its columns, capped voxels and points span the whole footprint.
+    /// </summary>
+    public const int LargeRevision = 4;
+
     /// <summary>The codec byte and the <c>int64</c> decoded length every section starts with.</summary>
     private const int HeaderBytes = 1 + 8;
 
@@ -111,14 +119,20 @@ public static class RoomNavSection
     {
         ArgumentNullException.ThrowIfNull(nav);
         Writer w = new();
-        w.I32(nav.IsShaped ? ShapedRevision : Revision);
+        w.I32(nav.IsLarge ? LargeRevision : nav.IsShaped ? ShapedRevision : Revision);
         w.U8((byte)nav.Turn);
         w.F32(nav.CellSize);
         w.F32(nav.VoxelSize);
         w.I32(nav.CellVoxels);
-        if (nav.IsShaped)
+        if (nav.IsShaped || nav.IsLarge)
         {
             w.I32(nav.ColumnVoxels);
+        }
+
+        if (nav.IsLarge)
+        {
+            w.I32(nav.CellsX);
+            w.I32(nav.CellsY);
         }
 
         w.F32(nav.FloorNormalZ);
@@ -143,6 +157,10 @@ public static class RoomNavSection
             w.U8((byte)nav.Sockets[s].Facing);
             w.Str(nav.Sockets[s].Name);
             w.Vec(nav.SocketData[s].DoorPoint);
+            if (nav.IsLarge)
+            {
+                w.I32(nav.Sockets[s].Offset);
+            }
         }
 
         w.I32(nav.Pois.Count);
@@ -259,7 +277,7 @@ public static class RoomNavSection
         byte[] raw = NavCompression.Decompress((NavCodec)section[0], section[HeaderBytes..], (int)length);
         Reader r = new(raw);
         int revision = r.I32();
-        if (revision is not (Revision or ShapedRevision))
+        if (revision is not (Revision or ShapedRevision or LargeRevision))
         {
             return null;
         }
@@ -273,7 +291,15 @@ public static class RoomNavSection
         float cell = r.F32();
         float voxel = r.F32();
         int n = r.I32();
-        int nz = revision == ShapedRevision ? r.I32() : n;
+        int nz = revision is ShapedRevision or LargeRevision ? r.I32() : n;
+        int cellsX = revision == LargeRevision ? r.I32() : 1;
+        int cellsY = revision == LargeRevision ? r.I32() : 1;
+        if (cellsX is < 1 or > RoomDefinition.MaxFootprint || cellsY is < 1 or > RoomDefinition.MaxFootprint || (revision == LargeRevision && cellsX == 1 && cellsY == 1))
+        {
+            throw new InvalidDataException($"a room nav section of revision {revision} over {cellsX} x {cellsY} cells.");
+        }
+
+        int sizeX = n * cellsX, sizeY = n * cellsY;
         float floor = r.F32();
         float step = r.F32();
         float jumpHeight = r.F32();
@@ -320,8 +346,15 @@ public static class RoomNavSection
                 throw new InvalidDataException($"a room nav socket facing {facing}.");
             }
 
-            sockets.Add(new RoomSocket((RoomFacing)facing, r.Str()));
+            string socketName = r.Str();
             doorPoints.Add(r.Vec());
+            int offset = revision == LargeRevision ? r.I32() : 0;
+            if (offset is < 0 or >= RoomDefinition.MaxFootprint)
+            {
+                throw new InvalidDataException($"a room nav socket at cell {offset} of its face.");
+            }
+
+            sockets.Add(new RoomSocket((RoomFacing)facing, socketName) { Offset = offset });
         }
 
         List<RoomNavPoi> pois = [];
@@ -380,8 +413,8 @@ public static class RoomNavSection
         }
 
         int runCount = r.Count(22);
-        int[] starts = new int[(n * n) + 1];
-        for (int c = 0; c < n * n; c++)
+        int[] starts = new int[(sizeX * sizeY) + 1];
+        for (int c = 0; c < sizeX * sizeY; c++)
         {
             starts[c + 1] = starts[c] + r.U16();
         }
@@ -392,7 +425,7 @@ public static class RoomNavSection
         }
 
         NavRun[] runs = new NavRun[runCount];
-        for (int c = 0; c < n * n; c++)
+        for (int c = 0; c < sizeX * sizeY; c++)
         {
             int top = -1;
             for (int i = starts[c]; i < starts[c + 1]; i++)
@@ -417,7 +450,7 @@ public static class RoomNavSection
             for (int i = 0; i < count; i++)
             {
                 int voxelIndex = r.I32();
-                if (voxelIndex < 0 || voxelIndex >= n * n * nz)
+                if (voxelIndex < 0 || voxelIndex >= sizeX * sizeY * nz)
                 {
                     throw new InvalidDataException($"a room nav cap change at voxel {voxelIndex}, outside a cell of {n}.");
                 }
@@ -489,7 +522,9 @@ public static class RoomNavSection
             Sockets = sockets,
             Pois = pois,
             Records = records,
-            Columns = new NavColumns(n, n, starts, runs),
+            CellsX = cellsX,
+            CellsY = cellsY,
+            Columns = new NavColumns(sizeX, sizeY, starts, runs),
             SocketData = [.. caps.Select((c, s) => new RoomNavSocket(c, doorPoints[s]))],
             Obstacles = obstacles,
             Brushes = brushPlanes,

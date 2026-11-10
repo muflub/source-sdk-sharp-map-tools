@@ -61,7 +61,7 @@ public sealed class RoomsMultiCellSampleTests
             Assert.Equal(expected.Sockets.Order(), definition.Sockets.Select(s => (s.Facing, s.Offset)).Order());
         }
 
-        Assert.Equal("0", library.GetChunk("world")!.GetValue("nav"));
+        Assert.Null(library.GetChunk("world")!.GetValue("nav"));
     }
 
     /// <summary>

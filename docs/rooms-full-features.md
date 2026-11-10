@@ -5372,9 +5372,18 @@ written:
 - **The generator (O30)** draws rooms of one cell only, and its header
   names how many larger rooms it left out; role rooms may be larger at
   the link.
-- **Navigation is not built** for a larger room: a library building
-  navigation that holds one is refused before any room compiles, naming
-  `nav 0`. The `.nav3d` per covered cell of 17.8 is still to do.
+- **Navigation** is one clearance grid over the footprint (`RoomNav.CellsX`
+  and `CellsY`, a quarter turn swapping them; the room nav section's
+  revision 4 records them and each socket's cell edge). The kit's assumed
+  outside is the footprint's, each face's neighbour wall cut by every open
+  door on it. The link writes each covered cell's `n x n` block under that
+  cell's root, each door in the cell whose edge it is on, each point in the
+  cell it stands in, and the room's name and turn on every covered cell;
+  the `.nav3d`'s layout and version do not change for it, and the 128
+  voxels a cell is still per cell. Facts hold every covered cell to the
+  flattened compile's grid at every turn, a walk across the internal faces
+  of a 3 x 3 room as one component, doors per socket and a point of
+  interest in a cell that is not the anchor.
 - **The level map** cuts a larger room by its footprint and turns it by
   it; the `.map2d` records the anchor only, as for any placement.
 
@@ -5916,7 +5925,7 @@ size. The assumptions, and what each means for taller or larger rooms:
 PR 19 lifted the height rows of this table: the room's box replaces the
 cube wherever it is assumed, and the top tree's bounds follow the rooms'
 heights (section 13, its landed note). PR 20 lifted the footprint rows for
-rooms larger than one cell (D37, its landed note), all but navigation.
+rooms larger than one cell (D37, its landed note).
 
 In short: **height** is fixed by the kit and assumed in the cell box (split,
 lint, props, furniture, navigation, linker entities) and in the top tree's
@@ -6051,7 +6060,6 @@ not landed with it, the verb in them is the one PR 18 adds.
 | 17.8 blocks | R | `room {room}: its compile does not split at every cell face of its {w} x {d} footprint (cell ({i}, {j})); this is a bug in the room compile.` |
 | 17.8 face on a cell face | R | `room {room}: a surface lies on the cell face {x/y} = {v} inside its {w} x {d} footprint; the link routes each cell to its own part of the room and would drop it. Move the surface off the cell face, or let its brush cross it.` (PR 20) |
 | 17.8 `+` turned | R | `"{token}" is not a cell; + marks a cell a larger room covers, alone, with no rotation.` (PR 20) |
-| 17.8 navigation | R | `room {room}: navigation is not built for a room of {w} x {d} cells; set nav 0 on the library's worldspawn to pack it without navigation.` (PR 20) |
 | 17.9 no large rooms | R | `layout: -large asks for large areas, but no library of the level has a room taller than one cell.` (with `-max-height {h}`: `... taller than one cell and at most {h} tall (-max-height).`; PR 21 dropped `or wider` with D30) |
 | 17.9 no fill room | R | `none of the library's {n} room(s) has a socket and stands no taller than its cell{ and {h} (-max-height)}, so {placed} rooms cannot be joined; a room taller than its cell stands only in a group of large rooms (-large).` (when height left the fill no room; the socketless text otherwise, as before) |
 | 17.9 no fit | R | `layout: no level of {rows}x{columns} with seed {seed} covers {k} cells with large rooms in groups of {g}; lower -large or grow the grid.` |
@@ -6313,9 +6321,8 @@ a seamless area would take, should it ever be wanted.
 
 ### 17.8 Multi-cell rooms
 
-**Built by PR 20 (D37, 2026-11-10)**, as below, except navigation, which
-is refused for a larger room, and a surface lying on an internal cell face,
-which is refused; PR 20's landed note (section 13) has the details.
+**Built by PR 20 (D37, 2026-11-10)**, as below, except that a surface lying
+on an internal cell face is refused; PR 20's landed note (section 13) has the details.
 
 - **Authoring.** The `info_room` key **`room_footprint`**, `"W D"`: cells
   along the room's own +x and +y, 1 to 16 each (a guard, like

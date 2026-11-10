@@ -13,14 +13,17 @@ using SourceSharp.MapFormats.Bsp;
 using SourceSharp.MapFormats.Bsp.Structs;
 using SourceSharp.MapFormats.Geometry;
 using SourceSharp.MapFormats.Map2d;
+using SourceSharp.MapFormats.Nav;
 using SourceSharp.MapFormats.Text;
 using SourceSharp.MapGen.Rooms;
 using SourceSharp.MapTools.Io;
 using SourceSharp.MapTools.Materials;
+using SourceSharp.MapTools.Nav;
 using SourceSharp.MapTools.Options;
 using SourceSharp.MapTools.Phys.Managed;
 using SourceSharp.MapTools.Rooms;
 using SourceSharp.MapTools.Vis;
+using SourceSharp.Tests.MapTools.Nav;
 using SourceSharp.Tests.MapTools.Rooms;
 
 using Xunit;
@@ -87,10 +90,7 @@ public sealed class RoomsMultiCellSampleCommandsTests
 
             using StringWriter link = new();
             Assert.True(await RoomCommands.RunLinkAsync(fs, [$"/multicell/levels/{name}.yaml", "-out", $"/multicell/out/{name}.bsp"], link) == Program.ExitSuccess, link.ToString());
-            // The one warning is the navigation the library does not build (nav 0).
-            Assert.All(
-                link.ToString().Split('\n').Where(l => l.Contains("warning", StringComparison.Ordinal)),
-                l => Assert.Contains("the room pack holds no navigation", l, StringComparison.Ordinal));
+            Assert.DoesNotContain("warning", link.ToString(), StringComparison.Ordinal);
             await RoomsFeaturesSampleCommandsTests.AssertCheckedAsync(fs, $"/multicell/out/{name}.bsp");
 
             using StringWriter flatten = new();
@@ -130,6 +130,22 @@ public sealed class RoomsMultiCellSampleCommandsTests
             }
 
             Assert.True(clear > middles.Count, $"{name}: {clear} clear lines");
+
+            // The navigation: every cell a room covers holds the flattened
+            // compile's grid run for run, every place a player stands has
+            // ground under it in the linked map's own collision, and ssmap
+            // nav reads it.
+            Nav3dReader nav = Nav3dReader.Open(Bytes(fs, $"/multicell/out/{name}.nav3d"));
+            LevelLayout covered = level.ToLayout(r => RoomLibraryVmf.Split(library).Single(x => x.Definition.Name == r).Definition, 256, new SocketKit(96, 224, 16));
+            List<(int X, int Y)> cells = [.. covered.Rooms.SelectMany(r => r.Placement.Covered().Select(c => (c.X, c.Y)))];
+            Assert.Equal(25, cells.Count);
+            RoomNavHeightsTests.AssertSameAsFlattened(flat, level, nav, cells);
+            NavFloorReport floor = NavFloorCheck.Check(nav, linked, BspNavMap.Hull, null);
+            Assert.Empty(floor.Missing);
+            Assert.True(floor.Standable > 1000, $"{name}: {floor.Standable} places to stand");
+            using StringWriter navText = new();
+            Assert.Equal(Program.ExitSuccess, await NavCommand.RunAsync(fs, [$"/multicell/out/{name}.nav3d"], navText));
+            Assert.Contains("25 placed", navText.ToString(), StringComparison.Ordinal);
 
             // The level map, and the entities.
             uint checksum = BspMapChecksum.Compute(Bytes(fs, $"/multicell/out/{name}.bsp"));

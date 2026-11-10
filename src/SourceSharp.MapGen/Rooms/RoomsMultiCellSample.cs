@@ -36,9 +36,8 @@ namespace SourceSharp.MapGen.Rooms;
 /// the internal face y = 256, neither touching a door.</item>
 /// </list>
 /// <para>
-/// <b>Navigation is off</b> (<c>nav 0</c> on the worldspawn): it is built
-/// for rooms of one cell only, and a library holding a larger room is
-/// refused when it asks for it.
+/// <b>Navigation</b> is built with the library's defaults: one grid over
+/// each larger room's footprint, written into the level's file cell by cell.
 /// </para>
 /// <para>
 /// <b>The level</b> is written by hand: the court in the south-west, the
@@ -195,7 +194,6 @@ public static class RoomsMultiCellSample
     public static string LibraryVmf()
     {
         VmfMap map = new();
-        map.World.Add(new("nav", "0"));
         float x = 0;
         foreach (MultiRoom room in Rooms)
         {

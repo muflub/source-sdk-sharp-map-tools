@@ -19,7 +19,6 @@ world
 	"id" "1"
 	"mapversion" "1"
 	"classname" "worldspawn"
-	"nav" "0"
 	solid
 	{
 		"id" "2"

@@ -38,7 +38,12 @@ Each cell is split into **voxels**, `cellVoxels` along each edge (16 by
 default: a 256-unit cell, 16-unit voxels). A cell is a cube unless its room
 has a height of its own (the rooms design, 17.6): then its columns run up
 that room's height in voxels instead, which only a **version 3** file
-records (`CHGT`, section 4); every floor stands at z = 0. Each voxel
+records (`CHGT`, section 4); every floor stands at z = 0. A room larger
+than one cell (the rooms design, 17.8) covers several cells: each holds its
+own part of the room's grid, its room's name and its turn, and the door
+bits of the doors on its own edges, so a reader's point lookup is a cell's
+whatever the room; the file's layout and version do not change for it.
+Each voxel
 **column** of a placed cell lists its free space as **leaves**: runs of
 voxels, bottom to top, each run a stretch of the column where everything
 the file knows is the same. Solid is simply not listed.
@@ -896,13 +901,17 @@ one run of bytes per placed room.
 
 Framing, big-endian as the pack is: `uint8` codec (0 none, 1 Deflate, 2
 Brotli; **none by default**, `-nav-codec` for another), `int64` decoded length, payload. The
-payload: `int32` revision (2; 3 for a room of its own height), `uint8` turn; `float32` cell size, voxel
-size, `int32` voxels per edge, in revision 3 `int32` voxels up the room's
-columns (its height over the voxel, 1 to 255, never the edge), `float32` floor normal z, step height, jump
+payload: `int32` revision (2; 3 for a room of its own height; 4 for a room
+larger than one cell), `uint8` turn; `float32` cell size, voxel
+size, `int32` voxels per cell edge, in revisions 3 and 4 `int32` voxels up the room's
+columns (its height over the voxel, 1 to 255; in revision 3 never the edge),
+in revision 4 `int32` cells along x and along y at the section's turn (a
+quarter turn swaps them; the grid is that many cells of voxels, columns,
+capped voxels and points across the whole footprint), `float32` floor normal z, step height, jump
 height, jump distance, water cost, ladder cost, `uint8` role; presets
 (`uint8` count; string name, `float32` width, height, `int32` mask);
 sockets (`uint8` count; `uint8` facing, string name, `float32[3]` door
-point); points (`int32` count; `float32` x, y, z, yaw, `uint8` has-facing,
+point, in revision 4 `int32` the socket's cell edge along its face); points (`int32` count; `float32` x, y, z, yaw, `uint8` has-facing,
 `float32` radius, string type, string tags, `uint8` has-name and name,
 `uint32` preset mask, string entity id); records (`int32` count; each three
 `uint16` counts, no padding word, then the entries of 5.2, big-endian); columns (`int32` run count; per column, x fastest,
@@ -941,6 +950,13 @@ socket meet only another at the same level, so its voxels below the level
 are water. A capped one keeps its plug, solid. The flatten equivalence
 fact (5.4) checks it on every 3x3 sample level, records included, and on
 every level of the features and multi-library samples.
+
+A room larger than one cell is built the same way over its footprint: one
+grid, its far sides the footprint's, each face's neighbour wall cut by every
+open door on it. The link writes the grid's `n x n` block of each covered
+cell under that cell's root; each door stands in the cell whose edge it is
+on, and a point of interest in the cell it stands in. A fact holds every
+covered cell of a 2 x 2 room, at every turn, to the whole map's grid.
 
 ### 17.5 The map first, the navigation after
 

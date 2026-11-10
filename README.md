@@ -955,8 +955,9 @@ face with open space in front of it (the link would drop that face; let the
 brush cross the face instead), and the room's entity names name only its
 own cell (`cxry_`, the south-west cell as placed): no neighbour offsets, no
 neighbour flags, and `room_needs` names a socket, such as `joined_east0`.
-Navigation is not built for such a room yet, so its library must say
-`nav 0`. `ssmap layout` places rooms of one cell only and its header says
+Navigation is one grid over the footprint, written into the level's
+`.nav3d` cell by cell, so a reader looks a point up as in any cell.
+`ssmap layout` places rooms of one cell only and its header says
 how many larger rooms it left out. `samples/rooms-multicell` holds a 2 x 2,
 a 3 x 3, a 1 x 2 and a tall 2 x 2 room in a level at its four turns.
 

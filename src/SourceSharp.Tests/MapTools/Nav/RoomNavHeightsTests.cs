@@ -241,14 +241,22 @@ public sealed class RoomNavHeightsTests
     /// <param name="flat">The flattened level's whole-map compile.</param>
     /// <param name="level">The level: its placed cells are the cells compared.</param>
     /// <param name="nav">The stitched navigation.</param>
-    internal static void AssertSameAsFlattened(BspData flat, LevelGrid level, Nav3dReader nav)
+    internal static void AssertSameAsFlattened(BspData flat, LevelGrid level, Nav3dReader nav) =>
+        AssertSameAsFlattened(flat, level, nav, [.. level.Placed.Select(p => (p.X, p.Y))]);
+
+    /// <summary>
+    /// <see cref="AssertSameAsFlattened(BspData, LevelGrid, Nav3dReader)"/>
+    /// over the cells given: every cell a level's rooms cover, a larger
+    /// room's (17.8) included.
+    /// </summary>
+    internal static void AssertSameAsFlattened(BspData flat, LevelGrid level, Nav3dReader nav, IReadOnlyList<(int X, int Y)> cells)
     {
         NavGeometry whole = NavGeometry.FromBsp(flat);
         IReadOnlyList<NavBrush> overhang = NavClearanceBuilder.OverhangBrushes(whole);
         Nav3dLevel stitched = nav.ToLevel();
         int n = nav.CellVoxels;
         int runs = 0;
-        foreach ((int cellX, int cellY, LevelCell placed) in level.Placed)
+        foreach ((int cellX, int cellY) in cells)
         {
             int cell = (cellY * level.Columns) + cellX;
             int nz = nav.CellHeight(cell);
@@ -286,7 +294,7 @@ public sealed class RoomNavHeightsTests
                             Rooms3x3NavTests.Record(nav.ClearanceRecord(l, Nav3dClipClass.Npc), i => Rooms3x3NavTests.ObstacleKey(nav.Obstacle(i)), b => stitched.Brushes[b])));
                     }
 
-                    string where = string.Create(CultureInfo.InvariantCulture, $"{level.Name}: {placed.Room}@{placed.Rotation * 90} at ({cellX}, {cellY}), column {x} {y}");
+                    string where = string.Create(CultureInfo.InvariantCulture, $"{level.Name}: cell ({cellX}, {cellY}), column {x} {y}");
                     Assert.True(expected.SequenceEqual(actual),
                         $"{where}:\n  whole-map {string.Join("\n            ", expected)}\n  stitched  {string.Join("\n            ", actual)}");
                     runs += actual.Count;

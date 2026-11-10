@@ -17,9 +17,9 @@ the checked-in files to the generator (`RoomsMultiCellSample`).
 A larger room's `info_room` says `room_footprint "W D"` (cells along the
 room's own +x and +y); its sockets are found per cell edge of its perimeter
 and named `east0`, `east1`, ... from its own south (east and west sides) or
-west (north and south sides). The library sets `nav 0`: navigation is built
-for rooms of one cell only, and a library holding a larger room is refused
-when it asks for it.
+west (north and south sides). Navigation is built as for any library: one
+clearance grid over each larger room's footprint, written into the level's
+`.nav3d` cell by cell.
 
 `levels/multicell.yaml` places them, every room reached through a door; a
 larger room is written in its south-west cell and `+` marks each other
