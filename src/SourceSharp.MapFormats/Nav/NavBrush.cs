@@ -6,6 +6,7 @@
 //=============================================================================//
 
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 
 using SourceSharp.MapFormats.Bsp;
 using SourceSharp.MapFormats.Bsp.Structs;
@@ -332,33 +333,73 @@ public sealed class NavBrush
     /// <summary>Every brush of a BSP's brush lump with its index in the lump, so a caller can tell which model owns it.</summary>
     /// <param name="bsp">The BSP.</param>
     /// <returns>The brushes with their lump index, in lump order; a brush whose planes bound no volume is left out.</returns>
-    public static List<(int Index, NavBrush Brush)> FromBspIndexed(BspData bsp)
+    public static List<(int Index, NavBrush Brush)> FromBspIndexed(BspData bsp) => FromBspIndexed(bsp, 1);
+
+    /// <summary>
+    /// <see cref="FromBspIndexed(BspData)"/> with the brushes built on up to
+    /// <paramref name="maxDegree"/> threads: each brush is built alone from
+    /// its own planes, so the list is the same at any degree.
+    /// </summary>
+    /// <param name="bsp">The BSP.</param>
+    /// <param name="maxDegree">How many brushes are built at once.</param>
+    /// <returns>The brushes with their lump index, in lump order; a brush whose planes bound no volume is left out.</returns>
+    public static List<(int Index, NavBrush Brush)> FromBspIndexed(BspData bsp, int maxDegree)
     {
         ArgumentNullException.ThrowIfNull(bsp);
-        ReadOnlySpan<DBrush> brushes = BspStructView.As<DBrush>(bsp[BspLump.Brushes]);
-        ReadOnlySpan<DBrushSide> sides = BspStructView.As<DBrushSide>(bsp[BspLump.BrushSides]);
-        ReadOnlySpan<DPlane> planes = BspStructView.As<DPlane>(bsp[BspLump.Planes]);
-        List<(int, NavBrush)> result = new(brushes.Length);
-        for (int b = 0; b < brushes.Length; b++)
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxDegree, 1);
+        int count = BspStructView.As<DBrush>(bsp[BspLump.Brushes]).Length;
+        NavBrush?[] built = new NavBrush?[count];
+        ExceptionDispatchInfo?[] failed = new ExceptionDispatchInfo?[count];
+        const int Chunk = 256;
+        System.Threading.Tasks.Parallel.For(0, (count + Chunk - 1) / Chunk, new ParallelOptions { MaxDegreeOfParallelism = maxDegree }, k =>
         {
-            DBrush brush = brushes[b];
-            double[] p = new double[brush.NumSides * 4];
-            for (int s = 0; s < brush.NumSides; s++)
+            for (int b = k * Chunk; b < Math.Min(count, (k + 1) * Chunk); b++)
             {
-                DPlane plane = planes[sides[brush.FirstSide + s].PlaneNum];
-                p[s * 4] = plane.Normal.X;
-                p[(s * 4) + 1] = plane.Normal.Y;
-                p[(s * 4) + 2] = plane.Normal.Z;
-                p[(s * 4) + 3] = plane.Dist;
+                try
+                {
+                    built[b] = Build(bsp, b);
+                }
+                catch (Exception e)
+                {
+                    failed[b] = ExceptionDispatchInfo.Capture(e);
+                    return;
+                }
             }
+        });
 
-            if (FromPlanes(p, brush.Contents) is { } built)
+        // A brush that cannot be read throws as it did one brush at a
+        // time: the first in lump order, as itself.
+        List<(int, NavBrush)> result = new(count);
+        for (int b = 0; b < count; b++)
+        {
+            failed[b]?.Throw();
+            if (built[b] is { } brush)
             {
-                result.Add((b, built));
+                result.Add((b, brush));
             }
         }
 
         return result;
+    }
+
+    /// <summary>One brush of a BSP's brush lump, from its sides' planes; null when they bound no volume.</summary>
+    private static NavBrush? Build(BspData bsp, int b)
+    {
+        ReadOnlySpan<DBrush> brushes = BspStructView.As<DBrush>(bsp[BspLump.Brushes]);
+        ReadOnlySpan<DBrushSide> sides = BspStructView.As<DBrushSide>(bsp[BspLump.BrushSides]);
+        ReadOnlySpan<DPlane> planes = BspStructView.As<DPlane>(bsp[BspLump.Planes]);
+        DBrush brush = brushes[b];
+        double[] p = new double[brush.NumSides * 4];
+        for (int s = 0; s < brush.NumSides; s++)
+        {
+            DPlane plane = planes[sides[brush.FirstSide + s].PlaneNum];
+            p[s * 4] = plane.Normal.X;
+            p[(s * 4) + 1] = plane.Normal.Y;
+            p[(s * 4) + 2] = plane.Normal.Z;
+            p[(s * 4) + 3] = plane.Dist;
+        }
+
+        return FromPlanes(p, brush.Contents);
     }
 
     /// <summary>Whether a box's interior overlaps the brush's, by more than <see cref="Epsilon"/>.</summary>

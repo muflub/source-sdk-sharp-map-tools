@@ -5,6 +5,8 @@
 //
 //=============================================================================//
 
+using SourceSharp.MapFormats.Bsp;
+using SourceSharp.MapFormats.Bsp.Structs;
 using SourceSharp.MapFormats.Geometry;
 
 using SourceSharp.MapFormats.Nav;
@@ -259,6 +261,94 @@ public sealed class NavBrushTests
         }
 
         Assert.True(finite > 2000 && infinite > 2000, $"{finite} finite and {infinite} infinite thresholds compared");
+    }
+
+    /// <summary>
+    /// A BSP of 700 brushes (boxes, and some cut by a slanted plane, and
+    /// some whose planes bound nothing) gives the same brushes, at the same
+    /// indices, built on four threads as on one.
+    /// </summary>
+    [Fact]
+    public async Task ABspsBrushesAreTheSameBuiltOnManyThreads()
+    {
+        BspData bsp = await LoadAsync(Brushes(700, broken: []));
+
+        List<(int Index, NavBrush Brush)> one = NavBrush.FromBspIndexed(bsp);
+        List<(int Index, NavBrush Brush)> four = NavBrush.FromBspIndexed(bsp, 4);
+
+        Assert.True(one.Count > 500 && one.Count < 700, $"{one.Count} brushes of 700");
+        Assert.Equal(one.Select(b => b.Index), four.Select(b => b.Index));
+        Assert.Equal(one.Select(b => b.Brush.PlaneFloats()), four.Select(b => b.Brush.PlaneFloats()));
+        Assert.Equal(one.Count, NavBrush.FromBsp(bsp).Count);
+    }
+
+    /// <summary>
+    /// Brushes that cannot be read throw as they did one at a time: the
+    /// first in lump order, as itself, though a later one fails another way.
+    /// </summary>
+    [Fact]
+    public async Task TheFirstUnreadableBrushThrowsAsItself()
+    {
+        BspData bsp = await LoadAsync(Brushes(700, broken: [(300, 1_000_000, 6), (650, 0, -5)]));
+
+        Assert.Throws<IndexOutOfRangeException>(() => NavBrush.FromBspIndexed(bsp, 4));
+        Assert.Throws<IndexOutOfRangeException>(() => NavBrush.FromBspIndexed(bsp, 1));
+
+        BspData later = await LoadAsync(Brushes(700, broken: [(650, 0, -5)]));
+        Assert.Throws<OverflowException>(() => NavBrush.FromBspIndexed(later, 4));
+    }
+
+    private static async Task<BspData> LoadAsync(byte[] file)
+    {
+        using MemoryStream stream = new(file, writable: false);
+        return await BspFile.LoadAsync(stream);
+    }
+
+    /// <summary>
+    /// A BSP holding only brushes: brush i a 10-unit box at (20 i, 0, 0),
+    /// every third also cut by a slanted plane, every 50th given an inverted
+    /// side so its planes bound nothing; a broken brush is given its own
+    /// first side and side count.
+    /// </summary>
+    private static byte[] Brushes(int count, IReadOnlyList<(int Brush, int FirstSide, int Sides)> broken)
+    {
+        List<DPlane> planes = [];
+        List<DBrushSide> sides = [];
+        List<DBrush> brushes = [];
+        for (int i = 0; i < count; i++)
+        {
+            float x = 20 * i;
+            List<(Vec3 Normal, float Dist)> faces =
+            [
+                (new Vec3(1, 0, 0), x + 10), (new Vec3(-1, 0, 0), -x), (new Vec3(0, 1, 0), 10), (new Vec3(0, -1, 0), 0),
+                (new Vec3(0, 0, 1), 10), (new Vec3(0, 0, -1), i % 50 == 7 ? -20 : 0),
+            ];
+            if (i % 3 == 0)
+            {
+                Vec3 n = new Vec3(0.4f, 0.2f, 1f).Normalise().Normalised;
+                faces.Add((n, Vec3.Dot(n, new Vec3(x + 5, 5, 7))));
+            }
+
+            int first = sides.Count;
+            foreach ((Vec3 normal, float dist) in faces)
+            {
+                sides.Add(new DBrushSide { PlaneNum = (ushort)planes.Count, TexInfo = -1, DispInfo = -1 });
+                planes.Add(new DPlane { Normal = normal, Dist = dist });
+            }
+
+            brushes.Add(new DBrush { FirstSide = first, NumSides = faces.Count, Contents = 1 });
+        }
+
+        foreach ((int brush, int firstSide, int count2) in broken)
+        {
+            brushes[brush] = brushes[brush] with { FirstSide = firstSide, NumSides = count2 };
+        }
+
+        return new BspTestBuilder()
+            .Structs(BspLump.Planes, [.. planes])
+            .Structs(BspLump.BrushSides, [.. sides])
+            .Structs(BspLump.Brushes, [.. brushes])
+            .Build();
     }
 
     /// <summary>A prepared column needs room for all of its numbers.</summary>

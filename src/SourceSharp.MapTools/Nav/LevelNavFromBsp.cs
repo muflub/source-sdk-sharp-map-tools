@@ -117,9 +117,9 @@ public sealed record BspNavResult(Nav3dLevel Level, IReadOnlyList<string> Warnin
 /// <remarks>
 /// <para>
 /// <b>What is solid.</b> The world's brushes of every contents, those its
-/// tree holds (<see cref="NavGeometry.FromBsp"/>: player clips are the player class's,
+/// tree holds (<see cref="NavGeometry.FromBsp(BspData, Func{string, ValueTuple{Vec3, Vec3}?})"/>: player clips are the player class's,
 /// monster clips the NPC class's), each displacement's triangles
-/// (<see cref="NavGeometry.Displacements"/>, one voxel deep) and each solid
+/// (<see cref="NavGeometry.Displacements(BspData, double)"/>, one voxel deep) and each solid
 /// static prop's collision pieces, each solid up to its own top
 /// (<see cref="NavGeometry.StaticProps"/>).
 /// Doors, movers, breakables and physics props are dynamic obstacles, open
@@ -235,11 +235,11 @@ public static class LevelNavFromBsp
         // the static props' boxes are solid; doors and the like obstacles.
         double voxel = settings.VoxelSize;
         NavBuildTimer? timer = options.Timer;
-        NavGeometry entities = NavGeometry.FromBsp(bsp, modelBounds);
+        NavGeometry entities = NavGeometry.FromBsp(bsp, modelBounds, options.MaxDegree);
         timer?.Mark("brushes");
         (IReadOnlyList<NavBrush> props, IReadOnlyList<string> propWarnings) = NavGeometry.StaticProps(bsp, modelBounds, options.ModelPieces);
         timer?.Mark("props");
-        IReadOnlyList<NavBrush> displacements = NavGeometry.Displacements(bsp, voxel);
+        IReadOnlyList<NavBrush> displacements = NavGeometry.Displacements(bsp, voxel, options.MaxDegree);
         timer?.Mark("displacements");
         NavGeometry geometry = new()
         {
