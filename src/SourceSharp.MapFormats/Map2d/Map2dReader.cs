@@ -197,6 +197,22 @@ public static class Map2dReader
             rooms.Add(new Map2dRoom(I32(r, 0), I32(r, 4), rotation, height, Text(U32(r, 16)), Text(U32(r, 20))));
         }
 
+        // The footprints, when the file has them: one record per placement.
+        if (sections.ContainsKey(Map2dFormat.FootprintsTag))
+        {
+            ReadOnlySpan<byte> footprintBytes = Section(file, Map2dFormat.FootprintsTag, (long)roomCount * Map2dFormat.FootprintBytes);
+            for (int i = 0; i < roomCount; i++)
+            {
+                int cx = I32(footprintBytes, i * Map2dFormat.FootprintBytes), cy = I32(footprintBytes, (i * Map2dFormat.FootprintBytes) + 4);
+                if (cx < 1 || cy < 1 || (long)rooms[i].CellX + cx > columns || (long)rooms[i].CellY + cy > rows)
+                {
+                    throw new InvalidDataException(string.Create(CultureInfo.InvariantCulture, $"room {i} covers {cx} x {cy} cells, off its {columns} x {rows} grid."));
+                }
+
+                rooms[i] = rooms[i] with { CellsX = cx, CellsY = cy };
+            }
+        }
+
         int pointSize = shortPoints ? 4 : 8;
         ReadOnlySpan<byte> pointBytes = Section(file, Map2dFormat.PointsTag, (long)pointCount * pointSize);
         ReadOnlySpan<byte> ringBytes = Section(file, Map2dFormat.RingsTag, (long)ringCount * Map2dFormat.RingBytes);

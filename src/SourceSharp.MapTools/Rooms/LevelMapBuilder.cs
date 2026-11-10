@@ -327,7 +327,10 @@ public static class LevelMapBuilder
             RoomPlacement placement = instance.Placement;
             RoomDefinition definition = definitions[p];
             RoomMapView view = views[p];
-            placements.Add(new Map2dRoom(placement.CellX, placement.CellY, placement.NormalizedRotation, definition.Height, placement.Room, view.Label));
+            placements.Add(new Map2dRoom(placement.CellX, placement.CellY, placement.NormalizedRotation, definition.Height, placement.Room, view.Label)
+            {
+                CellsX = placement.SpanCellsX, CellsY = placement.SpanCellsY,
+            });
 
             foreach (MapPolygon polygon in view.Polygons)
             {

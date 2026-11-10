@@ -294,6 +294,51 @@ public sealed class MultiCellLinkTests
         Assert.Equal((16, 496), (floor.Points.Min(p => p.Y), floor.Points.Max(p => p.Y)));
         Assert.All(linked.Doors.Where(d => d.Placement == hall && d.Open), d => Assert.Equal("hub", layout.Rooms[d.Neighbour].Placement.Room));
         Assert.Contains(linked.Doors, d => d.Placement == hall && d.Open);
+
+        // The file says which cells the hall covers, and every floor drawn
+        // in them is the hall's: a game draws and reveals it as one room.
+        byte[] file = Map2dWriter.Write(linked);
+        Map2dLevel read = Map2dReader.Read(file);
+        Map2dRoom room = read.Rooms[hall];
+        Assert.Equal((0, 0, 2, 2), (room.CellX, room.CellY, room.CellsX, room.CellsY));
+        Assert.All(read.Rooms.Where((r, i) => i != hall), r => Assert.Equal((1, 1), (r.CellsX, r.CellsY)));
+        Assert.All(
+            read.Rings.Where(r => r.Points.All(p => p.X > 0 && p.X < 512 && p.Y > 0 && p.Y < 512)),
+            r => Assert.Equal(hall, r.Placement));
+        Assert.Contains("CELL", Chunks(file));
+    }
+
+    /// <summary>
+    /// A level map of rooms of one cell has no footprint section, so its
+    /// bytes are what they were; a file without one reads every placement
+    /// as one cell; a footprint off the grid is refused.
+    /// </summary>
+    [Fact]
+    public void TheMapsFootprintsAreWrittenOnlyForLargerRooms()
+    {
+        Map2dLevel level = new()
+        {
+            CellSize = 256, Columns = 2, Rows = 2,
+            Rooms = [new Map2dRoom(0, 0, 0, 256, "hub", string.Empty)],
+            Rings = [new Map2dRing(0, 16, 16, false, [new(16, 16), new(240, 16), new(240, 240)])],
+            Doors = [], Markers = [],
+        };
+        byte[] plain = Map2dWriter.Write(level);
+        Assert.DoesNotContain("CELL", Chunks(plain));
+        Assert.Contains("ROOM", Chunks(plain));
+        Assert.Equal((1, 1), (Map2dReader.Read(plain).Rooms[0].CellsX, Map2dReader.Read(plain).Rooms[0].CellsY));
+
+        byte[] large = Map2dWriter.Write(level with { Rooms = [level.Rooms[0] with { CellsX = 2, CellsY = 1 }] });
+        Assert.Equal((2, 1), (Map2dReader.Read(large).Rooms[0].CellsX, Map2dReader.Read(large).Rooms[0].CellsY));
+        byte[] off = Map2dWriter.Write(level with { Rooms = [level.Rooms[0] with { CellsX = 3, CellsY = 1 }] });
+        Assert.Equal("room 0 covers 3 x 1 cells, off its 2 x 2 grid.", Assert.Throws<InvalidDataException>(() => Map2dReader.Read(off)).Message);
+    }
+
+    /// <summary>The section tags a .map2d file's directory lists.</summary>
+    private static List<string> Chunks(byte[] file)
+    {
+        int count = BitConverter.ToInt32(file, 16);
+        return [.. Enumerable.Range(0, Math.Min(count, 64)).Select(i => System.Text.Encoding.ASCII.GetString(file, 96 + (i * 12), 4))];
     }
 
     /// <summary>The map's integer turn of a W x D room is <see cref="RoomTransform.Apply"/>'s point, at every turn.</summary>
