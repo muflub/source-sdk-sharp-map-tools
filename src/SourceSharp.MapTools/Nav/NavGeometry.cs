@@ -43,10 +43,13 @@ public sealed record NavObstacleSource(
 /// <b>World brushes only are solid.</b> A compiled BSP holds the brushes of
 /// every model: the world's, and each brush entity's. Only the world's are
 /// static: a <c>func_door</c>'s brushes move, a <c>func_breakable</c>'s go
-/// away, a trigger's never block. So the brushes a submodel's tree reaches
-/// are set aside; those of an entity of a dynamic class become that
-/// obstacle's solids, the rest (triggers, illusionaries, physics clips) are
-/// dropped as nothing an agent walks into. The compile stores the brushes
+/// away, a trigger's never block. So the world's solids are the brushes the
+/// world model's own tree reaches; those of an entity of a dynamic class
+/// become that obstacle's solids, the rest (triggers, illusionaries, physics
+/// clips) are dropped as nothing an agent walks into, and so are the brushes
+/// no model's tree reaches: the compile writes every map brush to the lump,
+/// a <c>func_viscluster</c>'s and a <c>func_occluder</c>'s among them, and
+/// nothing collides with those. The compile stores the brushes
 /// of an entity with an <c>origin</c> (a rotating door's origin brush gives
 /// it one) relative to that origin, so they are moved by it, to where the
 /// game places the model; its <c>angles</c> are not applied (a door's
@@ -73,7 +76,7 @@ public sealed class NavGeometry
     /// <summary>A <c>func_useableladder</c>'s climb is widened this much on each side: a player's half-width.</summary>
     public const float LadderHalfWidth = 16f;
 
-    /// <summary>The world's brushes, every contents.</summary>
+    /// <summary>The world's brushes, every contents: those the world model's tree holds.</summary>
     public required IReadOnlyList<NavBrush> Brushes { get; init; }
 
     /// <summary>The dynamic obstacles, in entity order.</summary>
@@ -121,7 +124,6 @@ public sealed class NavGeometry
         List<(int Index, NavBrush Brush)> all = NavBrush.FromBspIndexed(bsp);
         Dictionary<int, NavBrush> byIndex = all.ToDictionary(b => b.Index, b => b.Brush);
         List<int>[] modelBrushes = ModelBrushes(bsp);
-        HashSet<int> entityBrushes = [.. modelBrushes.Skip(1).SelectMany(m => m)];
 
         List<NavObstacleSource> obstacles = [];
         List<Box> ladders = [];
@@ -189,7 +191,11 @@ public sealed class NavGeometry
 
         return new NavGeometry
         {
-            Brushes = [.. all.Where(b => !entityBrushes.Contains(b.Index)).Select(b => b.Brush)],
+            // The world's collision: the brushes its own tree's leaves name. The compile writes every
+            // map brush to the lump (stock's EmitBrushes, writebsp.cpp), a func_viscluster's and a
+            // func_occluder's too, which no model's tree holds and nothing collides with: taken for
+            // the world's, ctf_2fort's doorways and the sides of its bridge were solid.
+            Brushes = modelBrushes.Length == 0 ? [] : [.. modelBrushes[0].Where(byIndex.ContainsKey).Select(b => byIndex[b])],
             Obstacles = obstacles,
             Ladders = ladders,
             Warnings = warnings,
