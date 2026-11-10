@@ -200,26 +200,43 @@ public sealed class LevelGrid
     {
         ArgumentNullException.ThrowIfNull(rooms);
 
-        List<RoomInstance> instances = [];
+        // The placements first, each with its room's footprint, and every
+        // cell each covers (its anchor alone for a room of one cell); then
+        // each socket is jointed to the socket that stands across its cell
+        // edge facing back, or capped (17.8: joints are per cell edge).
+        List<(RoomPlacement Placement, RoomDefinition Definition)> placed = [];
+        Dictionary<(int X, int Y), int> covered = [];
         foreach ((int x, int y, LevelCell cell) in Placed)
         {
             RoomDefinition definition = Definition(rooms, cell);
-            RoomTransform transform = new(new RoomPlacement(cell.Room, x, y, cell.Rotation), cellSize);
+            RoomPlacement placement = new(cell.Room, x, y, cell.Rotation) { CellsX = definition.CellsX, CellsY = definition.CellsY };
+            foreach ((int cx, int cy, _, _) in placement.Covered())
+            {
+                covered[(cx, cy)] = placed.Count;
+            }
+
+            placed.Add((placement, definition));
+        }
+
+        List<RoomInstance> instances = [];
+        foreach ((RoomPlacement placement, RoomDefinition definition) in placed)
+        {
+            RoomTransform transform = new(placement, cellSize);
             List<(string, string)> joints = [];
             List<string> capped = [];
             foreach (RoomSocket socket in definition.Sockets)
             {
                 (int axis, int sign) = transform.WorldNormal(socket.Facing);
-                int nx = x + (axis == 0 ? sign : 0);
-                int ny = y + (axis == 1 ? sign : 0);
+                (_, (int X, int Y) across) = placement.SocketCells(definition, socket, cellSize);
                 string? theirs = null;
-                if (nx >= 0 && ny >= 0 && nx < Columns && ny < Rows && this[nx, ny] is { } other)
+                if (covered.TryGetValue(across, out int other))
                 {
-                    RoomDefinition neighbour = Definition(rooms, other);
-                    RoomTransform otherTransform = new(new RoomPlacement(other.Room, nx, ny, other.Rotation), cellSize);
+                    (RoomPlacement otherPlacement, RoomDefinition neighbour) = placed[other];
+                    RoomTransform otherTransform = new(otherPlacement, cellSize);
                     foreach (RoomSocket candidate in neighbour.Sockets)
                     {
-                        if (otherTransform.WorldNormal(candidate.Facing) == (axis, -sign))
+                        if (otherTransform.WorldNormal(candidate.Facing) == (axis, -sign)
+                            && otherPlacement.SocketCells(neighbour, candidate, cellSize).Cell == across)
                         {
                             theirs = candidate.Name;
                         }
@@ -236,7 +253,7 @@ public sealed class LevelGrid
                 }
             }
 
-            instances.Add(new RoomInstance(new RoomPlacement(cell.Room, x, y, cell.Rotation), joints, capped));
+            instances.Add(new RoomInstance(placement, joints, capped));
         }
 
         return new LevelLayout(Name, cellSize, kit, instances) { Columns = Columns, Rows = Rows, Transitions = Transitions };

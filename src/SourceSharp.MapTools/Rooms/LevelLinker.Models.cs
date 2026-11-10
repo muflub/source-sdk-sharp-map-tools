@@ -126,7 +126,7 @@ public static partial class LevelLinker
         ResolvedPlacement[] resolved, LevelLayout layout, LevelFurniture furniture, LevelTransitionPlan? transitions = null)
     {
         int cap = BspLimits.Caps.First(c => c.Lump == BspLump.Models).Max;
-        HashSet<(int, int)> occupied = [.. layout.Rooms.Select(r => (r.Placement.CellX, r.Placement.CellY))];
+        HashSet<(int, int)> occupied = [.. layout.Rooms.SelectMany(r => r.Placement.Covered().Select(c => (c.X, c.Y)))];
         int[]?[] linked = new int[]?[resolved.Length];
         int next = 1;
         for (int p = 0; p < resolved.Length; p++)

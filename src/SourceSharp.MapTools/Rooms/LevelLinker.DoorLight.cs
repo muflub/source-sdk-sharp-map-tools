@@ -134,9 +134,7 @@ public static partial class LevelLinker
             foreach ((string socketName, string neighborSocket) in mine.Instance.Joints)
             {
                 RoomSocket socket = Socket(mine.Room, socketName, mine.Instance);
-                RoomTransform transform = new(mine.Instance.Placement, mine.Room.Definition.CellSize);
-                (int axis, int sign) = transform.WorldNormal(socket.Facing);
-                (int X, int Y) cell = (mine.Instance.Placement.CellX + (axis == 0 ? sign : 0), mine.Instance.Placement.CellY + (axis == 1 ? sign : 0));
+                (_, (int X, int Y) cell) = mine.Instance.Placement.SocketCells(mine.Room.Definition, socket, mine.Room.Definition.CellSize);
                 if (!byCell.TryGetValue(cell, out ResolvedPlacement? other) || other.Room.DoorLightOfCompile is null)
                 {
                     continue;

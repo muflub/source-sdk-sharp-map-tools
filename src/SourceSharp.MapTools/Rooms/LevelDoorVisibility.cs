@@ -192,15 +192,21 @@ internal static class LevelDoorVisibility
         for (int r = 0; r < rooms.Count; r++)
         {
             // A room off the grid's level (the skybox below it) shares its
-            // cell's column and row but neighbours nothing.
+            // cell's column and row but neighbours nothing. A room larger
+            // than one cell is found from every cell it covers.
             if (rooms[r].Transform.Placement.Level == 0)
             {
-                byCell[(rooms[r].Transform.Placement.CellX, rooms[r].Transform.Placement.CellY)] = r;
+                foreach ((int x, int y, _, _) in rooms[r].Transform.Placement.Covered())
+                {
+                    byCell[(x, y)] = r;
+                }
             }
         }
 
         // Per pair of rooms joined by a doorway, which of their cluster
-        // pairs can see each other through it (Neighbours).
+        // pairs can see each other through it (Neighbours); two rooms joined
+        // by several doorways (a room larger than one cell can share more
+        // than one cell edge with a neighbour) see through any of them.
         Dictionary<(int, int), bool[]> pairs = [];
         for (int r = 0; r < rooms.Count; r++)
         {
@@ -208,7 +214,16 @@ internal static class LevelDoorVisibility
             {
                 if (joint.Neighbor > r)
                 {
-                    pairs[(r, joint.Neighbor)] = Neighbours(rooms[r], prepared[r], rooms[joint.Neighbor], prepared[joint.Neighbor], joint.Opening);
+                    bool[] table = Neighbours(rooms[r], prepared[r], rooms[joint.Neighbor], prepared[joint.Neighbor], joint.Opening);
+                    if (pairs.TryGetValue((r, joint.Neighbor), out bool[]? earlier))
+                    {
+                        for (int i = 0; i < table.Length; i++)
+                        {
+                            table[i] |= earlier[i];
+                        }
+                    }
+
+                    pairs[(r, joint.Neighbor)] = table;
                 }
             }
         }
@@ -222,20 +237,24 @@ internal static class LevelDoorVisibility
             int lo = room.ClusterBase;
             RoomPlacement at = room.Transform.Placement;
             List<(int Room, LevelDoor? Door)> neighbours = [];
-            foreach ((int dx, int dy) in at.Level == 0 ? (ReadOnlySpan<(int, int)>)[(1, 0), (-1, 0), (0, 1), (0, -1)] : [])
+            HashSet<int> seen = [];
+            foreach ((int cx, int cy, _, _) in at.Level == 0 ? at.Covered() : [])
             {
-                if (byCell.TryGetValue((at.CellX + dx, at.CellY + dy), out int n))
+                foreach ((int dx, int dy) in (ReadOnlySpan<(int, int)>)[(1, 0), (-1, 0), (0, 1), (0, -1)])
                 {
-                    LevelDoor? door = null;
-                    foreach (LevelDoor joint in room.Joints)
+                    if (byCell.TryGetValue((cx + dx, cy + dy), out int n) && n != r && seen.Add(n))
                     {
-                        if (joint.Neighbor == n)
+                        LevelDoor? door = null;
+                        foreach (LevelDoor joint in room.Joints)
                         {
-                            door = joint;
+                            if (joint.Neighbor == n)
+                            {
+                                door = joint;
+                            }
                         }
-                    }
 
-                    neighbours.Add((n, door));
+                        neighbours.Add((n, door));
+                    }
                 }
             }
 

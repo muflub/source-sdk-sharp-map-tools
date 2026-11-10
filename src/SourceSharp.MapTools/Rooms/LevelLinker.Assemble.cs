@@ -125,6 +125,13 @@ public static partial class LevelLinker
                     continue;
                 }
 
+                // A larger room's block node: the top tree routes each cell
+                // past it, straight to that cell's subtree.
+                if (plan.Cells is { } cells && cells.IsOmitted(i))
+                {
+                    continue;
+                }
+
                 bool local = owner is { OriginRelative: true };
                 DNode n = roomNodes[i];
                 DNode shifted = n;

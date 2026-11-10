@@ -69,14 +69,11 @@ internal static class SocketFurniture
 
         RoomDefinition definition = definitionOf(placement);
         RoomSocket found = definition.Sockets.First(s => string.Equals(s.Name, socket, StringComparison.Ordinal));
-        (int axis, int sign) = new RoomTransform(instance.Placement, definition.CellSize).WorldNormal(found.Facing);
-        int nx = instance.Placement.CellX + (axis == 0 ? sign : 0);
-        int ny = instance.Placement.CellY + (axis == 0 ? 0 : sign);
+        (_, (int nx, int ny)) = instance.Placement.SocketCells(definition, found, definition.CellSize);
         int other = -1;
         for (int i = 0; i < layout.Rooms.Count && other < 0; i++)
         {
-            RoomPlacement at = layout.Rooms[i].Placement;
-            other = at.CellX == nx && at.CellY == ny ? i : -1;
+            other = layout.Rooms[i].Placement.Covered().Any(c => c.X == nx && c.Y == ny) ? i : -1;
         }
 
         if (other < 0 || furniture(other, neighbourSocket) is not { } theirPriority)

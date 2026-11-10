@@ -299,6 +299,7 @@ public static partial class LevelLinker
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(options);
         EntityClassTable classes = options.EntityClasses ?? EntityClassTable.Default;
+        layout = WithFootprints(layout, name => library.Find(name)?.Definition);
 
         // Layout first (rule 5 / rule 2's layout halves, house messages), then
         // the format's limits, then the joint geometry only the linker can
@@ -924,14 +925,16 @@ public static partial class LevelLinker
     internal static void CheckExtent(string level, IEnumerable<(RoomPlacement Placement, RoomDefinition Definition)> rooms)
     {
         const float Limit = GeometryEpsilons.MaxCoordInteger;
-        foreach ((RoomPlacement placement, RoomDefinition definition) in rooms)
+        foreach ((RoomPlacement given, RoomDefinition definition) in rooms)
         {
+            // The footprint as placed (17.8): the room's, whatever the placement says.
+            RoomPlacement placement = given with { CellsX = definition.CellsX, CellsY = definition.CellsY };
             float cell = definition.CellSize;
             float floor = placement.Level * cell;
             (string Axis, float Lo, float Hi)[] axes =
             [
-                ("x", placement.CellX * cell, (placement.CellX + 1) * cell),
-                ("y", placement.CellY * cell, (placement.CellY + 1) * cell),
+                ("x", placement.CellX * cell, (placement.CellX + placement.SpanCellsX) * cell),
+                ("y", placement.CellY * cell, (placement.CellY + placement.SpanCellsY) * cell),
                 ("z", floor, floor + definition.Height),
             ];
             foreach ((string axis, float lo, float hi) in axes)
@@ -1603,7 +1606,12 @@ public static partial class LevelLinker
         int order = 0;
         foreach (RoomInstance room in layout.Rooms)
         {
-            occupants[(room.Placement.CellX, room.Placement.CellY)] = order++;
+            foreach ((int x, int y, _, _) in room.Placement.Covered())
+            {
+                occupants[(x, y)] = order;
+            }
+
+            order++;
         }
 
         (int minx, int miny, int maxx, int maxy) = Extent(layout);
@@ -1625,8 +1633,12 @@ public static partial class LevelLinker
         bool shaped = false;
         foreach ((RoomPlacement placement, RoomDefinition definition) in rooms)
         {
-            heights[(placement.CellX, placement.CellY)] = definition.Height;
-            shaped |= definition.IsShaped;
+            foreach ((int x, int y, _, _) in placement.Covered())
+            {
+                heights[(x, y)] = definition.Height;
+            }
+
+            shaped |= definition.HasOwnHeight;
         }
 
         return shaped ? heights : null;
@@ -1930,6 +1942,53 @@ public static partial class LevelLinker
 
     // ---- validation ----------------------------------------------------
 
+    /// <summary>
+    /// A layout whose placements know their rooms' footprints
+    /// (<see cref="RoomPlacement.CellsX"/>): the same layout when every
+    /// placement already says what its room covers, as one read from a level
+    /// file does, and a copy with them set for a layout built in code.
+    /// </summary>
+    /// <param name="layout">The layout.</param>
+    /// <param name="definitions">Each room's definition by the name a placement gives, or null for a name the library lacks (refused later, with its own message).</param>
+    /// <returns>The layout, its placements' footprints their rooms'.</returns>
+    public static LevelLayout WithFootprints(LevelLayout layout, Func<string, RoomDefinition?> definitions)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(definitions);
+        RoomInstance[]? changed = null;
+        for (int i = 0; i < layout.Rooms.Count; i++)
+        {
+            RoomInstance instance = layout.Rooms[i];
+            if (definitions(instance.Placement.Room) is { } definition
+                && (instance.Placement.CellsX != definition.CellsX || instance.Placement.CellsY != definition.CellsY))
+            {
+                changed ??= [.. layout.Rooms];
+                changed[i] = instance with { Placement = instance.Placement with { CellsX = definition.CellsX, CellsY = definition.CellsY } };
+            }
+        }
+
+        return changed is null ? layout : layout with { Rooms = changed };
+    }
+
+    /// <summary>
+    /// Every cell the level's rooms cover, each with the index of the
+    /// placement covering it and that room-local cell: a room of one cell
+    /// covers its own cell alone.
+    /// </summary>
+    internal static Dictionary<(int X, int Y), (int Placement, int LocalX, int LocalY)> CoveredCells(LevelLayout layout)
+    {
+        Dictionary<(int X, int Y), (int, int, int)> cells = new(layout.Rooms.Count);
+        for (int i = 0; i < layout.Rooms.Count; i++)
+        {
+            foreach ((int x, int y, int lx, int ly) in layout.Rooms[i].Placement.Covered())
+            {
+                cells[(x, y)] = (i, lx, ly);
+            }
+        }
+
+        return cells;
+    }
+
     /// <summary>Refuses joints the rooms cannot physically satisfy.</summary>
     /// <remarks>
     /// Each joint is checked from its owner: the socket exists; the neighbour
@@ -1948,11 +2007,12 @@ public static partial class LevelLinker
         // too big to link spent minutes here before being refused. The layout
         // was validated first, so no two rooms share a cell and the lookup
         // finds exactly the room the scan did.
-        Dictionary<(int X, int Y), RoomInstance> byCell = new(layout.Rooms.Count);
-        foreach (RoomInstance room in layout.Rooms)
-        {
-            byCell[(room.Placement.CellX, room.Placement.CellY)] = room;
-        }
+        //
+        // A room larger than one cell is found from every cell it covers,
+        // and a joint is two sockets across one shared cell edge (17.8): the
+        // neighbour's socket must stand in the cell across the edge and face
+        // back across it.
+        Dictionary<(int X, int Y), (int Placement, int LocalX, int LocalY)> byCell = CoveredCells(layout);
 
         foreach (RoomInstance instance in layout.Rooms)
         {
@@ -1967,24 +2027,15 @@ public static partial class LevelLinker
                 RoomSocket mine = Socket(room, socket);
                 RoomTransform transform = new(instance.Placement, layout.CellSize);
                 (int axis, int sign) = transform.WorldNormal(mine.Facing);
-                int nx = instance.Placement.CellX;
-                int ny = instance.Placement.CellY;
-                if (axis == 0)
-                {
-                    nx += sign;
-                }
-                else
-                {
-                    ny += sign;
-                }
-
-                if (!byCell.TryGetValue((nx, ny), out RoomInstance? neighbour))
+                (_, (int nx, int ny)) = instance.Placement.SocketCells(room.Definition, mine, layout.CellSize);
+                if (!byCell.TryGetValue((nx, ny), out (int Placement, int, int) found))
                 {
                     throw new LinkException(
                         $"the joint at cell ({instance.Placement.CellX}, {instance.Placement.CellY})"
                         + $" socket \"{socket}\" has no neighbour room at cell ({nx}, {ny}).");
                 }
 
+                RoomInstance neighbour = layout.Rooms[found.Placement];
                 RoomObject neighbourRoom = library.Get(neighbour.Placement.Room);
                 RoomSocket theirs = Socket(neighbourRoom, neighborSocket, neighbour);
                 if (neighbour.Capped.Contains(neighborSocket))
@@ -1996,7 +2047,8 @@ public static partial class LevelLinker
 
                 RoomTransform theirTransform = new(neighbour.Placement, layout.CellSize);
                 (int theirAxis, int theirSign) = theirTransform.WorldNormal(theirs.Facing);
-                if (theirAxis != axis || theirSign != -sign)
+                ((int tx, int ty), _) = neighbour.Placement.SocketCells(neighbourRoom.Definition, theirs, layout.CellSize);
+                if (theirAxis != axis || theirSign != -sign || (tx, ty) != (nx, ny) || ReferenceEquals(neighbour, instance))
                 {
                     throw new LinkException(
                         $"the joint at cell ({instance.Placement.CellX}, {instance.Placement.CellY})"
@@ -2044,19 +2096,7 @@ public static partial class LevelLinker
         Dictionary<(int X, int Y), ResolvedPlacement> byCell,
         RoomPlan[] plans)
     {
-        RoomTransform transform = new(a.Instance.Placement, a.Room.Definition.CellSize);
-        (int axis, int sign) = transform.WorldNormal(mine.Facing);
-        int nx = a.Instance.Placement.CellX;
-        int ny = a.Instance.Placement.CellY;
-        if (axis == 0)
-        {
-            nx += sign;
-        }
-        else
-        {
-            ny += sign;
-        }
-
+        (_, (int nx, int ny)) = a.Instance.Placement.SocketCells(a.Room.Definition, mine, a.Room.Definition.CellSize);
         if (byCell.TryGetValue((nx, ny), out ResolvedPlacement? other))
         {
             return (plans[other.Index], Socket(other.Room, neighborSocket, other.Instance), other.Index);
@@ -2076,12 +2116,18 @@ public static partial class LevelLinker
     /// <summary>Fills the top tree's children now that the room bases exist.</summary>
     private static void FillTopChildren(List<DNode> nodes, int topCount, RoomPlan[] plans, LevelLayout layout, int first = 0)
     {
-        Dictionary<(int, int), RoomPlan> byCell = [];
+        // Each covered cell's child: a room of one cell's root, or for a
+        // room larger than one cell the root of that cell's own subtree
+        // (RoomCellTree), so no node of the link is reached from two cells.
+        Dictionary<(int, int), int> byCell = [];
         foreach (RoomPlan plan in plans)
         {
             if (!plan.IsSkybox)
             {
-                byCell[(plan.Placement.Instance.Placement.CellX, plan.Placement.Instance.Placement.CellY)] = plan;
+                foreach ((int x, int y, int lx, int ly) in plan.Placement.Instance.Placement.Covered())
+                {
+                    byCell[(x, y)] = plan.Cells is { } cells ? plan.LinkedChild(cells.RootOf(lx, ly)) : plan.NodeBase;
+                }
             }
         }
 
@@ -2092,7 +2138,10 @@ public static partial class LevelLinker
         Dictionary<(int, int), int> occupants = [];
         foreach (RoomInstance room in layout.Rooms)
         {
-            occupants[(room.Placement.CellX, room.Placement.CellY)] = 0;
+            foreach ((int x, int y, _, _) in room.Placement.Covered())
+            {
+                occupants[(x, y)] = 0;
+            }
         }
 
         List<(int, int, int, int)> regions = [];
@@ -2112,7 +2161,7 @@ public static partial class LevelLinker
                 int child = node.Children[side];
                 if (child == MarkerRoomLeaf)
                 {
-                    children[side] = byCell[(rminx, rminy)].NodeBase;
+                    children[side] = byCell[(rminx, rminy)];
                 }
                 else if (child == MarkerSolidLeaf)
                 {
@@ -2184,8 +2233,8 @@ public static partial class LevelLinker
         {
             minx = Math.Min(minx, room.Placement.CellX);
             miny = Math.Min(miny, room.Placement.CellY);
-            maxx = Math.Max(maxx, room.Placement.CellX);
-            maxy = Math.Max(maxy, room.Placement.CellY);
+            maxx = Math.Max(maxx, room.Placement.CellX + room.Placement.SpanCellsX - 1);
+            maxy = Math.Max(maxy, room.Placement.CellY + room.Placement.SpanCellsY - 1);
         }
 
         return (minx, miny, maxx, maxy);

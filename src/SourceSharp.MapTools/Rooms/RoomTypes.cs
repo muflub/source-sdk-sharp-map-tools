@@ -523,6 +523,129 @@ public readonly record struct RoomPlacement(string Room, int CellX, int CellY, i
     /// </remarks>
     public int Level { get; init; }
 
+    /// <summary>
+    /// The placed room's footprint along its own +x, in cells
+    /// (<see cref="RoomDefinition.CellsX"/>): 1 for a room of one cell. The
+    /// placement's cell is then its <b>anchor</b>, the south-west cell of the
+    /// footprint as placed, and the room covers <see cref="SpanCellsX"/> by
+    /// <see cref="SpanCellsY"/> cells from it (the rooms design, 17.8).
+    /// </summary>
+    /// <remarks>
+    /// Set from the room's definition by whatever builds the layout from a
+    /// level (<see cref="LevelGrid.ToLayout"/>), and by the link for a layout
+    /// built in code (<see cref="LevelLinker.WithFootprints"/>), so every
+    /// transform of the placement (<see cref="RoomTransform"/>) knows how far
+    /// a turn moves the room.
+    /// </remarks>
+    public int CellsX { get; init; } = 1;
+
+    /// <summary>The placed room's footprint along its own +y, in cells (<see cref="CellsX"/>).</summary>
+    public int CellsY { get; init; } = 1;
+
+    /// <summary>The cells the placed room covers along world x: its footprint turned.</summary>
+    public int SpanCellsX => (NormalizedRotation & 1) == 0 ? CellsX : CellsY;
+
+    /// <summary>The cells the placed room covers along world y.</summary>
+    public int SpanCellsY => (NormalizedRotation & 1) == 0 ? CellsY : CellsX;
+
+    /// <summary>Whether the placed room covers more than one cell.</summary>
+    public bool IsLarge => CellsX != 1 || CellsY != 1;
+
+    /// <summary>The world cell a room-local cell of the footprint is placed in.</summary>
+    /// <param name="x">The room-local cell along the room's +x.</param>
+    /// <param name="y">The room-local cell along its +y.</param>
+    /// <returns>The world cell.</returns>
+    /// <remarks>
+    /// The turn of <see cref="RoomTransform.Apply"/> on cells: a quarter turn
+    /// takes the room's +x to world +y, so its cell <c>(x, y)</c> lands
+    /// <c>D − 1 − y</c> cells east of the anchor and <c>x</c> north.
+    /// </remarks>
+    public (int X, int Y) WorldCell(int x, int y) => NormalizedRotation switch
+    {
+        0 => (CellX + x, CellY + y),
+        1 => (CellX + (CellsY - 1 - y), CellY + x),
+        2 => (CellX + (CellsX - 1 - x), CellY + (CellsY - 1 - y)),
+        _ => (CellX + y, CellY + (CellsX - 1 - x)),
+    };
+
+    /// <summary>The room-local cell of the footprint a world cell holds: <see cref="WorldCell"/> undone.</summary>
+    /// <param name="x">The world cell's column.</param>
+    /// <param name="y">The world cell's row.</param>
+    /// <returns>The room-local cell (outside the footprint for a cell the room does not cover).</returns>
+    public (int X, int Y) LocalCell(int x, int y)
+    {
+        int dx = x - CellX, dy = y - CellY;
+        return NormalizedRotation switch
+        {
+            0 => (dx, dy),
+            1 => (dy, CellsY - 1 - dx),
+            2 => (CellsX - 1 - dx, CellsY - 1 - dy),
+            _ => (CellsX - 1 - dy, dx),
+        };
+    }
+
+    /// <summary>Every world cell the placed room covers, each with its room-local cell, room-local order (x fastest).</summary>
+    /// <returns>The covered cells; the anchor alone for a room of one cell.</returns>
+    public IEnumerable<(int X, int Y, int LocalX, int LocalY)> Covered()
+    {
+        for (int y = 0; y < CellsY; y++)
+        {
+            for (int x = 0; x < CellsX; x++)
+            {
+                (int wx, int wy) = WorldCell(x, y);
+                yield return (wx, wy, x, y);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The world cell a socket of the placed room stands in, and the cell
+    /// across its cell edge: where the room joining it must stand.
+    /// </summary>
+    /// <param name="definition">The placed room.</param>
+    /// <param name="socket">The socket.</param>
+    /// <param name="cellSize">The grid's cell size.</param>
+    /// <returns>The two cells.</returns>
+    public ((int X, int Y) Cell, (int X, int Y) Across) SocketCells(RoomDefinition definition, RoomSocket socket, float cellSize)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        (int lx, int ly) = definition.CellOf(socket);
+        (int x, int y) = WorldCell(lx, ly);
+        (int axis, int sign) = new RoomTransform(this, cellSize).WorldNormal(socket.Facing);
+        return ((x, y), axis == 0 ? (x + sign, y) : (x, y + sign));
+    }
+
+    /// <summary>
+    /// The placement as messages print it: room, cell and rotation, with its
+    /// level and footprint only when they are not a grid room's of one cell.
+    /// </summary>
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("Room = ");
+        builder.Append(Room);
+        builder.Append(", CellX = ");
+        builder.Append(CellX);
+        builder.Append(", CellY = ");
+        builder.Append(CellY);
+        builder.Append(", Rotation = ");
+        builder.Append(Rotation);
+        if (Level != 0)
+        {
+            builder.Append(", Level = ");
+            builder.Append(Level);
+        }
+
+        if (IsLarge)
+        {
+            builder.Append(", CellsX = ");
+            builder.Append(CellsX);
+            builder.Append(", CellsY = ");
+            builder.Append(CellsY);
+        }
+
+        return true;
+    }
+
     /// <summary>Validates the placement.</summary>
     /// <exception cref="ArgumentException">The room name is blank.</exception>
     /// <exception cref="LinkException">The rotation is not a quarter-turn count 0..3.</exception>
@@ -630,16 +753,21 @@ public sealed record LevelLayout(string Name, float CellSize, SocketKit Kit, IRe
             throw new ArgumentException("A level places at least one room.", nameof(Rooms));
         }
 
+        // Every cell a room covers (its anchor alone for a room of one cell):
+        // two footprints may not overlap (17.8).
         HashSet<(int, int)> cells = [];
         foreach (RoomInstance room in Rooms)
         {
             room.Validate();
-            if (!cells.Add((room.Placement.CellX, room.Placement.CellY)))
+            foreach ((int x, int y, _, _) in room.Placement.Covered())
             {
-                throw new ArgumentException(
-                    string.Create(System.Globalization.CultureInfo.InvariantCulture,
-                        $"two rooms are placed in cell ({room.Placement.CellX}, {room.Placement.CellY})."),
-                    nameof(Rooms));
+                if (!cells.Add((x, y)))
+                {
+                    throw new ArgumentException(
+                        string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                            $"two rooms are placed in cell ({x}, {y})."),
+                        nameof(Rooms));
+                }
             }
         }
     }

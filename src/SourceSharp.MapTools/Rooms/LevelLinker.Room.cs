@@ -109,6 +109,7 @@ public static partial class LevelLinker
             LightingLength = bsp[BspLump.Lighting].Length,
             DoorVisibility = stored?.Doors ?? RoomDoorVisibility.Compute(room, shared),
             Models = models,
+            Cells = room.CellTreeOfCompile,
             Lighting = lighting,
             Lit = payload,
             VertNormals = lighting is null ? geometry.VertNormals : [.. lighting.VertNormals.Select(n => TurnDirection(n, rotation))],
@@ -663,8 +664,17 @@ public static partial class LevelLinker
         /// <summary>The linked number of the room's portal 0 (its first is 1 past it): the portal numbers of every placement before this one.</summary>
         public int PortalBase;
 
-        /// <summary>How many of the room's nodes the placement keeps: all but an omitted brush model's.</summary>
-        public int KeptNodeCount => Models is { } m ? RoomModelLayout.KeptCount(m.OmittedNodes, NodeCount) : NodeCount;
+        /// <summary>
+        /// For a room larger than one cell, its cells' subtree roots and the
+        /// block nodes above them (<see cref="RoomCellTree"/>), which the
+        /// placement leaves out: the top tree routes each covered cell to its
+        /// own subtree instead. Null for a room of one cell.
+        /// </summary>
+        public RoomCellTree? Cells { get; init; }
+
+        /// <summary>How many of the room's nodes the placement keeps: all but an omitted brush model's, and a larger room's block nodes.</summary>
+        public int KeptNodeCount =>
+            (Models is { } m ? RoomModelLayout.KeptCount(m.OmittedNodes, NodeCount) : NodeCount) - (Cells?.BlockNodes.Count ?? 0);
 
         /// <summary>How many of the room's leaves the placement keeps.</summary>
         public int KeptLeafCount => Models is { } m ? RoomModelLayout.KeptCount(m.OmittedLeaves, Leafs.Length) : Leafs.Length;
@@ -680,7 +690,8 @@ public static partial class LevelLinker
 
         /// <summary>The linked index of a room node the placement keeps.</summary>
         public int LinkedNode(int roomNode) =>
-            NodeBase + (Models is { } m ? RoomModelLayout.Kept(m.OmittedNodes, roomNode) : roomNode);
+            NodeBase + (Models is { } m ? RoomModelLayout.Kept(m.OmittedNodes, roomNode) : roomNode)
+            - (Cells is { } cells ? cells.OmittedBefore(roomNode) : 0);
 
         /// <summary>The linked index of a room leaf the placement keeps.</summary>
         public int LinkedLeaf(int roomLeaf) =>

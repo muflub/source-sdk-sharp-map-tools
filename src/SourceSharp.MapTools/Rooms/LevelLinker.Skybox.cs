@@ -79,7 +79,8 @@ public static partial class LevelLinker
     /// <summary>
     /// The placements that stand in the grid, by cell: every placement on
     /// the grid's level, the skybox below it left out (it shares its cell's
-    /// column and row, and would take the room there).
+    /// column and row, and would take the room there). A room larger than
+    /// one cell is found from every cell it covers.
     /// </summary>
     private static Dictionary<(int X, int Y), ResolvedPlacement> GridCells(ResolvedPlacement[] resolved)
     {
@@ -88,7 +89,10 @@ public static partial class LevelLinker
         {
             if (placement.Instance.Placement.Level == 0)
             {
-                byCell[(placement.Instance.Placement.CellX, placement.Instance.Placement.CellY)] = placement;
+                foreach ((int x, int y, _, _) in placement.Instance.Placement.Covered())
+                {
+                    byCell[(x, y)] = placement;
+                }
             }
         }
 

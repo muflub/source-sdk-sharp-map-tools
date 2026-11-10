@@ -365,9 +365,9 @@ public readonly record struct RoomTransform(RoomPlacement Placement, float CellS
         return _rotation switch
         {
             0 => new Vec3(p.X + tx, p.Y + ty, z),
-            1 => new Vec3(-p.Y + tx + CellSize, p.X + ty, z),
-            2 => new Vec3(-p.X + tx + CellSize, -p.Y + ty + CellSize, z),
-            _ => new Vec3(p.Y + tx, -p.X + ty + CellSize, z),
+            1 => new Vec3(-p.Y + tx + SpanY, p.X + ty, z),
+            2 => new Vec3(-p.X + tx + SpanX, -p.Y + ty + SpanY, z),
+            _ => new Vec3(p.Y + tx, -p.X + ty + SpanX, z),
         };
     }
 
@@ -378,6 +378,17 @@ public readonly record struct RoomTransform(RoomPlacement Placement, float CellS
     /// number of cells added below or above it.
     /// </summary>
     private readonly float Lift(float z) => Placement.Level == 0 ? z : z + (Placement.Level * CellSize);
+
+    /// <summary>
+    /// The room's footprint along its own +x, in units: what a half or
+    /// quarter turn moves it back by. The cell size itself for a room of one
+    /// cell, so its transforms add the very value they always added (17.7:
+    /// <c>c</c> becomes <c>D·c</c> and nothing else changes).
+    /// </summary>
+    private readonly float SpanX => Placement.CellsX == 1 ? CellSize : Placement.CellsX * CellSize;
+
+    /// <summary>The room's footprint along its own +y, in units (<see cref="SpanX"/>).</summary>
+    private readonly float SpanY => Placement.CellsY == 1 ? CellSize : Placement.CellsY * CellSize;
 
     /// <summary>
     /// The rotation half of <see cref="Apply"/> alone: the quarter turn about
@@ -424,9 +435,9 @@ public readonly record struct RoomTransform(RoomPlacement Placement, float CellS
         return _rotation switch
         {
             0 => new Vec3(rotated.X + tx, rotated.Y + ty, z),
-            1 => new Vec3(rotated.X + tx + CellSize, rotated.Y + ty, z),
-            2 => new Vec3(rotated.X + tx + CellSize, rotated.Y + ty + CellSize, z),
-            _ => new Vec3(rotated.X + tx, rotated.Y + ty + CellSize, z),
+            1 => new Vec3(rotated.X + tx + SpanY, rotated.Y + ty, z),
+            2 => new Vec3(rotated.X + tx + SpanX, rotated.Y + ty + SpanY, z),
+            _ => new Vec3(rotated.X + tx, rotated.Y + ty + SpanX, z),
         };
     }
 
@@ -454,9 +465,9 @@ public readonly record struct RoomTransform(RoomPlacement Placement, float CellS
         return _rotation switch
         {
             0 => new Vec3(p.X - tx, p.Y - ty, z),
-            1 => new Vec3(p.Y - ty, -(p.X - tx - CellSize), z),
-            2 => new Vec3(-(p.X - tx - CellSize), -(p.Y - ty - CellSize), z),
-            _ => new Vec3(-(p.Y - ty - CellSize), p.X - tx, z),
+            1 => new Vec3(p.Y - ty, -(p.X - tx - SpanY), z),
+            2 => new Vec3(-(p.X - tx - SpanX), -(p.Y - ty - SpanY), z),
+            _ => new Vec3(-(p.Y - ty - SpanX), p.X - tx, z),
         };
     }
 
