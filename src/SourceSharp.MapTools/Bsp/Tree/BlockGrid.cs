@@ -210,7 +210,7 @@ public static class BlockGrid
     /// <c>CONTENTS_SOLID</c> and not an empty one — which
     /// is what stops the flood fill from escaping through a part of the world
     /// nobody built anything in. The DIFFERENT empty leaf that
-    /// <see cref="BuildBlockTree"/> makes for a block outside the compiled
+    /// <see cref="BuildBlockTree(BspBuildContext, BspNode?[,], int, int, int, int)"/> makes for a block outside the compiled
     /// range has contents 0, with stock's <c>//CONTENTS_SOLID</c> beside it
     /// recording that it used to be solid too.
     /// </para>
@@ -258,7 +258,7 @@ public static class BlockGrid
 
     /// <summary>
     /// The leaf that stands for a block whose brush list came out empty: a
-    /// solid one (see <see cref="ProcessBlock"/>).
+    /// solid one (see <see cref="ProcessBlock(BspBuildContext, int, int, out BlockBuildStatistics)"/>).
     /// </summary>
     /// <param name="context">The context to allocate it in.</param>
     /// <returns>The leaf.</returns>
@@ -271,7 +271,7 @@ public static class BlockGrid
     }
 
     /// <summary>
-    /// The rest of <see cref="ProcessBlock"/> once a block has brushes: the
+    /// The rest of <see cref="ProcessBlock(BspBuildContext, int, int, out BlockBuildStatistics)"/> once a block has brushes: the
     /// areaportal-water fixup, the CSG chop and the block's tree.
     /// </summary>
     /// <param name="context">The context to build in.</param>
