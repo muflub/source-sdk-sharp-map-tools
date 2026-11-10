@@ -19,7 +19,7 @@ using SourceSharp.MapTools.Nav;
 namespace SourceSharp.MapCompile;
 
 /// <summary>
-/// <c>ssmap nav3d &lt;map.bsp&gt; [-out &lt;file.nav3d&gt;] [-game &lt;dir&gt;] [-nav-codec &lt;codec&gt;] [-voxel N] [-threads N] [-check]</c>:
+/// <c>ssmap nav3d &lt;map.bsp&gt; [-out &lt;file.nav3d&gt;] [-game &lt;dir&gt;] [-nav-codec &lt;codec&gt;] [-voxel N] [-threads N] [-playspace on|off] [-check]</c>:
 /// the 3D navigation of any compiled map, built from the <c>.bsp</c> alone,
 /// or with <c>-check</c> a built one checked against the map.
 /// </summary>
@@ -50,7 +50,7 @@ namespace SourceSharp.MapCompile;
 /// </remarks>
 public static class Nav3dCommand
 {
-    private const string Usage = "usage: ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>] [-check]";
+    private const string Usage = "usage: ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>] [-playspace on|off] [-check]";
 
     /// <summary>How many places without ground <c>-check</c> lists before it says how many more there are.</summary>
     public const int ListedFindings = 20;
@@ -77,6 +77,7 @@ public static class Nav3dCommand
         int threads = Environment.ProcessorCount;
         float voxel = NavSettings.DefaultVoxelSize;
         bool check = false;
+        bool playSpace = true;
         for (int i = 0; i < args.Count; i++)
         {
             string arg = args[i];
@@ -104,6 +105,10 @@ public static class Nav3dCommand
             {
                 threads = n;
                 i++;
+            }
+            else if (Is(arg, "playspace") && hasValue && args[i + 1] is "on" or "off")
+            {
+                playSpace = args[++i] == "on";
             }
             else if (Is(arg, "check") && !check)
             {
@@ -140,7 +145,7 @@ public static class Nav3dCommand
         return check
             ? await CheckAsync(disk, steamRoots, mapPath, navPath, gameDirectory, threads, "ssmap nav3d", output, cancellationToken).ConfigureAwait(false)
             : await BuildAndWriteAsync(
-                disk, steamRoots, mapPath, navPath, gameDirectory, compression, Options(voxel, threads), "ssmap nav3d", output, cancellationToken)
+                disk, steamRoots, mapPath, navPath, gameDirectory, compression, Options(voxel, threads) with { PlaySpace = playSpace }, "ssmap nav3d", output, cancellationToken)
                 .ConfigureAwait(false);
     }
 

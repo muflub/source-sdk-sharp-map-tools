@@ -143,6 +143,8 @@ public sealed class Nav3dCommandTests(BspNavMap map) : IClassFixture<BspNavMap>
     [InlineData("/game/maps/hall.bsp -threads 0")]
     [InlineData("/game/maps/hall.bsp /game/maps/other.bsp")]
     [InlineData("/game/maps/hall.bsp -check -check")]
+    [InlineData("/game/maps/hall.bsp -playspace maybe")]
+    [InlineData("/game/maps/hall.bsp -playspace")]
     public async Task ACommandLineItCannotActOnPrintsTheUsage(string line)
     {
         string[] args = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);

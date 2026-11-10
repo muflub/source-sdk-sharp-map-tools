@@ -14,6 +14,17 @@ using SourceSharp.MapTools.Rooms;
 
 namespace SourceSharp.MapTools.Nav;
 
+/// <summary>Where a player can be in a compiled map (<see cref="NavPlayableSpace.Find"/>).</summary>
+/// <param name="Bounds">The union of the play space's leaves' bounds.</param>
+/// <param name="LeafInPlay">By leaf index, whether the leaf is in a play-space cluster; a solid leaf never is.</param>
+public sealed record NavPlaySpace(Box Bounds, IReadOnlyList<bool> LeafInPlay)
+{
+    /// <summary>Whether <paramref name="leaf"/> is open space a player can be in.</summary>
+    /// <param name="leaf">A leaf index.</param>
+    /// <returns>True for a leaf of the play space.</returns>
+    public bool Holds(int leaf) => leaf >= 0 && leaf < LeafInPlay.Count && LeafInPlay[leaf];
+}
+
 /// <summary>
 /// Where in a compiled map a player can be: the bounds of the vis clusters
 /// joined to the player spawns, leaving out the 3D skybox.
@@ -84,7 +95,12 @@ public static class NavPlayableSpace
     /// <summary>The play space's bounds, or null when the map does not say.</summary>
     /// <param name="bsp">The compiled map.</param>
     /// <returns>The union of the bounds of the leaves in the play space's clusters, or null.</returns>
-    public static Box? Of(BspData bsp)
+    public static Box? Of(BspData bsp) => Find(bsp)?.Bounds;
+
+    /// <summary>The play space's bounds and which of the map's leaves it holds, or null when the map does not say.</summary>
+    /// <param name="bsp">The compiled map.</param>
+    /// <returns>The play space, or null.</returns>
+    public static NavPlaySpace? Find(BspData bsp)
     {
         ArgumentNullException.ThrowIfNull(bsp);
         VisibilityLump? vis = VisibilityLump.Read(bsp[BspLump.Visibility]);
@@ -138,6 +154,7 @@ public static class NavPlayableSpace
         }
 
         Box? union = null;
+        bool[] inPlay = new bool[clusters.Length];
         for (int i = 0; i < clusters.Length; i++)
         {
             int c = clusters[i];
@@ -146,10 +163,11 @@ public static class NavPlayableSpace
                 continue;
             }
 
+            inPlay[i] = true;
             union = union is { } u ? new Box(Lower(u.Mins, bounds[i].Mins), Upper(u.Maxs, bounds[i].Maxs)) : bounds[i];
         }
 
-        return union;
+        return union is { } found ? new NavPlaySpace(found, inPlay) : null;
     }
 
     private static Vec3 Lower(Vec3 a, Vec3 b) => new(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Min(a.Z, b.Z));
