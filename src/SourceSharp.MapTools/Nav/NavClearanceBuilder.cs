@@ -315,7 +315,7 @@ public static class NavClearanceBuilder
         List<Nav3dDynamicCorner> dynamics = scratch.Dynamics;
         dynamics.Clear();
         List<Nav3dCorner> own = scratch.Own;
-        for (int o = 0; o < p.Obstacles.Length; o++)
+        foreach (int o in p.NearObstacles)
         {
             own.Clear();
             scratch.Merged.Clear();
@@ -785,6 +785,7 @@ public static class NavClearanceBuilder
             Obstacles = [.. geometry.Obstacles.Select(o => o.Brushes
                 .Select(b => (b, (byte)(((b.Contents & Nav3dFormat.PlayerSolidMask) != 0 ? 1 : 0) | ((b.Contents & Nav3dFormat.NpcSolidMask) != 0 ? 2 : 0))))
                 .ToArray())];
+            NearObstacles = [.. Enumerable.Range(0, Obstacles.Length).Where(o => Obstacles[o].Length > 0)];
         }
 
         public NavBrush[] Brushes { get; }
@@ -805,6 +806,9 @@ public static class NavClearanceBuilder
         public Rooms.Box[] LadderVolumes { get; }
 
         public (NavBrush Brush, byte Mask)[][] Obstacles { get; }
+
+        /// <summary>The obstacles with solids in this geometry, by level index: one with none adds no corner to any record.</summary>
+        public int[] NearObstacles { get; }
     }
 
     /// <summary>The overhanging solid brushes of a geometry, in the order a record's brush indices count them.</summary>
