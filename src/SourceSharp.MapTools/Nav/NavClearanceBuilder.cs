@@ -7,6 +7,7 @@
 
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 using SourceSharp.MapFormats.Nav;
 
@@ -130,40 +131,83 @@ public static class NavClearanceBuilder
             scratch.Axial.Add(new Candidate(r, brush.MinZ, brush.MaxZ, p.SolidMask[b]));
         }
 
-        scratch.Axial.Sort(Candidate.Order);
+        CollectionsMarshal.AsSpan(scratch.Axial).Sort(default(CandidateOrder));
+
+        // The sloped solids, each with a floor under its width threshold
+        // that depends on the column alone, in the order of those floors: a
+        // voxel computes a sloped corner only once the staircase has reached
+        // that floor, and only if the corner could still lower it.
+        scratch.Sloped.Clear();
+        foreach (int b in p.SlopedSolid)
+        {
+            NavBrush brush = p.Brushes[b];
+            scratch.Sloped.Add(new SlopedFloor(SlopedWidthFloor(brush, x0, y0, x1, y1), b, brush.MinZ, brush.MaxZ, p.SolidMask[b]));
+        }
+
+        CollectionsMarshal.AsSpan(scratch.Sloped).Sort(default(SlopedFloorOrder));
+
+        // The overhanging solids in their own order (a record lists them by
+        // it), with their bounding boxes at hand.
+        scratch.Overhang.Clear();
+        for (int i = 0; i < p.Overhang.Length; i++)
+        {
+            int b = p.Overhang[i];
+            scratch.Overhang.Add(new OverhangSolid(p.Brushes[b], i, p.SolidMask[b]));
+        }
+
+        scratch.LowestTop = double.NegativeInfinity;
+
         int below0 = -1;
         int below1 = -1;
         for (int z = 0; z < region.SizeZ; z++)
         {
             NavBox voxel = region.Voxel(x, y, z);
+            DropBelow(scratch, voxel.MinZ + E);
+            // Where every solid stops both classes, the NPC class's record,
+            // floor and flags are the player's: each test reads a mask with
+            // both bits or neither, and an identical record is numbered once.
             int record0 = Record(p, region, records, scratch, voxel, 0);
-            int record1 = Record(p, region, records, scratch, voxel, 1);
+            int record1 = p.ClassesAgree ? record0 : Record(p, region, records, scratch, voxel, 1);
             Nav3dLeafFlags flags = Nav3dLeafFlags.None;
             bool water = false;
             bool ladder = false;
             if (record0 != NavRecordTable.BlockedIndex || record1 != NavRecordTable.BlockedIndex)
             {
-                water = p.Water.Any(b => p.Brushes[b].Overlaps(voxel));
-                ladder = p.Ladder.Any(b => p.Brushes[b].Overlaps(voxel))
-                    || p.LadderVolumes.Any(v => v.Maxs.X > voxel.MinX + E && v.Mins.X < voxel.MaxX - E
-                        && v.Maxs.Y > voxel.MinY + E && v.Mins.Y < voxel.MaxY - E
-                        && v.Maxs.Z > voxel.MinZ + E && v.Mins.Z < voxel.MaxZ - E);
+                water = AnyOverlaps(p, p.Water, voxel);
+                ladder = AnyOverlaps(p, p.Ladder, voxel) || AnyLadderVolume(p, voxel);
             }
 
             flags |= water ? Nav3dLeafFlags.Water : 0;
             flags |= ladder ? Nav3dLeafFlags.Ladder : 0;
             float floor0 = 0;
             float floor1 = 0;
-            if (record0 != NavRecordTable.BlockedIndex && (z == 0 ? BelowBlocked(p, voxel, s, 0) : below0 == NavRecordTable.BlockedIndex))
+            bool walkable0 = false;
+            bool walkable1 = false;
+            bool grounded0 = record0 != NavRecordTable.BlockedIndex && (z == 0 ? BelowBlocked(p, voxel, s, 0) : below0 == NavRecordTable.BlockedIndex);
+            if (grounded0)
             {
-                (floor0, bool walkable) = Floor(p, voxel, s, 0, settings.FloorNormalZ);
-                flags |= Nav3dLeafFlags.GroundedPlayer | (walkable ? Nav3dLeafFlags.WalkablePlayer : 0);
+                (floor0, walkable0) = Floor(p, voxel, s, 0, settings.FloorNormalZ);
+                flags |= Nav3dLeafFlags.GroundedPlayer | (walkable0 ? Nav3dLeafFlags.WalkablePlayer : 0);
             }
 
-            if (record1 != NavRecordTable.BlockedIndex && (z == 0 ? BelowBlocked(p, voxel, s, 1) : below1 == NavRecordTable.BlockedIndex))
+            bool grounded1;
+            if (p.ClassesAgree)
             {
-                (floor1, bool walkable) = Floor(p, voxel, s, 1, settings.FloorNormalZ);
-                flags |= Nav3dLeafFlags.GroundedNpc | (walkable ? Nav3dLeafFlags.WalkableNpc : 0);
+                grounded1 = grounded0;
+                (floor1, walkable1) = (floor0, walkable0);
+            }
+            else
+            {
+                grounded1 = record1 != NavRecordTable.BlockedIndex && (z == 0 ? BelowBlocked(p, voxel, s, 1) : below1 == NavRecordTable.BlockedIndex);
+                if (grounded1)
+                {
+                    (floor1, walkable1) = Floor(p, voxel, s, 1, settings.FloorNormalZ);
+                }
+            }
+
+            if (grounded1)
+            {
+                flags |= Nav3dLeafFlags.GroundedNpc | (walkable1 ? Nav3dLeafFlags.WalkableNpc : 0);
             }
 
             keys[region.Index(x, y, z)] = record0 == NavRecordTable.BlockedIndex && record1 == NavRecordTable.BlockedIndex
@@ -174,6 +218,73 @@ public static class NavClearanceBuilder
         }
     }
 
+    /// <summary>
+    /// Drops from a column's lists the solids wholly below a voxel: every
+    /// test of a voxel skips a solid whose top is not above the voxel's
+    /// bottom (by the epsilon), and the voxels of a column only rise, so
+    /// such a solid is never needed again. The lists keep their order.
+    /// </summary>
+    /// <param name="scratch">The column's lists.</param>
+    /// <param name="above">The voxel's bottom plus the epsilon: a solid is kept while its top is above it.</param>
+    private static void DropBelow(Scratch scratch, double above)
+    {
+        if (!(scratch.LowestTop > above))
+        {
+            double lowest = double.PositiveInfinity;
+            lowest = Keep(scratch.Axial, above, lowest, static c => c.Top);
+            lowest = Keep(scratch.Sloped, above, lowest, static c => c.MaxZ);
+            lowest = Keep(scratch.Overhang, above, lowest, static c => c.MaxZ);
+            scratch.LowestTop = lowest;
+        }
+
+        static double Keep<T>(List<T> list, double above, double lowest, Func<T, double> top)
+        {
+            int kept = 0;
+            for (int i = 0; i < list.Count; i++)
+            {
+                double t = top(list[i]);
+                if (t > above)
+                {
+                    lowest = Math.Min(lowest, t);
+                    list[kept++] = list[i];
+                }
+            }
+
+            list.RemoveRange(kept, list.Count - kept);
+            return lowest;
+        }
+    }
+
+    /// <summary>Whether a brush of a list overlaps a voxel.</summary>
+    private static bool AnyOverlaps(Prepared p, int[] list, in NavBox voxel)
+    {
+        foreach (int b in list)
+        {
+            if (p.Brushes[b].Overlaps(voxel))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether a ladder volume overlaps a voxel, by more than the epsilon.</summary>
+    private static bool AnyLadderVolume(Prepared p, in NavBox voxel)
+    {
+        foreach (Rooms.Box v in p.LadderVolumes)
+        {
+            if (v.Maxs.X > voxel.MinX + E && v.Mins.X < voxel.MaxX - E
+                && v.Maxs.Y > voxel.MinY + E && v.Mins.Y < voxel.MaxY - E
+                && v.Maxs.Z > voxel.MinZ + E && v.Mins.Z < voxel.MaxZ - E)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>One voxel's record for one clip class (0 player, 1 NPC), numbered in the table.</summary>
     private static int Record(Prepared p, NavRegion region, NavRecordTable records, Scratch scratch, in NavBox voxel, int clipClass)
     {
@@ -182,34 +293,7 @@ public static class NavClearanceBuilder
         double z1 = voxel.MaxZ;
         List<Nav3dCorner> stair = scratch.Stair;
         stair.Clear();
-
-        // The column's axial candidates, then this voxel's sloped ones, in
-        // width order: merged only when a sloped brush is near.
-        List<Candidate> ordered = scratch.Axial;
-        if (p.SlopedSolid.Length > 0)
-        {
-            scratch.Merged.Clear();
-            scratch.Merged.AddRange(scratch.Axial);
-            foreach (int b in p.SlopedSolid)
-            {
-                if ((p.SolidMask[b] & bit) != 0 && SlopedCorner(p.Brushes[b], voxel) is { } candidate)
-                {
-                    scratch.Merged.Add(candidate with { Mask = p.SolidMask[b] });
-                }
-            }
-
-            scratch.Merged.Sort(Candidate.Order);
-            ordered = scratch.Merged;
-        }
-
-        foreach (Candidate c in ordered)
-        {
-            if ((c.Mask & bit) != 0 && c.Top > z0 + E)
-            {
-                Offer(stair, c.Width, c.Bottom, z1);
-            }
-        }
-
+        Staircase(p, scratch, voxel, bit, stair);
         if (IsBlocked(stair))
         {
             return NavRecordTable.BlockedIndex;
@@ -221,24 +305,28 @@ public static class NavClearanceBuilder
         // than the box).
         List<int> brushes = scratch.Brushes;
         brushes.Clear();
-        for (int i = 0; i < p.Overhang.Length; i++)
+        foreach (OverhangSolid o in scratch.Overhang)
         {
-            int b = p.Overhang[i];
-            NavBrush brush = p.Brushes[b];
-            if ((p.SolidMask[b] & bit) == 0 || brush.MaxZ <= z0 + E)
+            if ((o.Mask & bit) == 0 || o.MaxZ <= z0 + E)
             {
                 continue;
             }
 
-            if (brush.Overlaps(voxel))
+            // The overlap test's own first step, its bounding boxes apart,
+            // without reaching for the brush.
+            bool apart = o.MaxX <= voxel.MinX + E || o.MinX >= voxel.MaxX - E
+                || o.MaxY <= voxel.MinY + E || o.MinY >= voxel.MaxY - E
+                || o.MaxZ <= voxel.MinZ + E || o.MinZ >= voxel.MaxZ - E;
+            if (!apart && o.Brush.Overlaps(voxel))
             {
                 return NavRecordTable.BlockedIndex;
             }
 
-            Nav3dCorner box = Normalise(BoxWidth(brush, voxel), brush.MinZ, z1);
+            double width = Math.Max(Math.Max(voxel.MinX - o.MaxX, o.MinX - voxel.MaxX), Math.Max(voxel.MinY - o.MaxY, o.MinY - voxel.MaxY));
+            Nav3dCorner box = Normalise(width, o.MinZ, z1);
             if (!Dominated(stair, box))
             {
-                brushes.Add(i);
+                brushes.Add(o.Index);
             }
         }
 
@@ -247,7 +335,7 @@ public static class NavClearanceBuilder
         List<Nav3dDynamicCorner> dynamics = scratch.Dynamics;
         dynamics.Clear();
         List<Nav3dCorner> own = scratch.Own;
-        for (int o = 0; o < p.Obstacles.Length; o++)
+        foreach (int o in p.NearObstacles)
         {
             own.Clear();
             scratch.Merged.Clear();
@@ -267,7 +355,7 @@ public static class NavClearanceBuilder
                 }
             }
 
-            scratch.Merged.Sort(Candidate.Order);
+            CollectionsMarshal.AsSpan(scratch.Merged).Sort(default(CandidateOrder));
             foreach (Candidate c in scratch.Merged)
             {
                 Offer(own, c.Width, c.Bottom, z1);
@@ -284,6 +372,128 @@ public static class NavClearanceBuilder
 
         return records.Add(Encode(scratch, stair, dynamics, brushes));
     }
+
+    /// <summary>
+    /// A voxel's static staircase for one class: the column's axial
+    /// candidates and the voxel's sloped ones, offered in width order (then
+    /// bottom), exactly as if every candidate were listed and sorted.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The staircase only ever takes a corner lower than its last one, so a
+    /// candidate whose top is not below the last top when its turn comes is
+    /// dropped, and once the last top is minus infinity (a brush blocking
+    /// every height) nothing after it counts. Candidates that share a width
+    /// and a bottom give the same corner, so their order among themselves
+    /// does not matter either.
+    /// </para>
+    /// <para>
+    /// That lets a sloped brush's corner, the costly part (a growth test
+    /// over all its planes and edges), be computed only when it can matter.
+    /// Its width is at least its floor (<see cref="SlopedWidthFloor"/>), so
+    /// it comes after every candidate narrower than the floor; it is
+    /// brought in only once the next candidate to offer is no narrower than
+    /// the floor, and skipped there when its top (which needs no growth
+    /// test) is not below the staircase's last top, since that top can only
+    /// fall further before the brush's turn. The walk ends at the first
+    /// corner that blocks every height.
+    /// </para>
+    /// </remarks>
+    private static void Staircase(Prepared p, Scratch scratch, in NavBox voxel, int bit, List<Nav3dCorner> stair)
+    {
+        double z0 = voxel.MinZ;
+        double z1 = voxel.MaxZ;
+        List<Candidate> axial = scratch.Axial;
+        List<SlopedFloor> sloped = scratch.Sloped;
+        List<Candidate> pending = scratch.Pending;
+        pending.Clear();
+        int head = 0;
+        int a = 0;
+        int s = 0;
+        CandidateOrder order = default;
+        while (true)
+        {
+            while (a < axial.Count && ((axial[a].Mask & bit) == 0 || !(axial[a].Top > z0 + E)))
+            {
+                a++;
+            }
+
+            // Every sloped brush that could come at or before the next
+            // candidate joins the pending ones first.
+            double next = a < axial.Count ? axial[a].Width : double.PositiveInfinity;
+            if (head < pending.Count && pending[head].Width < next)
+            {
+                next = pending[head].Width;
+            }
+
+            while (s < sloped.Count && !(sloped[s].Floor > next))
+            {
+                SlopedFloor f = sloped[s++];
+                if ((f.Mask & bit) == 0 || !(f.MaxZ > z0 + E)
+                    || (stair.Count > 0 && !(CornerTop(f.MinZ, z1) < stair[^1].Top)))
+                {
+                    continue;
+                }
+
+                if (SlopedCorner(p.Brushes[f.Brush], voxel) is { } candidate)
+                {
+                    int at = pending.Count;
+                    pending.Add(default);
+                    Candidate c = candidate with { Mask = f.Mask };
+                    while (at > head && order.Compare(pending[at - 1], c) > 0)
+                    {
+                        pending[at] = pending[at - 1];
+                        at--;
+                    }
+
+                    pending[at] = c;
+                }
+            }
+
+            Candidate offer;
+            if (head < pending.Count && (a >= axial.Count || order.Compare(pending[head], axial[a]) < 0))
+            {
+                offer = pending[head++];
+            }
+            else if (a < axial.Count)
+            {
+                offer = axial[a++];
+            }
+            else
+            {
+                return;
+            }
+
+            Offer(stair, offer.Width, offer.Bottom, z1);
+            if (float.IsNegativeInfinity(stair[^1].Top))
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A floor under a sloped brush's width threshold at a column (<see cref="SlopedCorner"/>):
+    /// the threshold its bounding box alone gives, less the same epsilon.
+    /// </summary>
+    /// <remarks>
+    /// The growth threshold is the largest of the limits every separating
+    /// axis sets, and the box's own four side axes are among them. Each of
+    /// those limits is computed here with the same operations, on the same
+    /// values, as <see cref="NavBrush.GrowthThreshold"/> computes it (a box
+    /// axis's projection of the box is the box's coordinate itself, and its
+    /// growth rate is 1), so the threshold is at least their largest, and
+    /// subtracting the epsilon keeps the order: the corner's width is never
+    /// below this floor.
+    /// </remarks>
+    /// <param name="brush">The sloped brush.</param>
+    /// <param name="x0">The column's low x.</param>
+    /// <param name="y0">The column's low y.</param>
+    /// <param name="x1">The column's high x.</param>
+    /// <param name="y1">The column's high y.</param>
+    /// <returns>The floor.</returns>
+    internal static double SlopedWidthFloor(NavBrush brush, double x0, double y0, double x1, double y1) =>
+        Math.Max(Math.Max(x0 + E - brush.MaxX, brush.MinX + E - x1), Math.Max(y0 + E - brush.MaxY, brush.MinY + E - y1)) - E;
 
     /// <summary>Adds a corner to a staircase built in width order: kept only when lower than every corner before it.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -311,7 +521,11 @@ public static class NavClearanceBuilder
     /// </summary>
     internal static Nav3dCorner Normalise(double width, double bottom, double voxelTop) => new(
         width + E < 0 ? float.NegativeInfinity : Down(width),
-        voxelTop > bottom + E ? float.NegativeInfinity : Down(bottom));
+        CornerTop(bottom, voxelTop));
+
+    /// <summary>A corner's top in its canonical form: minus infinity when every agent in the voxel reaches the bottom, else the bottom rounded down.</summary>
+    private static float CornerTop(double bottom, double voxelTop) =>
+        voxelTop > bottom + E ? float.NegativeInfinity : Down(bottom);
 
     /// <summary>The largest float at or below a double: a threshold rounded so it can only block more.</summary>
     internal static float Down(double value)
@@ -347,7 +561,7 @@ public static class NavClearanceBuilder
     /// A sloped brush's corner at a voxel: the width at which a box reaching
     /// past the brush's top first overlaps it. Null when no width does.
     /// </summary>
-    private static Candidate? SlopedCorner(NavBrush brush, in NavBox voxel)
+    internal static Candidate? SlopedCorner(NavBrush brush, in NavBox voxel)
     {
         NavBox tall = voxel with { MaxZ = Math.Max(voxel.MaxZ, brush.MaxZ) + 1 };
         double threshold = brush.GrowthThreshold(tall, NavGrowth.Sideways, out _);
@@ -405,6 +619,16 @@ public static class NavClearanceBuilder
             }
             else
             {
+                // The growth test's box axes first, with its own operations:
+                // a brush beside the face or above it never meets it, and
+                // one whose top is a voxel or more below meets it too late.
+                if (face.MinX + E - brush.MaxX >= 0 || brush.MinX + E - face.MaxX >= 0
+                    || face.MinY + E - brush.MaxY >= 0 || brush.MinY + E - face.MaxY >= 0
+                    || brush.MinZ + E - face.MaxZ >= 0 || !(face.MinZ + E - brush.MaxZ < s))
+                {
+                    continue;
+                }
+
                 double sink = brush.GrowthThreshold(face, NavGrowth.Downward, out double contactZ);
                 if (!(sink < s))
                 {
@@ -470,10 +694,45 @@ public static class NavClearanceBuilder
     }
 
     /// <summary>A brush's corner at a voxel before normalising: width threshold, bottom, top, and which classes it is solid for.</summary>
-    private readonly record struct Candidate(double Width, double Bottom, double Top, byte Mask)
+    internal readonly record struct Candidate(double Width, double Bottom, double Top, byte Mask);
+
+    /// <summary>Candidates in width order, then bottom: a struct, so a sort calls it directly rather than through a delegate.</summary>
+    private readonly struct CandidateOrder : IComparer<Candidate>
     {
-        public static int Order(Candidate a, Candidate b) =>
+        public int Compare(Candidate a, Candidate b) =>
             a.Width != b.Width ? a.Width.CompareTo(b.Width) : a.Bottom.CompareTo(b.Bottom);
+    }
+
+    /// <summary>A sloped solid's index, its heights and classes, and the floor under its width threshold at the column.</summary>
+    private readonly record struct SlopedFloor(double Floor, int Brush, double MinZ, double MaxZ, byte Mask);
+
+    /// <summary>An overhanging solid, its place in the record's brush list, its classes and its bounding box.</summary>
+    private readonly struct OverhangSolid(NavBrush brush, int index, byte mask)
+    {
+        public NavBrush Brush { get; } = brush;
+
+        public int Index { get; } = index;
+
+        public byte Mask { get; } = mask;
+
+        public double MinX { get; } = brush.MinX;
+
+        public double MinY { get; } = brush.MinY;
+
+        public double MinZ { get; } = brush.MinZ;
+
+        public double MaxX { get; } = brush.MaxX;
+
+        public double MaxY { get; } = brush.MaxY;
+
+        public double MaxZ { get; } = brush.MaxZ;
+    }
+
+    /// <summary>Sloped solids by floor, then index, so the walk is the same every run.</summary>
+    private readonly struct SlopedFloorOrder : IComparer<SlopedFloor>
+    {
+        public int Compare(SlopedFloor a, SlopedFloor b) =>
+            a.Floor != b.Floor ? a.Floor.CompareTo(b.Floor) : a.Brush.CompareTo(b.Brush);
     }
 
     /// <summary>The build's reusable lists: one set per build, so a column allocates nothing per voxel.</summary>
@@ -482,6 +741,15 @@ public static class NavClearanceBuilder
         public List<Candidate> Axial { get; } = [];
 
         public List<Candidate> Merged { get; } = [];
+
+        public List<SlopedFloor> Sloped { get; } = [];
+
+        public List<Candidate> Pending { get; } = [];
+
+        public List<OverhangSolid> Overhang { get; } = [];
+
+        /// <summary>The lowest top among the column's lists, so a voxel drops nothing until one is reached.</summary>
+        public double LowestTop { get; set; } = double.NegativeInfinity;
 
         public List<Nav3dCorner> Stair { get; } = [];
 
@@ -537,6 +805,8 @@ public static class NavClearanceBuilder
             Obstacles = [.. geometry.Obstacles.Select(o => o.Brushes
                 .Select(b => (b, (byte)(((b.Contents & Nav3dFormat.PlayerSolidMask) != 0 ? 1 : 0) | ((b.Contents & Nav3dFormat.NpcSolidMask) != 0 ? 2 : 0))))
                 .ToArray())];
+            NearObstacles = [.. Enumerable.Range(0, Obstacles.Length).Where(o => Obstacles[o].Length > 0)];
+            ClassesAgree = SolidMask.All(m => m is 0 or 3) && Obstacles.All(o => o.All(b => b.Mask is 0 or 3));
         }
 
         public NavBrush[] Brushes { get; }
@@ -557,6 +827,12 @@ public static class NavClearanceBuilder
         public Rooms.Box[] LadderVolumes { get; }
 
         public (NavBrush Brush, byte Mask)[][] Obstacles { get; }
+
+        /// <summary>The obstacles with solids in this geometry, by level index: one with none adds no corner to any record.</summary>
+        public int[] NearObstacles { get; }
+
+        /// <summary>Whether every solid, obstacles' included, stops both classes or neither: then the classes' answers are the same.</summary>
+        public bool ClassesAgree { get; }
     }
 
     /// <summary>The overhanging solid brushes of a geometry, in the order a record's brush indices count them.</summary>
