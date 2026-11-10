@@ -163,8 +163,11 @@ public static class NavClearanceBuilder
         {
             NavBox voxel = region.Voxel(x, y, z);
             DropBelow(scratch, voxel.MinZ + E);
+            // Where every solid stops both classes, the NPC class's record,
+            // floor and flags are the player's: each test reads a mask with
+            // both bits or neither, and an identical record is numbered once.
             int record0 = Record(p, region, records, scratch, voxel, 0);
-            int record1 = Record(p, region, records, scratch, voxel, 1);
+            int record1 = p.ClassesAgree ? record0 : Record(p, region, records, scratch, voxel, 1);
             Nav3dLeafFlags flags = Nav3dLeafFlags.None;
             bool water = false;
             bool ladder = false;
@@ -178,16 +181,33 @@ public static class NavClearanceBuilder
             flags |= ladder ? Nav3dLeafFlags.Ladder : 0;
             float floor0 = 0;
             float floor1 = 0;
-            if (record0 != NavRecordTable.BlockedIndex && (z == 0 ? BelowBlocked(p, voxel, s, 0) : below0 == NavRecordTable.BlockedIndex))
+            bool walkable0 = false;
+            bool walkable1 = false;
+            bool grounded0 = record0 != NavRecordTable.BlockedIndex && (z == 0 ? BelowBlocked(p, voxel, s, 0) : below0 == NavRecordTable.BlockedIndex);
+            if (grounded0)
             {
-                (floor0, bool walkable) = Floor(p, voxel, s, 0, settings.FloorNormalZ);
-                flags |= Nav3dLeafFlags.GroundedPlayer | (walkable ? Nav3dLeafFlags.WalkablePlayer : 0);
+                (floor0, walkable0) = Floor(p, voxel, s, 0, settings.FloorNormalZ);
+                flags |= Nav3dLeafFlags.GroundedPlayer | (walkable0 ? Nav3dLeafFlags.WalkablePlayer : 0);
             }
 
-            if (record1 != NavRecordTable.BlockedIndex && (z == 0 ? BelowBlocked(p, voxel, s, 1) : below1 == NavRecordTable.BlockedIndex))
+            bool grounded1;
+            if (p.ClassesAgree)
             {
-                (floor1, bool walkable) = Floor(p, voxel, s, 1, settings.FloorNormalZ);
-                flags |= Nav3dLeafFlags.GroundedNpc | (walkable ? Nav3dLeafFlags.WalkableNpc : 0);
+                grounded1 = grounded0;
+                (floor1, walkable1) = (floor0, walkable0);
+            }
+            else
+            {
+                grounded1 = record1 != NavRecordTable.BlockedIndex && (z == 0 ? BelowBlocked(p, voxel, s, 1) : below1 == NavRecordTable.BlockedIndex);
+                if (grounded1)
+                {
+                    (floor1, walkable1) = Floor(p, voxel, s, 1, settings.FloorNormalZ);
+                }
+            }
+
+            if (grounded1)
+            {
+                flags |= Nav3dLeafFlags.GroundedNpc | (walkable1 ? Nav3dLeafFlags.WalkableNpc : 0);
             }
 
             keys[region.Index(x, y, z)] = record0 == NavRecordTable.BlockedIndex && record1 == NavRecordTable.BlockedIndex
@@ -786,6 +806,7 @@ public static class NavClearanceBuilder
                 .Select(b => (b, (byte)(((b.Contents & Nav3dFormat.PlayerSolidMask) != 0 ? 1 : 0) | ((b.Contents & Nav3dFormat.NpcSolidMask) != 0 ? 2 : 0))))
                 .ToArray())];
             NearObstacles = [.. Enumerable.Range(0, Obstacles.Length).Where(o => Obstacles[o].Length > 0)];
+            ClassesAgree = SolidMask.All(m => m is 0 or 3) && Obstacles.All(o => o.All(b => b.Mask is 0 or 3));
         }
 
         public NavBrush[] Brushes { get; }
@@ -809,6 +830,9 @@ public static class NavClearanceBuilder
 
         /// <summary>The obstacles with solids in this geometry, by level index: one with none adds no corner to any record.</summary>
         public int[] NearObstacles { get; }
+
+        /// <summary>Whether every solid, obstacles' included, stops both classes or neither: then the classes' answers are the same.</summary>
+        public bool ClassesAgree { get; }
     }
 
     /// <summary>The overhanging solid brushes of a geometry, in the order a record's brush indices count them.</summary>

@@ -352,6 +352,27 @@ public sealed class NavClearanceBuilderTests
         Assert.Empty(NavRecord.Decode(grid.Record(10, 7, 9, Nav3dClipClass.Player)).Dynamics);
     }
 
+    /// <summary>
+    /// The classes share one answer only where every solid stops both: an
+    /// obstacle of player clip among solids that stop both still gives the
+    /// player class its corner and the NPC class none, and with plain solids
+    /// alone the two classes' records and floors are the same.
+    /// </summary>
+    [Fact]
+    public void AnObstacleSolidForOneClassKeepsTheClassesApart()
+    {
+        NavBrush wall = NavBrush.Box(new Vec3(64, 0, 16), new Vec3(80, 256, 256), 1);
+        NavObstacleSource gate = new("func_door", "clip_gate", 7, Nav3dObstacleKind.Door, [NavBrush.Box(new Vec3(160, 96, 16), new Vec3(176, 160, 128), 0x10000)]);
+        NavGrid grid = NavClearanceBuilder.Build(new NavGeometry { Brushes = [Floor, wall], Obstacles = [gate] }, Cell, NavSettings.Default);
+        Assert.Equal([new Nav3dDynamicCorner(0, new Nav3dCorner(16, float.NegativeInfinity))], NavRecord.Decode(grid.Record(12, 7, 2, Nav3dClipClass.Player)).Dynamics);
+        Assert.Empty(NavRecord.Decode(grid.Record(12, 7, 2, Nav3dClipClass.Npc)).Dynamics);
+
+        NavGrid plain = NavClearanceBuilder.Build(new NavGeometry { Brushes = [Floor, wall] }, Cell, NavSettings.Default);
+        Assert.Equal(plain[12, 7, 1].PlayerRecord, plain[12, 7, 1].NpcRecord);
+        Assert.Equal(plain[12, 7, 1].PlayerFloorZ, plain[12, 7, 1].NpcFloorZ);
+        Assert.Equal(Nav3dLeafFlags.GroundedPlayer | Nav3dLeafFlags.WalkablePlayer | Nav3dLeafFlags.GroundedNpc | Nav3dLeafFlags.WalkableNpc, plain[12, 7, 1].Flags);
+    }
+
     [Fact]
     public void BrushesNoClassCollidesWithAreIgnoredAndCancellationIsObserved()
     {
