@@ -111,6 +111,72 @@ public sealed class NavClearanceBuilderTests
         Assert.Throws<ArgumentOutOfRangeException>(() => NavClearanceBuilder.Build(new NavGeometry { Brushes = [Floor] }, new NavRegion(0, 0, 0, 2, 2, 256, 16), NavSettings.Default));
     }
 
+    /// <summary>
+    /// Voxels made solid by the caller are solid in the grid, and every other
+    /// voxel's key says what building all of them and then making those solid
+    /// says, record for record: a voxel above a made-solid one stands on it
+    /// exactly when its geometry blocks it. Made solid: the bottom layer (in
+    /// the floor's slab, whose top is the layer's top), a slab of open air
+    /// with open air above it, voxels in and under the ramp, the overhang
+    /// (blocked by its overlap alone, with open air over it) and the clip;
+    /// with the classes agreeing and apart. The made-solid voxels'
+    /// records are not built, so the table is no larger, and smaller where
+    /// the clip gives some of them records of their own.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VoxelsMadeSolidAreSolidAndTheRestAsIfBuiltThenMadeSolid(bool clip)
+    {
+        NavBrush playerClip = NavBrush.Box(new Vec3(96, 96, 16), new Vec3(160, 160, 64), 0x10000);
+        NavGeometry geometry = new() { Brushes = clip ? [Floor, Ramp(), SlopedCeiling(), playerClip] : [Floor, Ramp(), SlopedCeiling()] };
+        bool[] solid = new bool[Cell.SizeX * Cell.SizeY * Cell.SizeZ];
+        for (int y = 0; y < Cell.SizeY; y++)
+        {
+            for (int x = 0; x < Cell.SizeX; x++)
+            {
+                solid[Cell.Index(x, y, 0)] = (x + y) % 3 != 0;
+                solid[Cell.Index(x, y, 3)] = x < 8;
+                solid[Cell.Index(x, y, 4)] = x < 8 && y < 8;
+                solid[Cell.Index(x, y, 6)] = x >= 5 && x < 12 && y % 2 == 0;
+                solid[Cell.Index(x, y, 13)] = x >= 4 && x < 12;
+                solid[Cell.Index(x, y, 14)] = x >= 4 && x < 12 && y >= 3 && y < 12;
+            }
+        }
+
+        NavGrid whole = NavClearanceBuilder.Build(geometry, Cell, NavSettings.Default);
+        NavGrid made = NavClearanceBuilder.Build(geometry, Cell, NavSettings.Default, new NavRecordTable(), solid);
+
+        int grounded = 0;
+        int ungrounded = 0;
+        for (int v = 0; v < solid.Length; v++)
+        {
+            NavVoxelKey expected = solid[v] ? NavVoxelKey.Solid : whole.Keys[v];
+            NavVoxelKey actual = made.Keys[v];
+            Assert.True(
+                expected.IsSolid == actual.IsSolid
+                    && (expected.Flags, expected.Cost, expected.PlayerFloorZ, expected.NpcFloorZ) == (actual.Flags, actual.Cost, actual.PlayerFloorZ, actual.NpcFloorZ)
+                    && whole.Records[expected.PlayerRecord].AsSpan().SequenceEqual(made.Records[actual.PlayerRecord])
+                    && whole.Records[expected.NpcRecord].AsSpan().SequenceEqual(made.Records[actual.NpcRecord]),
+                $"voxel {v}: built then made solid {expected}, made solid while building {actual}");
+            if (v >= Cell.SizeX * Cell.SizeY && solid[v - (Cell.SizeX * Cell.SizeY)] && !solid[v] && !actual.IsSolid)
+            {
+                _ = (actual.Flags & Nav3dLeafFlags.GroundedPlayer) != 0 ? grounded++ : ungrounded++;
+            }
+        }
+
+        Assert.True(grounded > 10 && ungrounded > 10, $"{grounded} grounded and {ungrounded} ungrounded voxels over made-solid ones");
+        Assert.True(
+            clip ? made.Records.Count < whole.Records.Count : made.Records.Count <= whole.Records.Count,
+            $"{made.Records.Count} records against {whole.Records.Count}");
+    }
+
+    /// <summary>A solid mask that is not one flag per voxel is refused.</summary>
+    [Fact]
+    public void ASolidMaskOfTheWrongLengthIsRefused() =>
+        Assert.Throws<ArgumentException>(() => NavClearanceBuilder.Build(
+            new NavGeometry { Brushes = [Floor] }, Cell, NavSettings.Default, new NavRecordTable(), new bool[10]));
+
     [Fact]
     public void AnOpenFloorIsSolidInItsSlabAWalkableFloorOnTopAndOpenAbove()
     {

@@ -76,7 +76,41 @@ public static class NavClearanceBuilder
     /// <param name="cancellationToken">Cancels the build between columns.</param>
     /// <returns>The grid.</returns>
     public static NavGrid Build(
-        NavGeometry geometry, NavRegion region, NavSettings settings, NavRecordTable records, CancellationToken cancellationToken = default)
+        NavGeometry geometry, NavRegion region, NavSettings settings, NavRecordTable records, CancellationToken cancellationToken = default) =>
+        Build(geometry, region, settings, records, null, cancellationToken);
+
+    /// <summary>
+    /// Builds the grid of a box of voxels, adding its records to a table
+    /// another grid may share, with voxels the caller makes solid whatever
+    /// the geometry says (a compiled map's outside).
+    /// </summary>
+    /// <param name="geometry">The geometry.</param>
+    /// <param name="region">The voxels.</param>
+    /// <param name="settings">The floor threshold and cost weights.</param>
+    /// <param name="records">The record table to number records in.</param>
+    /// <param name="solid">
+    /// By region index, the voxels whose key is <see cref="NavVoxelKey.Solid"/>
+    /// whatever the geometry says; null for none.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the build between columns.</param>
+    /// <returns>The grid.</returns>
+    /// <remarks>
+    /// <para>
+    /// The grid is the one building every voxel and then making these solid
+    /// would give, record for record, without building their records: a
+    /// voxel above one of them still stands on it exactly when its geometry
+    /// blocks it, so for the one under each run of voxels that are not made
+    /// solid that much is worked out (whether its staircase or an
+    /// overhanging brush blocks it), with the column's lists as its own turn
+    /// leaves them. Nothing else of a voxel made solid reaches the grid: its
+    /// key is solid, and its record would only have taken a number in the
+    /// table that no key names. Records are numbered in the order first met,
+    /// so the numbers of the others can differ; what each key's record says
+    /// does not.
+    /// </para>
+    /// </remarks>
+    public static NavGrid Build(
+        NavGeometry geometry, NavRegion region, NavSettings settings, NavRecordTable records, bool[]? solid, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         ArgumentNullException.ThrowIfNull(settings);
@@ -90,6 +124,11 @@ public static class NavClearanceBuilder
             throw new ArgumentOutOfRangeException(nameof(region), "the voxel has a positive edge.");
         }
 
+        if (solid is not null && solid.Length != region.SizeX * region.SizeY * region.SizeZ)
+        {
+            throw new ArgumentException("the solid voxels are one flag per voxel of the region.", nameof(solid));
+        }
+
         Prepared prepared = new(geometry);
         Scratch scratch = new(prepared.Brushes.Length);
         NavVoxelKey[] keys = new NavVoxelKey[region.SizeX * region.SizeY * region.SizeZ];
@@ -98,7 +137,7 @@ public static class NavClearanceBuilder
             for (int x = 0; x < region.SizeX; x++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                Column(prepared, region, settings, records, scratch, x, y, keys);
+                Column(prepared, region, settings, records, scratch, solid, x, y, keys);
             }
         }
 
@@ -111,7 +150,7 @@ public static class NavClearanceBuilder
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static void Column(
-        Prepared p, NavRegion region, NavSettings settings, NavRecordTable records, Scratch scratch, int x, int y, NavVoxelKey[] keys)
+        Prepared p, NavRegion region, NavSettings settings, NavRecordTable records, Scratch scratch, bool[]? solid, int x, int y, NavVoxelKey[] keys)
     {
         double s = region.VoxelSize;
         double x0 = region.OriginX + (x * s);
@@ -163,7 +202,28 @@ public static class NavClearanceBuilder
         for (int z = 0; z < region.SizeZ; z++)
         {
             NavBox voxel = region.Voxel(x, y, z);
+            int index = region.Index(x, y, z);
+            bool made = solid is not null && solid[index];
+            if (!made && below0 == Unworked)
+            {
+                // The voxel under was made solid and its record not built:
+                // whether its geometry blocks each class is what this voxel
+                // stands on, worked out before this voxel's drop, with the
+                // lists as the voxel under's own turn left them.
+                NavBox under = region.Voxel(x, y, z - 1);
+                below0 = Blocks(p, scratch, under, 0) ? NavRecordTable.BlockedIndex : Open;
+                below1 = p.ClassesAgree ? below0 : Blocks(p, scratch, under, 1) ? NavRecordTable.BlockedIndex : Open;
+            }
+
             DropBelow(scratch, voxel.MinZ + E);
+            if (made)
+            {
+                keys[index] = NavVoxelKey.Solid;
+                below0 = Unworked;
+                below1 = Unworked;
+                continue;
+            }
+
             // Where every solid stops both classes, the NPC class's record,
             // floor and flags are the player's: each test reads a mask with
             // both bits or neither, and an identical record is numbered once.
@@ -211,7 +271,7 @@ public static class NavClearanceBuilder
                 flags |= Nav3dLeafFlags.GroundedNpc | (walkable1 ? Nav3dLeafFlags.WalkableNpc : 0);
             }
 
-            keys[region.Index(x, y, z)] = record0 == NavRecordTable.BlockedIndex && record1 == NavRecordTable.BlockedIndex
+            keys[index] = record0 == NavRecordTable.BlockedIndex && record1 == NavRecordTable.BlockedIndex
                 ? NavVoxelKey.Solid
                 : new NavVoxelKey(record0, record1, flags, settings.Cost(water, ladder), floor0, floor1);
             below0 = record0;
@@ -278,6 +338,49 @@ public static class NavClearanceBuilder
             if (v.Maxs.X > voxel.MinX + E && v.Mins.X < voxel.MaxX - E
                 && v.Maxs.Y > voxel.MinY + E && v.Mins.Y < voxel.MaxY - E
                 && v.Maxs.Z > voxel.MinZ + E && v.Mins.Z < voxel.MaxZ - E)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The voxel under is made solid and whether it blocks is not yet worked out.</summary>
+    private const int Unworked = -2;
+
+    /// <summary>The voxel under is made solid and does not block: any number but the blocked record's.</summary>
+    private const int Open = -3;
+
+    /// <summary>
+    /// Whether a voxel's geometry blocks it for one class: exactly when
+    /// <see cref="Record"/> answers the blocked record, worked out the same
+    /// way up to that answer (the staircase, then the overhanging brushes'
+    /// overlap), without the rest of the record.
+    /// </summary>
+    private static bool Blocks(Prepared p, Scratch scratch, in NavBox voxel, int clipClass)
+    {
+        int bit = 1 << clipClass;
+        double z0 = voxel.MinZ;
+        List<Nav3dCorner> stair = scratch.Stair;
+        stair.Clear();
+        Staircase(p, scratch, voxel, bit, stair);
+        if (IsBlocked(stair))
+        {
+            return true;
+        }
+
+        foreach (OverhangSolid o in scratch.Overhang)
+        {
+            if ((o.Mask & bit) == 0 || o.MaxZ <= z0 + E)
+            {
+                continue;
+            }
+
+            bool apart = o.MaxX <= voxel.MinX + E || o.MinX >= voxel.MaxX - E
+                || o.MaxY <= voxel.MinY + E || o.MinY >= voxel.MaxY - E
+                || o.MaxZ <= voxel.MinZ + E || o.MinZ >= voxel.MaxZ - E;
+            if (!apart && o.Brush.Overlaps(voxel))
             {
                 return true;
             }

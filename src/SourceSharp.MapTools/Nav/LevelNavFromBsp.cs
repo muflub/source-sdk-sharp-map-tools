@@ -414,16 +414,8 @@ public static class LevelNavFromBsp
         };
 
         NavRecordTable records = new();
-        NavGrid grid = NavClearanceBuilder.Build(near, region, settings, records, cancellationToken);
+        NavGrid grid = NavClearanceBuilder.Build(near, region, settings, records, outside, cancellationToken);
         NavVoxelKey[] keys = grid.Keys;
-        for (int v = 0; v < keys.Length; v++)
-        {
-            if (outside[v])
-            {
-                keys[v] = NavVoxelKey.Solid;
-            }
-        }
-
         int[] brushes = [.. NavClearanceBuilder.OverhangBrushes(near).Select(b => overhangIndex[b])];
         return new CellBuild(NavColumns.Of(region, keys, records), records, brushes);
     }
