@@ -325,7 +325,7 @@ public sealed class MultiCellLinkTests
         Assert.Contains(hall, c => link.Vis.CanSee(b, c));
     }
 
-    private static string Where(BspData bsp, int cluster)
+    internal static string Where(BspData bsp, int cluster)
     {
         DLeaf[] leaves = BspStructView.As<DLeaf>(bsp[BspLump.Leafs]).ToArray();
         DLeaf leaf = leaves.First(l => l.Cluster == cluster);

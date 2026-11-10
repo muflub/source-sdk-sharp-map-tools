@@ -17,6 +17,8 @@ using SourceSharp.MapTools.Materials;
 using SourceSharp.MapTools.Nav;
 using SourceSharp.MapTools.Rooms;
 using SourceSharp.MapTools.Validation;
+using SourceSharp.MapTools.Vis;
+using SourceSharp.MapTools.Bsp.Driver;
 
 using SourceSharp.Tests.MapTools.Nav;
 
@@ -171,6 +173,76 @@ public sealed class DoorSlotLinkTests(DoorSlotLinkTests.Fixture fixture)
             Assert.Equal(3, back.Slots);
             Assert.Equal(room.Sockets, back.Sockets);
         }
+    }
+
+    /// <summary>
+    /// The superset gate over the slot level: every cluster pair the
+    /// flattened level's whole compile and vis sees, the link sees through
+    /// some pair of its own clusters under them (sampled across each leaf,
+    /// <see cref="Spanned"/>); and the corridor's south
+    /// slot doors let its west corner room see its east one.
+    /// </summary>
+    [Fact]
+    public async Task TheLinkedPvsIsASupersetOfTheFlattenedCompiles()
+    {
+        LevelGrid level = Level(0);
+        LinkedLevel link = await RoomPropHarness.LinkAsync(fixture.Rooms, level);
+        VbspResult whole = await RoomHarness.CompileAsync(LevelFlattener.Flatten(level, fixture.Library), await RoomLightHarness.ContextAsync("flat"));
+        VisResult monoVis = await RoomHarness.VisAsync(whole.Bsp!, PortalSet.FromPortalFile(whole.Portals!));
+        int[][] map = Spanned(whole.Bsp!, link.Bsp, LevelLinkerTests.MapClusters(whole.Bsp!, link.Bsp));
+        int pairs = 0;
+        for (int from = 0; from < monoVis.ClusterCount; from++)
+        {
+            for (int to = 0; to < monoVis.ClusterCount; to++)
+            {
+                if (!monoVis.CanSee(from, to) || map[from].Length == 0 || map[to].Length == 0)
+                {
+                    continue;
+                }
+
+                Assert.True(map[from].Any(a => map[to].Any(b => link.Vis.CanSee(a, b))), $"the flattened compile sees {from} {MultiCellLinkTests.Where(whole.Bsp!, from)} -> {to} {MultiCellLinkTests.Where(whole.Bsp!, to)}; the link sees none of its pairs");
+                pairs++;
+            }
+        }
+
+        Assert.True(pairs > 0);
+        int west = RoomHarness.LeafAt(link.Bsp, new Vec3(200, 43, 60)).Cluster;
+        int east = RoomHarness.LeafAt(link.Bsp, new Vec3(512 + 56, 43, 60)).Cluster;
+        Assert.True(west >= 0 && east >= 0 && west != east && link.Vis.CanSee(west, east));
+    }
+
+    /// <summary>
+    /// The link's clusters under each of the flattened compile's, sampled
+    /// across each leaf every 32 units as well as about its middle: doors at
+    /// the same slot in a row of rooms line up, and the flattened compile
+    /// makes one leaf of the strip through them, from the first room to the
+    /// last, which the gate's samples about the middle see only the middle
+    /// room of.
+    /// </summary>
+    private static int[][] Spanned(BspData monolithic, BspData linked, int[][] map)
+    {
+        List<HashSet<int>> sets = [.. map.Select(m => new HashSet<int>(m))];
+        foreach (DLeaf leaf in BspStructView.As<DLeaf>(monolithic[BspLump.Leafs]))
+        {
+            if ((leaf.Contents & (int)BrushContents.Solid) != 0 || leaf.Cluster < 0)
+            {
+                continue;
+            }
+
+            for (float x = leaf.Mins[0] + 2; x <= leaf.Maxs[0] - 2; x += 32)
+            {
+                for (float y = leaf.Mins[1] + 2; y <= leaf.Maxs[1] - 2; y += 32)
+                {
+                    int cluster = LevelLinker.PointInLeafCluster(linked, new Vec3(x, y, (leaf.Mins[2] + leaf.Maxs[2]) / 2));
+                    if (cluster >= 0)
+                    {
+                        _ = sets[leaf.Cluster].Add(cluster);
+                    }
+                }
+            }
+        }
+
+        return [.. sets.Select(set => set.Order().ToArray())];
     }
 
     /// <summary>The level's map at every turn of the larger room is the flattened compile's, its doors at their slots.</summary>
