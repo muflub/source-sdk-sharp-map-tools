@@ -39,8 +39,13 @@ internal static class DoorSlotHarness
     /// <summary>Every wall's first slot: south on east and west, west on north and south.</summary>
     public static RoomDefinition Corner => Room("corner", (RoomFacing.PositiveX, 0), (RoomFacing.NegativeX, 0), (RoomFacing.PositiveY, 0), (RoomFacing.NegativeY, 0));
 
-    /// <summary>Every slot of the east wall.</summary>
-    public static RoomDefinition Three => Room("three", (RoomFacing.PositiveX, 0), (RoomFacing.PositiveX, 1), (RoomFacing.PositiveX, 2));
+    /// <summary>Every slot of the east wall, and the west slot of the north and south walls.</summary>
+    public static RoomDefinition Three => Room(
+        "three", (RoomFacing.PositiveX, 0), (RoomFacing.PositiveX, 1), (RoomFacing.PositiveX, 2), (RoomFacing.PositiveY, 0), (RoomFacing.NegativeY, 0));
+
+    /// <summary>A 2 x 2 room with a socket at every slot of every cell edge: whichever way it turns, each edge has every slot.</summary>
+    public static RoomDefinition Ring => Room(
+        "ring", 2, 2, [.. Enum.GetValues<RoomFacing>().SelectMany(f => Enumerable.Range(0, 6).Select(k => (f, k / 3, k % 3)))]);
 
     /// <summary>A 2 x 2 room: the east wall's south cell at its north slot, the west wall's north cell at its south slot, the north wall's west cell in the middle.</summary>
     public static RoomDefinition Big => Room(

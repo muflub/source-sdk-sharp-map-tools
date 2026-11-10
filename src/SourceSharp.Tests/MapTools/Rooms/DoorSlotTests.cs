@@ -165,7 +165,7 @@ public sealed class DoorSlotTests
         LevelLayout layout = level.ToLayout(name => name == "three" ? three : corner, RoomHarness.Cell, Kit);
         RoomInstance a = layout.Rooms[0], b = layout.Rooms[1];
         Assert.Equal([(ours, theirs)], a.Joints);
-        Assert.Equal(["east_a", "east_b", "east_c"], a.Joints.Select(j => j.Socket).Concat(a.Capped).Order());
+        Assert.Equal(["east_a", "east_b", "east_c", "north_a", "south_a"], a.Joints.Select(j => j.Socket).Concat(a.Capped).Order());
         Assert.Contains((theirs, ours), b.Joints);
         Box mine = Transformed(a.Placement, three, ours), other = Transformed(b.Placement, corner, theirs);
         Assert.Equal(mine.Mins.Y, other.Mins.Y);
