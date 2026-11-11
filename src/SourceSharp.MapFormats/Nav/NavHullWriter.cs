@@ -124,9 +124,24 @@ public static class NavHullWriter
             BinaryPrimitives.WriteSingleLittleEndian(r[4..], k.FloorZ);
             BinaryPrimitives.WriteUInt32LittleEndian(r[8..], k.ShutFirst);
             BinaryPrimitives.WriteUInt32LittleEndian(r[12..], k.ShutCount);
+            BinaryPrimitives.WriteUInt32LittleEndian(r[16..], k.OverhangFirst);
+            BinaryPrimitives.WriteUInt32LittleEndian(r[20..], k.OverhangCount);
             for (int c = 0; c < w; c++)
             {
-                BinaryPrimitives.WriteSingleLittleEndian(r[(16 + (c * 4))..], k.Ceilings[c]);
+                BinaryPrimitives.WriteSingleLittleEndian(r[(24 + (c * 4))..], k.Ceilings[c]);
+            }
+        }
+
+        int overhangSize = NavHullFormat.OverhangRecordBytes(w);
+        byte[] overhangs = new byte[level.Overhangs.Count * overhangSize];
+        for (int i = 0; i < level.Overhangs.Count; i++)
+        {
+            NavHullOverhang o = level.Overhangs[i];
+            Span<byte> r = overhangs.AsSpan(i * overhangSize);
+            for (int c = 0; c < w; c++)
+            {
+                BinaryPrimitives.WriteDoubleLittleEndian(r[(c * 16)..], o.Under[c]);
+                BinaryPrimitives.WriteDoubleLittleEndian(r[((c * 16) + 8)..], o.Over[c]);
             }
         }
 
@@ -164,6 +179,7 @@ public static class NavHullWriter
             (NavHullFormat.BoxesTag, boxes),
             (NavHullFormat.KeysTag, keys),
             (NavHullFormat.ShutsTag, shuts),
+            (NavHullFormat.OverhangsTag, overhangs),
             (NavHullFormat.ObstaclesTag, obstacles),
             (NavHullFormat.JumpsTag, jumps),
         ];
@@ -278,9 +294,24 @@ public static class NavHullWriter
 
         foreach (NavHullKey k in level.Keys)
         {
-            if (k.Ceilings.Count != w || (long)k.ShutFirst + k.ShutCount > level.Shuts.Count)
+            if (k.Ceilings.Count != w || (long)k.ShutFirst + k.ShutCount > level.Shuts.Count
+                || (long)k.OverhangFirst + k.OverhangCount > level.Overhangs.Count)
             {
-                throw new ArgumentException("a key has a ceiling per width and shut records in range.", nameof(level));
+                throw new ArgumentException("a key has a ceiling per width and shut and overhang records in range.", nameof(level));
+            }
+        }
+
+        foreach (NavHullOverhang o in level.Overhangs)
+        {
+            bool sound = o.Under.Count == w && o.Over.Count == w;
+            for (int c = 0; sound && c < w; c++)
+            {
+                sound = !double.IsNaN(o.Under[c]) && !double.IsNaN(o.Over[c]);
+            }
+
+            if (!sound)
+            {
+                throw new ArgumentException("an overhang record has two limits per width, neither NaN.", nameof(level));
             }
         }
 

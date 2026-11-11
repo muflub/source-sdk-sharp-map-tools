@@ -32,10 +32,13 @@ public sealed record HullNavResult(NavHullLevel Level, IReadOnlyList<string> War
 /// centre. A record blocks a centred body of half-width <c>r</c> with its
 /// feet at <c>z</c> exactly when <c>z + h</c> passes a corner's top for some
 /// corner narrower than <c>r</c> less half a voxel, so the least such top is
-/// the whole answer, for every height; an overhanging brush adds the head
-/// room the brush leaves over the voxel's bottom, as the <c>.nav3d</c>
-/// reader measures it. A dynamic obstacle's corners give the ceilings with
-/// that obstacle shut.
+/// the whole answer, for every height. An overhanging brush, which the
+/// record names rather than states, becomes two limits per width: the
+/// highest top that passes under it and the lowest feet that stand above it,
+/// found with the reader's own overlap test (<see cref="OverhangLimits"/>),
+/// so a fit at any origin, on a floor inside the voxel below or raised up a
+/// stair, is the <c>.nav3d</c> reader's. A dynamic obstacle's corners give
+/// the ceilings with that obstacle shut.
 /// </para>
 /// <para>
 /// <b>Runs, then boxes.</b> Touching runs of a column with the same answers
@@ -118,7 +121,15 @@ public static class HullNavFromBsp
     /// that lowers one shut. Its bytes are its identity: two runs merge, and
     /// two boxes share a key, exactly when their bytes are equal.
     /// </summary>
-    internal static byte[] RunKey(NavRun run, NavRecordTable records, int[] cellBrushes, IReadOnlyList<NavBrush> overhang, NavRegion region, int x, int y, float[] widths)
+    /// <param name="run">The run.</param>
+    /// <param name="records">The cell's records.</param>
+    /// <param name="cellBrushes">The cell's overhanging brushes' places in <paramref name="overhang"/>.</param>
+    /// <param name="overhang">The level's overhanging brushes.</param>
+    /// <param name="voxelSize">The voxel's edge.</param>
+    /// <param name="cx">The column's centre along x, as the reader works it out from the leaf's bounds.</param>
+    /// <param name="cy">Along y.</param>
+    /// <param name="widths">The built widths.</param>
+    internal static byte[] RunKey(NavRun run, NavRecordTable records, int[] cellBrushes, IReadOnlyList<NavBrush> overhang, double voxelSize, double cx, double cy, float[] widths)
     {
         Nav3dLeafFlags leafFlags = run.Key.Flags;
         bool blocked = run.Key.PlayerRecord == NavRecordTable.BlockedIndex;
@@ -131,6 +142,7 @@ public static class HullNavFromBsp
 
         float[] open = new float[widths.Length];
         List<(uint Obstacle, float[] Ceilings)> shuts = [];
+        List<(double[] Under, double[] Over)> overhangs = [];
         if (blocked)
         {
             Array.Fill(open, float.NegativeInfinity);
@@ -138,10 +150,7 @@ public static class HullNavFromBsp
         else
         {
             NavRecord record = NavRecord.Decode(records[run.Key.PlayerRecord]);
-            double s = region.VoxelSize;
-            NavBox voxel = region.Voxel(x, y, run.ZLo);
-            double cx = (voxel.MinX + voxel.MaxX) * 0.5;
-            double cy = (voxel.MinY + voxel.MaxY) * 0.5;
+            double s = voxelSize;
             for (int w = 0; w < widths.Length; w++)
             {
                 double reach = (widths[w] * 0.5) - (s * 0.5);
@@ -154,18 +163,32 @@ public static class HullNavFromBsp
                     }
                 }
 
-                // An overhanging brush: the head room it leaves a centred
-                // body standing on the voxel's bottom, as the reader measures
-                // a brush's (a run that lists one is a single voxel).
-                double half = widths[w] * 0.5;
-                foreach (int b in record.Brushes)
+                open[w] = ceiling;
+            }
+
+            // An overhanging brush: where a centred body stops meeting it
+            // from below and from above, per width (OverhangLimits). A record
+            // names every one within reach of the voxel, but a body meets
+            // only those over its own footprint, and one the corners' ceiling
+            // already stops a body short of adds nothing: a body whose top is
+            // at most the ceiling (give or take the margin) is under the
+            // brush too. Both are left out, which keeps the answer and lets
+            // the columns beside a far slope share a key.
+            Span<double> under = stackalloc double[widths.Length];
+            Span<double> over = stackalloc double[widths.Length];
+            foreach (int b in record.Brushes)
+            {
+                bool matters = false;
+                for (int w = 0; w < widths.Length; w++)
                 {
-                    NavBox box = new(cx - half, cy - half, voxel.MinZ, cx + half, cy + half, voxel.MinZ);
-                    double room = overhang[cellBrushes[b]].GrowthThreshold(box, NavGrowth.Upward, out _);
-                    ceiling = (float)Math.Min(ceiling, voxel.MinZ + room);
+                    (under[w], over[w]) = OverhangLimits(overhang[cellBrushes[b]], cx, cy, widths[w] * 0.5);
+                    matters |= under[w] < open[w] + NavBrush.Epsilon;
                 }
 
-                open[w] = ceiling;
+                if (matters)
+                {
+                    overhangs.Add((under.ToArray(), over.ToArray()));
+                }
             }
 
             foreach (IGrouping<int, Nav3dDynamicCorner> obstacle in record.Dynamics.GroupBy(d => d.Obstacle).OrderBy(g => g.Key))
@@ -191,7 +214,8 @@ public static class HullNavFromBsp
         }
 
         int stride = 4 + (4 * widths.Length);
-        byte[] bytes = new byte[8 + (4 * widths.Length) + 4 + (shuts.Count * stride)];
+        int overhangStride = 16 * widths.Length;
+        byte[] bytes = new byte[8 + (4 * widths.Length) + 4 + (shuts.Count * stride) + 4 + (overhangs.Count * overhangStride)];
         Span<byte> k = bytes;
         BinaryPrimitives.WriteUInt16LittleEndian(k, (ushort)flags);
         BinaryPrimitives.WriteUInt16LittleEndian(k[2..], run.Key.Cost);
@@ -215,7 +239,75 @@ public static class HullNavFromBsp
             at += stride;
         }
 
+        BinaryPrimitives.WriteInt32LittleEndian(k[at..], overhangs.Count);
+        at += 4;
+        foreach ((double[] under, double[] over) in overhangs)
+        {
+            for (int w = 0; w < widths.Length; w++)
+            {
+                BinaryPrimitives.WriteDoubleLittleEndian(k[(at + (w * 16))..], under[w]);
+                BinaryPrimitives.WriteDoubleLittleEndian(k[(at + (w * 16) + 8)..], over[w]);
+            }
+
+            at += overhangStride;
+        }
+
         return bytes;
+    }
+
+    /// <summary>
+    /// Where a body of half-width <paramref name="half"/>, centred on a column,
+    /// stops overlapping a brush: the highest top that passes under it and
+    /// the lowest feet that stand above it, by the reader's own test.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="NavBrush.Overlaps"/> is a separating-axis test with a
+    /// margin. For a box over a fixed footprint, each axis separates it
+    /// exactly when its feet are above some height or its top below some
+    /// height (the axis's z component decides which), so the box overlaps
+    /// exactly when its feet are under one limit and its top over another.
+    /// Each limit is found by bisection on the double line with that same
+    /// test, the other end held clear of the brush, so the reader's answer
+    /// at any feet and height is the test's.
+    /// </para>
+    /// <para>
+    /// A footprint that never meets the brush gives an under-limit of
+    /// positive infinity: every body passes.
+    /// </para>
+    /// </remarks>
+    internal static (double Under, double Over) OverhangLimits(NavBrush brush, double cx, double cy, double half)
+    {
+        ArgumentNullException.ThrowIfNull(brush);
+        double low = brush.MinZ - 1;
+        double high = brush.MaxZ + 1;
+        (double x0, double y0, double x1, double y1) = (cx - half, cy - half, cx + half, cy + half);
+        if (!brush.Overlaps(new NavBox(x0, y0, low, x1, y1, high)))
+        {
+            return (double.PositiveInfinity, double.NegativeInfinity);
+        }
+
+        // The highest top that clears, feet below the brush.
+        double clear = low;
+        double meets = high;
+        for (double m = Mid(clear, meets); m > clear && m < meets; m = Mid(clear, meets))
+        {
+            (clear, meets) = brush.Overlaps(new NavBox(x0, y0, low, x1, y1, m)) ? (clear, m) : (m, meets);
+        }
+
+        double under = clear;
+
+        // The lowest feet that clear, top above the brush.
+        meets = low;
+        clear = high;
+        for (double m = Mid(meets, clear); m > meets && m < clear; m = Mid(meets, clear))
+        {
+            (meets, clear) = brush.Overlaps(new NavBox(x0, y0, m, x1, y1, high)) ? (m, clear) : (meets, m);
+        }
+
+        return (under, clear);
+
+        static double Mid(double a, double b) => a + ((b - a) * 0.5);
     }
 
     /// <summary>Whether an upper run continues a lower one's box: the same answers but for the floor, which only the lower's bottom has.</summary>
@@ -239,7 +331,18 @@ public static class HullNavFromBsp
     private static HullCell Convert(int c, LevelNavFromBsp.CellBuild cell, LevelNavFromBsp.BspGridPlan plan, float[] widths)
     {
         int n = plan.N;
-        NavRegion region = new(plan.Ox + ((c % plan.Columns) * plan.Cell), plan.Oy + ((c / plan.Columns) * plan.Cell), plan.Oz, n, n, plan.Nz, plan.Voxel);
+        // The column's centre as the reader works it out from the leaf's
+        // bounds (single-precision corners), so a brush test lines up.
+        Vec3 origin = plan.Origin;
+        double s = (float)plan.Voxel;
+        int baseX = (c % plan.Columns) * n;
+        int baseY = (c / plan.Columns) * n;
+        double Centre(float at, int voxel)
+        {
+            double lo = at + (voxel * s);
+            return ((float)lo + (double)(float)(lo + s)) * 0.5;
+        }
+
         Dictionary<byte[], int> index = new(new ByteContent());
         List<byte[]> keys = [];
         List<HullRun>[] columns = new List<HullRun>[n * n];
@@ -250,7 +353,7 @@ public static class HullNavFromBsp
                 List<HullRun> runs = [];
                 foreach (NavRun run in cell.Columns.Column(x, y))
                 {
-                    byte[] key = RunKey(run, cell.Records, cell.Brushes, plan.Overhang, region, x, y, widths);
+                    byte[] key = RunKey(run, cell.Records, cell.Brushes, plan.Overhang, s, Centre(origin.X, baseX + x), Centre(origin.Y, baseY + y), widths);
                     if (runs.Count > 0 && runs[^1].ZLo + runs[^1].Height == run.ZLo && Continues(keys[runs[^1].Key], key))
                     {
                         runs[^1] = runs[^1] with { Height = runs[^1].Height + run.Height };
@@ -348,6 +451,7 @@ public static class HullNavFromBsp
         Dictionary<byte[], uint> index = new(new ByteContent());
         List<NavHullKey> keys = [];
         List<NavHullShut> shuts = [];
+        List<NavHullOverhang> overhangs = [];
         uint[] starts = new uint[cells.Length + 1];
         List<NavHullBox> boxes = [];
         for (int c = 0; c < cells.Length; c++)
@@ -367,7 +471,7 @@ public static class HullNavFromBsp
                 {
                     number = (uint)keys.Count;
                     index.Add(bytes, number);
-                    keys.Add(KeyOf(bytes, widths.Length, shuts));
+                    keys.Add(KeyOf(bytes, widths.Length, shuts, overhangs));
                 }
 
                 map[k] = number;
@@ -399,6 +503,7 @@ public static class HullNavFromBsp
             Boxes = [.. boxes],
             Keys = keys,
             Shuts = shuts,
+            Overhangs = overhangs,
             Obstacles = LevelNavFromBsp.Obstacles(plan.Geometry, plan.Origin, options.CellSize, plan.Columns, plan.Rows),
             Bsp = binding,
         };
@@ -413,12 +518,12 @@ public static class HullNavFromBsp
             VoxelSize = unlinked.VoxelSize, CellVoxels = unlinked.CellVoxels, Columns = unlinked.Columns, Rows = unlinked.Rows, Origin = unlinked.Origin,
             ColumnVoxels = unlinked.ColumnVoxels, FloorNormalZ = unlinked.FloorNormalZ, StepHeight = unlinked.StepHeight, JumpHeight = unlinked.JumpHeight,
             JumpDistance = unlinked.JumpDistance, Widths = unlinked.Widths, CellStarts = unlinked.CellStarts, Boxes = unlinked.Boxes, Keys = unlinked.Keys,
-            Shuts = unlinked.Shuts, Obstacles = unlinked.Obstacles, Bsp = unlinked.Bsp, Jumps = jumps,
+            Shuts = unlinked.Shuts, Overhangs = unlinked.Overhangs, Obstacles = unlinked.Obstacles, Bsp = unlinked.Bsp, Jumps = jumps,
         };
     }
 
     /// <summary>A key's bytes as a file key, its shut records appended to the level's.</summary>
-    private static NavHullKey KeyOf(byte[] bytes, int widths, List<NavHullShut> shuts)
+    private static NavHullKey KeyOf(byte[] bytes, int widths, List<NavHullShut> shuts, List<NavHullOverhang> overhangs)
     {
         ReadOnlySpan<byte> k = bytes;
         float[] open = new float[widths];
@@ -443,8 +548,25 @@ public static class HullNavFromBsp
             at += 4 + (4 * widths);
         }
 
+        int overhangCount = BinaryPrimitives.ReadInt32LittleEndian(k[at..]);
+        at += 4;
+        uint overhangFirst = (uint)overhangs.Count;
+        for (int i = 0; i < overhangCount; i++)
+        {
+            double[] under = new double[widths];
+            double[] over = new double[widths];
+            for (int w = 0; w < widths; w++)
+            {
+                under[w] = BinaryPrimitives.ReadDoubleLittleEndian(k[(at + (w * 16))..]);
+                over[w] = BinaryPrimitives.ReadDoubleLittleEndian(k[(at + (w * 16) + 8)..]);
+            }
+
+            overhangs.Add(new NavHullOverhang(under, over));
+            at += 16 * widths;
+        }
+
         return new NavHullKey((NavHullFlags)BinaryPrimitives.ReadUInt16LittleEndian(k), BinaryPrimitives.ReadUInt16LittleEndian(k[2..]),
-            BinaryPrimitives.ReadSingleLittleEndian(k[4..]), open, first, (uint)count);
+            BinaryPrimitives.ReadSingleLittleEndian(k[4..]), open, first, (uint)count, overhangFirst, (uint)overhangCount);
     }
 
     /// <summary>Compares byte arrays by content.</summary>

@@ -51,12 +51,21 @@ public readonly record struct NavHullBox(byte X0, byte Y0, byte X1, byte Y1, ush
 /// </param>
 /// <param name="ShutFirst">The first of its shut records.</param>
 /// <param name="ShutCount">How many shut records it has: one per obstacle that lowers a ceiling when shut.</param>
-public sealed record NavHullKey(NavHullFlags Flags, ushort Cost, float FloorZ, IReadOnlyList<float> Ceilings, uint ShutFirst, uint ShutCount)
+/// <param name="OverhangFirst">The first of its overhang records.</param>
+/// <param name="OverhangCount">How many overhang records it has: one per overhanging brush its voxel's clearance record names.</param>
+/// <remarks>
+/// The ceilings answer the clearance record's corners. An overhanging brush
+/// (one with a downward-sloping face) is answered by its overhang record
+/// instead, which a fit must also pass (<see cref="NavHullOverhang"/>).
+/// </remarks>
+public sealed record NavHullKey(
+    NavHullFlags Flags, ushort Cost, float FloorZ, IReadOnlyList<float> Ceilings, uint ShutFirst, uint ShutCount, uint OverhangFirst = 0, uint OverhangCount = 0)
 {
     /// <inheritdoc/>
     public bool Equals(NavHullKey? other) =>
         other is not null && Flags == other.Flags && Cost == other.Cost && FloorZ.Equals(other.FloorZ)
-        && ShutFirst == other.ShutFirst && ShutCount == other.ShutCount && Ceilings.SequenceEqual(other.Ceilings);
+        && ShutFirst == other.ShutFirst && ShutCount == other.ShutCount && OverhangFirst == other.OverhangFirst
+        && OverhangCount == other.OverhangCount && Ceilings.SequenceEqual(other.Ceilings);
 
     /// <inheritdoc/>
     public override int GetHashCode()
@@ -67,9 +76,69 @@ public sealed record NavHullKey(NavHullFlags Flags, ushort Cost, float FloorZ, I
         hash.Add(FloorZ);
         hash.Add(ShutFirst);
         hash.Add(ShutCount);
+        hash.Add(OverhangFirst);
+        hash.Add(OverhangCount);
         foreach (float ceiling in Ceilings)
         {
             hash.Add(ceiling);
+        }
+
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>
+/// One overhanging brush as a box's column sees it: per width, where a body
+/// that wide, centred on the column, stops overlapping it from below and
+/// from above.
+/// </summary>
+/// <param name="Under">
+/// Per width: the highest top a body can have and pass under the brush. A
+/// body clears it from below when its top (feet plus height) is at most this.
+/// </param>
+/// <param name="Over">
+/// Per width: the lowest feet a body can have and stand clear above the
+/// brush. A body clears it from above when its feet are at least this.
+/// </param>
+/// <remarks>
+/// <para>
+/// A body that spans the whole footprint and slides up and down meets a
+/// convex brush exactly when its feet are under one limit and its top over
+/// another: the separating-axis test the <c>.nav3d</c> reader runs splits,
+/// axis by axis, into a condition on the feet alone or on the top alone. So
+/// two numbers per width answer every height and every origin. They are
+/// found with that same test and kept as doubles, so the answer is the
+/// <c>.nav3d</c> reader's to the bit.
+/// </para>
+/// <para>
+/// A body clear of the brush's footprint altogether has an <c>Under</c> of
+/// positive infinity.
+/// </para>
+/// </remarks>
+public sealed record NavHullOverhang(IReadOnlyList<double> Under, IReadOnlyList<double> Over)
+{
+    /// <summary>Whether a body of a width's index, its feet and top given, clears the brush.</summary>
+    /// <param name="width">The width's index.</param>
+    /// <param name="feet">The feet's altitude.</param>
+    /// <param name="top">The top's altitude: the feet plus the height.</param>
+    /// <returns>True when it passes under or stands above.</returns>
+    public bool Clears(int width, double feet, double top) => top <= Under[width] || feet >= Over[width];
+
+    /// <inheritdoc/>
+    public bool Equals(NavHullOverhang? other) => other is not null && Under.SequenceEqual(other.Under) && Over.SequenceEqual(other.Over);
+
+    /// <inheritdoc/>
+    public override int GetHashCode()
+    {
+        HashCode hash = new();
+        foreach (double limit in Under)
+        {
+            hash.Add(limit);
+        }
+
+        foreach (double limit in Over)
+        {
+            hash.Add(limit);
         }
 
         return hash.ToHashCode();
@@ -162,6 +231,9 @@ public sealed class NavHullLevel
 
     /// <summary>The keys' shut records, each key's together.</summary>
     public IReadOnlyList<NavHullShut> Shuts { get; init; } = [];
+
+    /// <summary>The keys' overhang records, each key's together.</summary>
+    public IReadOnlyList<NavHullOverhang> Overhangs { get; init; } = [];
 
     /// <summary>The dynamic obstacles, as the <c>.nav3d</c> names them.</summary>
     public IReadOnlyList<Nav3dObstacle> Obstacles { get; init; } = [];

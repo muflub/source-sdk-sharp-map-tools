@@ -25,7 +25,7 @@
     -->
     <IsPackable>true</IsPackable>
     <PackageId>SourceSharp.MapFormats</PackageId>
-    <Version>1.0.7</Version>
+    <Version>1.0.8</Version>
     <Authors>SourceSharp</Authors>
     <Description>The Source map formats as SourceSharp's map tools read and write them: BSP lumps, the .nav3d level navigation reader and writer, the .map2d level map overlay, and the map checksum both bind to. No dependencies.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

@@ -108,7 +108,7 @@ public sealed class NavHullBoxesTests
         {
             VoxelSize = sample.VoxelSize, CellVoxels = sample.CellVoxels, Columns = sample.Columns, Rows = sample.Rows,
             ColumnVoxels = sample.ColumnVoxels, StepHeight = 18, JumpHeight = 56, JumpDistance = 8, Widths = sample.Widths,
-            CellStarts = sample.CellStarts, Boxes = sample.Boxes, Keys = sample.Keys, Shuts = sample.Shuts, Obstacles = sample.Obstacles,
+            CellStarts = sample.CellStarts, Boxes = sample.Boxes, Keys = sample.Keys, Shuts = sample.Shuts, Overhangs = sample.Overhangs, Obstacles = sample.Obstacles,
         }));
         Assert.Empty(NavHullJumps.Find(near, 1));
         Assert.Throws<ArgumentOutOfRangeException>(() => NavHullJumps.Find(nav, 0));

@@ -33,12 +33,16 @@ public readonly record struct NavHullNeighbour(int Box, Nav3dDirection Direction
 /// </para>
 /// <para>
 /// <b>Fits.</b> A key stores, per built width, the lowest solid a body of
-/// that width meets above a column's centre (format section 4). A body with
-/// its feet at <c>z</c> fits when <c>z + height</c> is at most that ceiling,
-/// so a fit is answered for any height of a built width, and exactly as the
-/// <c>.nav3d</c> reader's <see cref="Nav3dReader.FitsAtCentre"/> answers it
-/// from the clearance record the ceiling came from. A width the file was not
-/// built for has no answer, and asking is an error.
+/// that width meets above a column's centre among those its clearance
+/// record states as corners, and for each overhanging brush that can matter
+/// the highest top that passes under it and the lowest feet that stand above
+/// it (format section 4). A body with its feet at <c>z</c> fits when
+/// <c>z + height</c> is at most the ceiling and it passes every such brush,
+/// so a fit is answered for any feet and any height of a built width, and
+/// exactly as the <c>.nav3d</c> reader's
+/// <see cref="Nav3dReader.FitsAtCentre"/> answers it from the clearance
+/// record the key came from. A width the file was not built for has no
+/// answer, and asking is an error.
 /// </para>
 /// </remarks>
 public sealed class NavHullReader
@@ -281,10 +285,12 @@ public sealed class NavHullReader
             Boxes = Require(sections, NavHullFormat.BoxesTag, NavHullFormat.BoxRecordBytes, header.BoxCount),
             Keys = Require(sections, NavHullFormat.KeysTag, NavHullFormat.KeyRecordBytes(w), header.KeyCount),
             Shuts = Require(sections, NavHullFormat.ShutsTag, NavHullFormat.ShutRecordBytes(w), header.ShutCount),
+            Overhangs = Require(sections, NavHullFormat.OverhangsTag, NavHullFormat.OverhangRecordBytes(w), -1),
             Obstacles = Require(sections, NavHullFormat.ObstaclesTag, NavHullFormat.ObstacleRecordBytes, header.ObstacleCount),
             Jumps = Require(sections, NavHullFormat.JumpsTag, NavHullFormat.JumpRecordBytes, header.JumpCount),
             KeyBytes = NavHullFormat.KeyRecordBytes(w),
             ShutBytes = NavHullFormat.ShutRecordBytes(w),
+            OverhangBytes = NavHullFormat.OverhangRecordBytes(w),
         };
 
         if (b[s.Strings.Offset] != 0 || b[s.Strings.Offset + s.Strings.Length - 1] != 0)
@@ -352,12 +358,30 @@ public sealed class NavHullReader
         float[] ceilings = new float[_widths.Length];
         for (int c = 0; c < ceilings.Length; c++)
         {
-            ceilings[c] = BinaryPrimitives.ReadSingleLittleEndian(r[(16 + (c * 4))..]);
+            ceilings[c] = BinaryPrimitives.ReadSingleLittleEndian(r[(24 + (c * 4))..]);
         }
 
         return new NavHullKey((NavHullFlags)BinaryPrimitives.ReadUInt16LittleEndian(r), BinaryPrimitives.ReadUInt16LittleEndian(r[2..]),
             BinaryPrimitives.ReadSingleLittleEndian(r[4..]), ceilings, BinaryPrimitives.ReadUInt32LittleEndian(r[8..]),
-            BinaryPrimitives.ReadUInt32LittleEndian(r[12..]));
+            BinaryPrimitives.ReadUInt32LittleEndian(r[12..]), BinaryPrimitives.ReadUInt32LittleEndian(r[16..]),
+            BinaryPrimitives.ReadUInt32LittleEndian(r[20..]));
+    }
+
+    /// <summary>One overhang record; allocates (for tools, not per-frame use).</summary>
+    /// <param name="overhang">The record's index (<see cref="NavHullKey.OverhangFirst"/> onward).</param>
+    /// <returns>The record.</returns>
+    public NavHullOverhang Overhang(int overhang)
+    {
+        ReadOnlySpan<byte> r = Record(_s.Overhangs, overhang, _s.OverhangBytes);
+        double[] under = new double[_widths.Length];
+        double[] over = new double[_widths.Length];
+        for (int c = 0; c < under.Length; c++)
+        {
+            under[c] = BinaryPrimitives.ReadDoubleLittleEndian(r[(c * 16)..]);
+            over[c] = BinaryPrimitives.ReadDoubleLittleEndian(r[((c * 16) + 8)..]);
+        }
+
+        return new NavHullOverhang(under, over);
     }
 
     /// <summary>A box's flags.</summary>
@@ -375,7 +399,12 @@ public sealed class NavHullReader
     /// <returns>The multiplier: 1 is plain ground.</returns>
     public float CostMultiplier(int box) => BinaryPrimitives.ReadUInt16LittleEndian(KeyRecord(box)[2..]) / 256f;
 
-    /// <summary>The ceiling a body of a built width meets above a column's centre in a box, every obstacle open.</summary>
+    /// <summary>
+    /// The ceiling a body of a built width meets above a column's centre in a
+    /// box, every obstacle open, from its clearance record's corners; an
+    /// overhanging brush is the box's overhang records' (<see cref="FitsAt"/>
+    /// checks both).
+    /// </summary>
     /// <param name="box">The box.</param>
     /// <param name="widthIndex">The width's index (<see cref="WidthIndex"/>).</param>
     /// <returns>The altitude; negative infinity when the width fits at no height.</returns>
@@ -386,7 +415,7 @@ public sealed class NavHullReader
             throw new ArgumentOutOfRangeException(nameof(widthIndex), widthIndex, "no such width.");
         }
 
-        return BinaryPrimitives.ReadSingleLittleEndian(KeyRecord(box)[(16 + (widthIndex * 4))..]);
+        return BinaryPrimitives.ReadSingleLittleEndian(KeyRecord(box)[(24 + (widthIndex * 4))..]);
     }
 
     /// <summary>
@@ -401,8 +430,13 @@ public sealed class NavHullReader
     /// <param name="height">The body's height.</param>
     /// <returns>True when it fits.</returns>
     /// <exception cref="ArgumentException">The file holds no ceilings for <paramref name="width"/>.</exception>
-    public bool FitsAt(int box, double originZ, float width, float height) =>
-        originZ + height <= Ceiling(box, Width(width)) + NavBrush.Epsilon;
+    public bool FitsAt(int box, double originZ, float width, float height)
+    {
+        int index = Width(width);
+        ReadOnlySpan<byte> key = KeyRecord(box);
+        return originZ + height <= BinaryPrimitives.ReadSingleLittleEndian(key[(24 + (index * 4))..]) + NavBrush.Epsilon
+            && ClearsOverhangs(key, index, originZ, originZ + height);
+    }
 
     /// <summary>Whether a body stands on a box's floor at a column's centre: the floor is walkable and the body fits from it up.</summary>
     /// <param name="box">The box.</param>
@@ -444,8 +478,14 @@ public sealed class NavHullReader
             return false;
         }
 
-        double top = BinaryPrimitives.ReadSingleLittleEndian(key[4..]) + (double)height;
-        float ceiling = BinaryPrimitives.ReadSingleLittleEndian(key[(16 + (index * 4))..]);
+        double feet = BinaryPrimitives.ReadSingleLittleEndian(key[4..]);
+        double top = feet + height;
+        if (!ClearsOverhangs(key, index, feet, top))
+        {
+            return false;
+        }
+
+        float ceiling = BinaryPrimitives.ReadSingleLittleEndian(key[(24 + (index * 4))..]);
         uint first = BinaryPrimitives.ReadUInt32LittleEndian(key[8..]);
         uint count = BinaryPrimitives.ReadUInt32LittleEndian(key[12..]);
         for (uint i = first; i < first + count; i++)
@@ -633,6 +673,7 @@ public sealed class NavHullReader
 
                 return new NavHullShut(BinaryPrimitives.ReadUInt32LittleEndian(r), ceilings);
             })],
+            Overhangs = [.. Enumerable.Range(0, _s.Overhangs.Length / Math.Max(1, _s.OverhangBytes)).Select(Overhang)],
             Obstacles = [.. Enumerable.Range(0, ObstacleCount).Select(Obstacle)],
             Jumps = [.. Enumerable.Range(0, JumpCount).Select(Jump)],
             Bsp = Bsp,
@@ -645,6 +686,23 @@ public sealed class NavHullReader
         return index >= 0
             ? index
             : throw new ArgumentException($"the navigation holds no ceilings for a body {width} wide; it was built for {string.Join(", ", _widths)}.", nameof(width));
+    }
+
+    /// <summary>Whether a body of a width's index, feet to top, clears every overhanging brush a key names.</summary>
+    private bool ClearsOverhangs(ReadOnlySpan<byte> key, int index, double feet, double top)
+    {
+        uint first = BinaryPrimitives.ReadUInt32LittleEndian(key[16..]);
+        uint count = BinaryPrimitives.ReadUInt32LittleEndian(key[20..]);
+        for (uint i = first; i < first + count; i++)
+        {
+            ReadOnlySpan<byte> r = Record(_s.Overhangs, (int)i, _s.OverhangBytes);
+            if (top > BinaryPrimitives.ReadDoubleLittleEndian(r[(index * 16)..]) && feet < BinaryPrimitives.ReadDoubleLittleEndian(r[((index * 16) + 8)..]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private ReadOnlySpan<byte> KeyRecord(int box) => Record(_s.Keys, (int)BinaryPrimitives.ReadUInt32LittleEndian(Record(_s.Boxes, box, NavHullFormat.BoxRecordBytes)[8..]), _s.KeyBytes);
@@ -687,7 +745,7 @@ public sealed class NavHullReader
             throw new InvalidDataException($"the .navhull file has no \"{tag}\" section.");
         }
 
-        if (section.Length % record != 0 || (count >= 0 && section.Length != (long)count * record) || (count < 0 && section.Length == 0))
+        if (section.Length % record != 0 || (count >= 0 && section.Length != (long)count * record) || (count < 0 && record == 1 && section.Length == 0))
         {
             throw new InvalidDataException($"the .navhull \"{tag}\" section is {section.Length} bytes, which its counts do not allow.");
         }
@@ -728,6 +786,11 @@ public sealed class NavHullReader
             if ((long)BinaryPrimitives.ReadUInt32LittleEndian(r[8..]) + BinaryPrimitives.ReadUInt32LittleEndian(r[12..]) > header.ShutCount)
             {
                 throw new InvalidDataException($"key {i} names shut records out of range.");
+            }
+
+            if ((long)BinaryPrimitives.ReadUInt32LittleEndian(r[16..]) + BinaryPrimitives.ReadUInt32LittleEndian(r[20..]) > s.Overhangs.Length / s.OverhangBytes)
+            {
+                throw new InvalidDataException($"key {i} names overhang records out of range.");
             }
         }
 
@@ -987,6 +1050,8 @@ public sealed class NavHullReader
 
         public Section Shuts { get; init; }
 
+        public Section Overhangs { get; init; }
+
         public Section Obstacles { get; init; }
 
         public Section Jumps { get; init; }
@@ -994,6 +1059,8 @@ public sealed class NavHullReader
         public int KeyBytes { get; init; }
 
         public int ShutBytes { get; init; }
+
+        public int OverhangBytes { get; init; }
     }
 
     private readonly record struct Header

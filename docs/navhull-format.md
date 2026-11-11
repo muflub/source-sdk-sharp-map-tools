@@ -4,7 +4,7 @@
 the free space of the map's play area at 16-unit voxels, as boxes, with
 what a body of a few given widths needs to know there (whether it fits at
 a height, whether it stands, the floor under it). This document is the
-file's specification, version **1**, written so a reader can be built from
+file's specification, version **2**, written so a reader can be built from
 it alone. The C# reader in `SourceSharp.MapFormats` (`NavHullReader`) is
 one such reader, and the facts check it against the `.nav3d` of the same
 map (`docs/nav3d-format.md`).
@@ -26,12 +26,15 @@ drop with a 32-wide body. For a body of width `w` centred on a column,
 the whole clearance answer is **one number**: the lowest solid it meets
 above the column (section 4). Keyed on that, runs of voxels are long and
 neighbouring columns agree, so they merge into boxes. The same map is
-3.9 million boxes, 27 MB stored, built in about a minute.
+3.75 million boxes, 39 MB stored.
 
 | Map | `.nav3d` | `.navhull` (widths 32, 48) |
 | --- | --- | --- |
-| koth_viaduct | 5.2 M leaves, 20 MB, 5.5 s | 263 k boxes, 1.8 MB, 4.3 s |
-| jump_academy2_rc9a | 126 M leaves, ~4.5 GB image (not writable), 448 s, 24 GB | 3.9 M boxes, 27 MB, 68 s, 2.8 GB |
+| ctf_2fort | 1.6 M leaves, 5.0 MB | 109 k boxes, 1.1 MB |
+| koth_viaduct | 5.2 M leaves, 20 MB | 269 k boxes, 2.2 MB |
+| jump_academy2_rc9a | 126 M leaves, ~4.5 GB image (not writable), 24 GB to build | 3.75 M boxes, 39 MB, about 1,750 s of CPU, 3.3 GB |
+
+(Stored with Brotli 5, the default.)
 
 ## 2. Coordinates and conventions
 
@@ -57,7 +60,7 @@ stored image (raw, or compressed by the envelope's codec)
 | Offset | Type | Field |
 | --- | --- | --- |
 | 0 | `char[8]` | magic `SSNAVHUL` |
-| 8 | `int32` | version: **1** |
+| 8 | `int32` | version: **2** |
 | 12 | `uint8` | codec: 0 none, 1 Deflate (raw), 2 Brotli |
 | 13 | `uint8[3]` | zero |
 | 16 | `int32` | `imageLength` |
@@ -99,8 +102,9 @@ length. A reader ignores tags it does not know.
 | `WDTH` | `float32` | `widthCount`: the built widths, rising, each above 0 |
 | `CELB` | `uint32` | `cells + 1`: cell `c`'s boxes are `[CELB[c], CELB[c+1])` |
 | `BOXS` | 12 bytes | `boxCount` |
-| `KEYS` | `16 + 4 × widthCount` bytes | `keyCount` |
+| `KEYS` | `24 + 4 × widthCount` bytes | `keyCount` |
 | `SHUT` | `4 + 4 × widthCount` bytes | `shutCount` |
+| `OVHG` | `16 × widthCount` bytes | as many as the keys name |
 | `DYNO` | 48 bytes | `obstacleCount`: the `.nav3d` `DYNO` record |
 | `JUMP` | 20 bytes | `jumpCount` |
 | `BSPB` | 40 bytes | one, **optional**: the compiled map's binding, as in the `.nav3d` (its section 12) |
@@ -130,7 +134,9 @@ voxel is in exactly one box. Boxes in one column never overlap.
 | 4 | `float32` | floor: the altitude of the solid under the box's bottom voxel when grounded, else 0 |
 | 8 | `uint32` | first shut record |
 | 12 | `uint32` | shut record count |
-| 16 | `float32[widthCount]` | ceiling per width, every obstacle open |
+| 16 | `uint32` | first overhang record |
+| 20 | `uint32` | overhang record count |
+| 24 | `float32[widthCount]` | ceiling per width, every obstacle open |
 
 Grounded and walkable are the player class's, and describe the box's
 **bottom** voxel only; the voxels above it have no floor of their own (the
@@ -139,22 +145,48 @@ space a player clip closes to players but not to a point (a sight line, a
 rocket): every ceiling of such a key is `−∞`.
 
 **The ceiling.** For width `w`, the ceiling is the lowest altitude a body
-`w` wide, square, centred on a column of the box, meets solid at. A body
-of height `h` with its feet at `z` fits there exactly when
+`w` wide, square, centred on a column of the box, meets a solid at, of the
+solids the voxel's clearance record states as corners. A body of height
+`h` with its feet at `z` passes them exactly when
 
 ```
 z + h ≤ ceiling + ε
 ```
 
 `−∞` means the width fits at no height (a wall is within its footprint at
-the box's own height); `+∞` means nothing is above. It is the answer the
-`.nav3d` reader's `FitsAtCentre` gives for the same voxel: a clearance
-record blocks a centred body exactly when `z + h > T + ε` for some corner
-`(R, T)` with `w/2 − voxelSize/2 > R + ε`, so the least such `T` is the
-ceiling, for every height at once. Where a voxel lies under an
-**overhanging brush** (one whose underside slopes), the ceiling is the
-voxel's bottom plus the head room the brush leaves a centred body standing
-there.
+the box's own height); `+∞` means nothing is above. A clearance record
+blocks a centred body exactly when `z + h > T + ε` for some corner
+`(R, T)` with `w/2 − voxelSize/2 > R + ε`, so the least such `T` answers
+every height and every `z` at once.
+
+**`OVHG`** (per (key, overhanging brush)): per width, two `float64`:
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| `16 × i` | `float64` | `under`: the highest top that passes under the brush |
+| `16 × i + 8` | `float64` | `over`: the lowest feet that stand clear above it |
+
+An **overhanging brush** (one with a face sloping downward) is one the
+record names instead of stating. A body that spans the whole footprint and
+slides vertically meets a convex brush exactly when its feet are below one
+limit and its top above another: the `.nav3d` reader's separating-axis
+test, with its margin, splits axis by axis into a condition on the feet
+alone or on the top alone. So the body passes the brush exactly when
+
+```
+z + h ≤ under   or   z ≥ over
+```
+
+The writer finds both limits with that same test, bisecting on the double
+line, and stores them as doubles, so the answer is the `.nav3d` reader's
+at any `z`: on a floor inside the voxel below, mid-voxel, or raised a step.
+`under = +∞` means the footprint never meets the brush. A key keeps only
+the brushes that can matter: one whose `under` is at least the ceiling
+plus `ε` for every width is passed whenever the ceiling is, and is left
+out, as is one the footprint never meets.
+
+**A fit** of width `w`, height `h`, feet `z` is the ceiling's condition
+and every overhang record's.
 
 **`SHUT`** (per (key, obstacle)): `uint32` obstacle, then `float32` per
 width: the key's ceilings with that one obstacle shut (a door closed, a
@@ -190,20 +222,24 @@ Links are the player's, by the `.nav3d` rule applied to boxes' columns
   of that column, when it touches (`below.zLo + below.height == zLo`).
 - **Neighbours**: the boxes overlapping a box across each side face (into
   the next cell too), then those touching it from above and below.
-- **Fits** at feet `z` for width `w` and height `h`: `z + h ≤ ceiling(w) + ε`.
-  A width the file does not list has no answer.
+- **Fits** at feet `z` for width `w` and height `h`: `z + h ≤ ceiling(w) + ε`,
+  and for each overhang record `z + h ≤ under(w)` or `z ≥ over(w)`. A width
+  the file does not list has no answer.
 - **Stands**: walkable, and fits with the feet on the floor.
 - **Climbs**: a ladder box the body fits in with its feet on the box's
   bottom voxel's bottom.
 - **Stands with an obstacle shut**: as stands, with the shut record's
-  ceiling for that obstacle when the key lists one.
+  ceiling for that obstacle when the key lists one (overhangs are static
+  brushes, unchanged by an obstacle).
 
 ## 6. How it is built
 
 `HullNavFromBsp` lays the grid `LevelNavFromBsp` lays, builds each cell's
 clearance grid exactly as for a `.nav3d`, and then reduces each run of a
 column to its key: the run's player flags, cost, floor, a ceiling per
-width from its clearance record, and its shut records. Touching runs whose
+width from its clearance record's corners, its shut records, and an
+overhang record for each overhanging brush it names that a body there can
+meet below its ceiling. Touching runs whose
 keys agree but for the floor join (the upper one never has a floor).
 Cell by cell, each run not yet taken grows east over columns holding the
 same run (same `zLo`, height and key), and the strip north over rows whose
@@ -227,3 +263,14 @@ are sorted.
 The version changes only for a change an older reader must not read
 around. A new optional section gets a new tag; `headerBytes` lets a later
 header grow.
+
+- **Version 1** took one ceiling per width at a voxel's bottom, an
+  overhanging brush's included. Under or beside a sloped brush that gave
+  the wrong fit for feet below the voxel's bottom (a floor inside the voxel
+  under) or above it (a body raised up a stair): on ctf_2fort, 16,788 of
+  892,152 asks at a floor and 7,290 of 673,060 at a floor plus a step.
+  This build refuses it; rebuild the file.
+- **Version 2** adds the overhang records and the key's range of them. On
+  ctf_2fort it answers 67.4 million asks (at voxel bottoms, mid-voxel, on
+  floors and a step above them, and stands) as the `.nav3d` does, with no
+  difference.
