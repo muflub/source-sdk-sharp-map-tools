@@ -220,6 +220,21 @@ public static class LevelNavFromBsp
     {
         ArgumentNullException.ThrowIfNull(bsp);
         options ??= new BspNavOptions();
+        BspGridPlan plan = Plan(bsp, modelBounds, options);
+        CellBuild?[] built = BuildCells(plan, options, (_, cell) => cell, cancellationToken);
+        return new BspNavResult(
+            Stitch(built, plan.Geometry, plan.Overhang, plan.Settings, options, plan.Columns, plan.Rows, plan.N, plan.Nz, plan.Origin, binding, cancellationToken),
+            plan.Geometry.Warnings);
+    }
+
+    /// <summary>
+    /// Everything a build decides before it builds a cell: the geometry,
+    /// the grid over the play space, the tree and the heights each cell is
+    /// built over. Shared by the <c>.nav3d</c> build and the hull build
+    /// (<see cref="HullNavFromBsp"/>), so the two lay the same grid over a map.
+    /// </summary>
+    internal static BspGridPlan Plan(BspData bsp, Func<string, (Vec3 Mins, Vec3 Maxs)?>? modelBounds, BspNavOptions options)
+    {
         NavSettings settings = options.Settings;
         ArgumentOutOfRangeException.ThrowIfLessThan(options.MaxDegree, 1);
         if (!(options.Reach >= 0) || !float.IsFinite(options.Reach))
@@ -316,12 +331,28 @@ public static class LevelNavFromBsp
             : null;
         timer?.Mark("tree");
 
+        return new BspGridPlan(settings, geometry, overhang, overhangIndex, tree, space, spans, ox, oy, oz, cell, voxel, columns, rows, n, nz);
+    }
+
+    /// <summary>
+    /// Builds every cell of a plan on the build's threads, costliest first,
+    /// each turned by <paramref name="convert"/> into what the caller keeps
+    /// of it; null for an empty cell.
+    /// </summary>
+    internal static T?[] BuildCells<T>(BspGridPlan plan, BspNavOptions options, Func<int, CellBuild, T?> convert, CancellationToken cancellationToken)
+        where T : class
+    {
+        (NavGeometry geometry, NavSettings settings, NavBuildTimer? timer) = (plan.Geometry, plan.Settings, options.Timer);
+        (double ox, double oy, double oz, double cell, double voxel) = (plan.Ox, plan.Oy, plan.Oz, plan.Cell, plan.Voxel);
+        (int columns, int rows, int n, int nz) = (plan.Columns, plan.Rows, plan.N, plan.Nz);
+        (BspTreeView tree, NavPlaySpace? space, int[][]? spans, Dictionary<NavBrush, int> overhangIndex) = (plan.Tree, plan.Space, plan.Spans, plan.OverhangIndex);
+
         // Costliest first, one cell at a time: a cell's time grows with the
         // slanted solids near it, and a few cells of a map can take many
         // times the rest; started last, one of them would hold the build
         // while the other threads wait. Each cell is built alone into its
         // own slot, so the order cannot change a byte.
-        CellBuild?[] built = new CellBuild?[columns * rows];
+        T?[] built = new T?[columns * rows];
         int[] order = CostliestFirst(geometry.Brushes, columns, rows, ox, oy, cell, options.Reach);
         ParallelOptions parallel = new() { MaxDegreeOfParallelism = options.MaxDegree, CancellationToken = cancellationToken };
         int done = 0;
@@ -331,15 +362,15 @@ public static class LevelNavFromBsp
             NavRegion region = new(ox + ((c % columns) * cell), oy + ((c / columns) * cell), oz, n, n, nz, voxel);
             built[c] = spans is not null && spans[c].Length == 0
                 ? null
-                : BuildCell(geometry, region, settings, options.Reach, tree, space, spans?[c], overhangIndex, cancellationToken);
+                : BuildCell(geometry, region, settings, options.Reach, tree, space, spans?[c], overhangIndex, cancellationToken) is { } one
+                    ? convert(c, one)
+                    : null;
             timer?.Cell(c, System.Diagnostics.Stopwatch.GetElapsedTime(started));
             options.Progress?.Invoke(Interlocked.Increment(ref done), built.Length);
         });
         timer?.Mark("cells");
 
-        return new BspNavResult(
-            Stitch(built, geometry, overhang, settings, options, columns, rows, n, nz, new Vec3((float)ox, (float)oy, (float)oz), binding, cancellationToken),
-            geometry.Warnings);
+        return built;
     }
 
     /// <summary>
@@ -396,11 +427,11 @@ public static class LevelNavFromBsp
     }
 
     /// <summary>One cell: its columns, its own records, and its overhanging brushes' places in the level's list; null when it is outside throughout.</summary>
-    /// <param name="spans">
-    /// The voxel heights that can hold play space, as <c>[lo, hi)</c> pairs
-    /// ascending (<see cref="PlaySpans"/>); every other voxel is outside. Null
-    /// to ask the tree for every voxel.
-    /// </param>
+    /// <remarks>
+    /// <c>spans</c> are the voxel heights that can hold play space, as
+    /// <c>[lo, hi)</c> pairs ascending (<see cref="PlaySpans"/>); every other
+    /// voxel is outside. Null asks the tree for every voxel.
+    /// </remarks>
     private static CellBuild? BuildCell(
         NavGeometry geometry, NavRegion region, NavSettings settings, double reach, BspTreeView tree, NavPlaySpace? space,
         int[]? spans, Dictionary<NavBrush, int> overhangIndex, CancellationToken cancellationToken)
@@ -722,13 +753,6 @@ public static class LevelNavFromBsp
         options.Timer?.Mark("jumps");
 
         float cellSize = options.CellSize;
-        uint CellOf(Box bounds)
-        {
-            int cx = Math.Clamp((int)Math.Floor((((bounds.Mins.X + bounds.Maxs.X) / 2) - origin.X) / cellSize), 0, columns - 1);
-            int cy = Math.Clamp((int)Math.Floor((((bounds.Mins.Y + bounds.Maxs.Y) / 2) - origin.Y) / cellSize), 0, rows - 1);
-            return (uint)((cy * columns) + cx);
-        }
-
         Nav3dLevel level = new()
         {
             CellSize = cellSize,
@@ -748,14 +772,27 @@ public static class LevelNavFromBsp
             ColumnStarts = starts,
             Leaves = leaves,
             Clearance = clearance,
-            Obstacles = [.. geometry.Obstacles.Select(o => new Nav3dObstacle(
-                o.TargetName, o.ClassName, CellOf(o.Bounds), o.HammerId, o.Kind, o.Bounds.Mins, o.Bounds.Maxs))],
+            Obstacles = Obstacles(geometry, origin, cellSize, columns, rows),
             Brushes = [.. overhang.Select(b => b.PlaneFloats())],
             Jumps = jumps,
             Bsp = binding,
         };
         options.Timer?.Mark("level");
         return level;
+    }
+
+    /// <summary>The geometry's dynamic obstacles as a file names them, each in the cell its bounds' centre is in (clamped to the grid).</summary>
+    internal static Nav3dObstacle[] Obstacles(NavGeometry geometry, Vec3 origin, float cellSize, int columns, int rows)
+    {
+        uint CellOf(Box bounds)
+        {
+            int cx = Math.Clamp((int)Math.Floor((((bounds.Mins.X + bounds.Maxs.X) / 2) - origin.X) / cellSize), 0, columns - 1);
+            int cy = Math.Clamp((int)Math.Floor((((bounds.Mins.Y + bounds.Maxs.Y) / 2) - origin.Y) / cellSize), 0, rows - 1);
+            return (uint)((cy * columns) + cx);
+        }
+
+        return [.. geometry.Obstacles.Select(o => new Nav3dObstacle(
+            o.TargetName, o.ClassName, CellOf(o.Bounds), o.HammerId, o.Kind, o.Bounds.Mins, o.Bounds.Maxs))];
     }
 
     /// <summary>A cell's record with its overhanging brushes renumbered into the level's list (the map is ascending, so the list stays sorted).</summary>
@@ -765,7 +802,17 @@ public static class LevelNavFromBsp
         return (decoded with { Brushes = [.. decoded.Brushes.Select(b => brushes[b])] }).Encode();
     }
 
-    private sealed record CellBuild(NavColumns Columns, NavRecordTable Records, int[] Brushes);
+    /// <summary>One built cell: its columns' runs, its own records, and its overhanging brushes' places in the level's list.</summary>
+    internal sealed record CellBuild(NavColumns Columns, NavRecordTable Records, int[] Brushes);
+
+    /// <summary>What <see cref="Plan"/> decided: the geometry, the grid and what each cell is built over.</summary>
+    internal sealed record BspGridPlan(
+        NavSettings Settings, NavGeometry Geometry, List<NavBrush> Overhang, Dictionary<NavBrush, int> OverhangIndex, BspTreeView Tree,
+        NavPlaySpace? Space, int[][]? Spans, double Ox, double Oy, double Oz, double Cell, double Voxel, int Columns, int Rows, int N, int Nz)
+    {
+        /// <summary>The grid's low corner.</summary>
+        public Vec3 Origin => new((float)Ox, (float)Oy, (float)Oz);
+    }
 
     /// <summary>
     /// A cell's records as the stitch takes them: the cell's record numbers

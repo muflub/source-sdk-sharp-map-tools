@@ -202,9 +202,22 @@ public static class Nav3dWriter
     public static int VersionOf(Nav3dLevel level)
     {
         ArgumentNullException.ThrowIfNull(level);
-        return level.CellHeights is not { } heights ? Nav3dFormat.CubeVersion
-            : heights.Any(h => h > Nav3dFormat.MaxShapedColumnVoxels) ? Nav3dFormat.Version
-            : Nav3dFormat.ShapedVersion;
+        if (level.CellHeights is not { } heights)
+        {
+            return Nav3dFormat.CubeVersion;
+        }
+
+        // A loop, not a lambda: the compiler caches a lambda in a static
+        // field, which the library's no-mutable-statics rule refuses.
+        foreach (int height in heights)
+        {
+            if (height > Nav3dFormat.MaxShapedColumnVoxels)
+            {
+                return Nav3dFormat.Version;
+            }
+        }
+
+        return Nav3dFormat.ShapedVersion;
     }
 
     private static long Align4(long value) => (value + 3) & ~3L;

@@ -10,6 +10,7 @@ using SourceSharp.MapFormats.Geometry;
 using SourceSharp.MapFormats.Nav;
 
 using SourceSharp.MapTools.Io;
+using SourceSharp.Tests.MapTools.Compile;
 using SourceSharp.Tests.MapTools.Nav;
 using SourceSharp.Tests.MapTools.Rooms;
 
@@ -165,7 +166,75 @@ public sealed class Nav3dCommandTests(BspNavMap map) : IClassFixture<BspNavMap>
         Assert.False(await fs.ExistsAsync(At("/game/maps/ten.nav3d")));
     }
 
+    /// <summary>
+    /// <c>-hull</c> writes the hull navigation beside the map as
+    /// <c>hall.navhull</c> in place of the <c>.nav3d</c>, Brotli-stored, bound
+    /// to the map, built for 32 and 48 unless widths follow it; <c>-out</c>
+    /// and <c>-nav-codec</c> apply to it.
+    /// </summary>
+    [Fact]
+    public async Task HullWritesTheHullNavigationBesideTheMap()
+    {
+        InMemoryFileSystem fs = Game();
+        using StringWriter output = new();
+
+        int exit = await Nav3dCommand.RunAsync(fs, [], ["/game/maps/hall.bsp", "-hull"], output);
+
+        Assert.True(exit == Program.ExitSuccess, output.ToString());
+        Assert.False(await fs.ExistsAsync(At("/game/maps/hall.nav3d")));
+        byte[] file = fs.GetBytes(At("/game/maps/hall.navhull"))!;
+        NavHullReader nav = NavHullReader.Open(file);
+        Assert.Equal(NavCodec.Brotli, nav.Codec);
+        Assert.True(nav.MatchesBsp(map.Bytes));
+        Assert.Equal([32f, 48f], nav.Widths);
+        Assert.Equal(-1, nav.FindBox(InTheProp));
+        Assert.Contains(
+            $"ssmap nav3d: wrote {HostPaths.Display(At("/game/maps/hall.navhull"))}: {file.Length:N0} bytes, 4 of 6 cells (2 x 3, 16 voxels up), {nav.BoxCount:N0} boxes,",
+            output.ToString(),
+            StringComparison.Ordinal);
+
+        using StringWriter other = new();
+        exit = await Nav3dCommand.RunAsync(fs, [], ["/game/maps/hall.bsp", "-hull", "48,24", "-out", "/out/x.navhull", "-nav-codec", "none"], other);
+        Assert.True(exit == Program.ExitSuccess, other.ToString());
+        NavHullReader chosen = NavHullReader.Open(fs.GetBytes(At("/out/x.navhull"))!);
+        Assert.Equal([24f, 48f], chosen.Widths);
+        Assert.Equal(NavCodec.None, chosen.Codec);
+    }
+
+    /// <summary>
+    /// The hull build fails naming the map when the map is not one, the grid
+    /// cannot hold it, the game cannot be mounted or the file cannot be
+    /// written; nothing is left behind.
+    /// </summary>
+    [Fact]
+    public async Task AHullBuildThatCannotFinishSaysWhy()
+    {
+        InMemoryFileSystem fs = Game();
+        fs.AddText(Rooted("/game/maps/junk.bsp"), "not a map");
+        using StringWriter junk = new();
+        Assert.Equal(RoomCommands.ExitFailed, await Nav3dCommand.RunAsync(fs, [], ["/game/maps/junk.bsp", "-hull"], junk));
+        Assert.Contains("not a BSP", junk.ToString(), StringComparison.Ordinal);
+
+        using StringWriter grid = new();
+        Assert.Equal(RoomCommands.ExitFailed, await Nav3dCommand.RunAsync(fs, [], ["/game/maps/hall.bsp", "-hull", "-voxel", "100"], grid));
+        Assert.Contains($"{HostPaths.Display(At("/game/maps/hall.bsp"))}: no navigation:", grid.ToString(), StringComparison.Ordinal);
+
+        using StringWriter mount = new();
+        Assert.Equal(RoomCommands.ExitFailed, await Nav3dCommand.RunAsync(fs, [], ["/game/maps/hall.bsp", "-hull", "-game", "/nowhere"], mount));
+        Assert.Contains("cannot mount", mount.ToString(), StringComparison.Ordinal);
+        Assert.False(await fs.ExistsAsync(At("/game/maps/hall.navhull")));
+
+        ProbeFileSystem refusing = new(Game()) { BeforeReplace = _ => throw new IOException("disk full") };
+        using StringWriter write = new();
+        Assert.Equal(RoomCommands.ExitFailed, await Nav3dCommand.RunAsync(refusing, [], ["/game/maps/hall.bsp", "-hull"], write));
+        Assert.Contains($"cannot write {HostPaths.Display(At("/game/maps/hall.navhull"))}: disk full", write.ToString(), StringComparison.Ordinal);
+    }
+
     [Theory]
+    [InlineData("/game/maps/hall.bsp -hull -check")]
+    [InlineData("/game/maps/hall.bsp -hull -hull")]
+    [InlineData("/game/maps/hall.bsp -hull 0")]
+    [InlineData("/game/maps/hall.bsp -hull 32,x")]
     [InlineData("/game/maps/hall.bsp -voxel 0")]
     [InlineData("/game/maps/hall.bsp -voxel x")]
     [InlineData("")]
