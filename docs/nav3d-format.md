@@ -4,7 +4,7 @@
 `ssmap nav3d` and `ssmap all` beside any compiled map (section 17.6): a 3D
 navigation of the level's free space for agents that walk, climb, jump,
 swim and fly, of any box size. This document is the file's specification,
-version **2**. It is written so a reader can be built from it alone, in any
+versions **2** to **4**. It is written so a reader can be built from it alone, in any
 language; the C# reader in `SourceSharp.MapFormats` (`Nav3dReader`) is one
 such reader, and the facts check the two against each other.
 
@@ -38,7 +38,10 @@ Each cell is split into **voxels**, `cellVoxels` along each edge (16 by
 default: a 256-unit cell, 16-unit voxels). A cell is a cube unless its room
 has a height of its own (the rooms design, 17.6): then its columns run up
 that room's height in voxels instead, which only a **version 3** file
-records (`CHGT`, section 4); every floor stands at z = 0. A room larger
+records (`CHGT`, section 4); every floor stands at z = 0. A grid built
+from a compiled map taller than 255 voxels (a jump map's rooms stand over
+the whole height of the world) is a **version 4** file, whose leaves'
+`zLo` and `height` are 16 bits (section 4). A room larger
 than one cell (the rooms design, 17.8) covers several cells: each holds its
 own part of the room's grid, its room's name and its turn, and the door
 bits of the doors on its own edges, so a reader's point lookup is a cell's
@@ -88,11 +91,12 @@ climber uses ladder leaves; a flyer goes anywhere it fits.
 - **The grid**: `columns` cells west to east (+x), `rows` south to north
   (+y). Cell `(column, row)` has index `row × columns + column` and spans
   `origin + (column × cellSize, row × cellSize, 0)` to that plus `cellSize`
-  on every axis; in a version 3 file, to that plus `cellSize` across and
+  on every axis; in a version 3 or 4 file, to that plus `cellSize` across and
   `CHGT[cell] × voxelSize` up. The linker's origin is `(0, 0, 0)`.
 - **Voxels**: `voxelSize = cellSize / cellVoxels`, `cellVoxels` at most 128;
-  a cell's height (`CHGT`, version 3) at most 255, the most a leaf's 8-bit
-  `zLo` and `height` reach.
+  a cell's height (`CHGT`) at most 255 in version 3, the most a leaf's
+  8-bit `zLo` and `height` reach, and at most 65,535 in version 4, where
+  they are 16 bits.
   Voxel `(x, y, z)` of a cell spans `cellCorner + (x, y, z) × voxelSize` to
   that plus `voxelSize`; a voxel's **top** is `origin.z + (z + 1) × voxelSize`.
 - **Half-open**: a point on a voxel boundary belongs to the voxel above it on
@@ -121,7 +125,7 @@ stored image (raw, or compressed by the envelope's codec)
 | Offset | Type | Field |
 | --- | --- | --- |
 | 0 | `char[8]` | magic `SSNAV3D\0` (`53 53 4E 41 56 33 44 00`) |
-| 8 | `int32` | version: **2**, or **3** for a level whose cells have heights of their own (section 16) |
+| 8 | `int32` | version: **2**, **3** for a level whose cells have heights of their own, **4** for one with a cell taller than 255 voxels (section 16) |
 | 12 | `uint8` | codec: 0 none, 1 Deflate (raw RFC 1951), 2 Brotli (RFC 7932) |
 | 13 | `uint8[3]` | zero |
 | 16 | `int32` | `imageLength`: the image's length after decoding |
@@ -195,16 +199,16 @@ A reader looks sections up by tag and **ignores tags it does not know**.
 | `BRSI` | `uint32` | `brushCount + 1`: brush `b`'s planes are `[BRSI[b], BRSI[b+1])` |
 | `BRSP` | 16 bytes | the overhanging brushes' planes: `float32` normal x, y, z, distance |
 | `JUMP` | 16 bytes | `jumpCount` |
-| `CHGT` | `int32` | `columns × rows`, **version 3 only**: each cell's height in voxels, 1 to 255 for a placed cell, 0 for an empty one |
-| `BSPB` | 40 bytes | one, **optional** (versions 2 and 3): the compiled map the navigation was built from (section 12) |
+| `CHGT` | `int32` | `columns × rows`, **versions 3 and 4**: each cell's height in voxels, 1 to 255 (version 3) or 65,535 (version 4) for a placed cell, 0 for an empty one |
+| `BSPB` | 40 bytes | one, **optional** (versions 2 to 4): the compiled map the navigation was built from (section 12) |
 
 **`CHGT`** (version 3, written after `JUMP`) gives each cell its own
 height in voxels: how far up its columns run from the floor. A room taller
 than its cell has more voxels up than across, a low room fewer. A version 2
 file has no `CHGT`, and every placed cell is `cellVoxels` tall; the linker
 writes version 2, byte for byte as before heights, for a level whose rooms
-are all cubes. A version 3 reader requires `CHGT` and holds every leaf of a
-cell's columns under its height.
+are all cubes. A version 3 or 4 reader requires `CHGT` and holds every
+leaf of a cell's columns under its height.
 
 **`BSPB`** (optional, written last) binds a navigation built from a
 compiled map (`ssmap nav3d`, `ssmap all`; section 17.6) to that map's
@@ -271,15 +275,21 @@ version.
 
 | Offset | Type | Field |
 | --- | --- | --- |
-| 0 | `uint8` | `zLo`: the run's bottom voxel, in the cell |
-| 1 | `uint8` | `height`: voxels in the run, at least 1 |
+| 0 | `uint8` | `zLo`'s low byte: the run's bottom voxel, in the cell |
+| 1 | `uint8` | `height`'s low byte: voxels in the run, at least 1 |
 | 2 | `uint16` | flags (section 9): 1 water, 2 ladder, 4 grounded (player), 8 grounded (NPC), 16 walkable (player), 32 walkable (NPC) |
 | 4 | `uint16` | cost, 8.8 fixed point (256 = 1.0) |
-| 6 | `uint16` | zero |
+| 6 | `uint8` | `zLo`'s high byte (version 4; zero in versions 2 and 3) |
+| 7 | `uint8` | `height`'s high byte (version 4; zero in versions 2 and 3) |
 | 8 | `uint32` | player class's clearance record: byte offset into `CLRS` |
 | 12 | `uint32` | NPC class's clearance record |
 | 16 | `float32` | player floor height (when grounded for the player class, else 0) |
 | 20 | `float32` | NPC floor height |
+
+So `zLo = byte[0] | byte[6] << 8` and `height = byte[1] | byte[7] << 8` in
+every version: a version 2 or 3 file holds zero in bytes 6 and 7, and one
+that does not places a run past its cell's height of at most 255, which
+the reader refuses.
 
 Many leaves share a record: the two offsets are often equal, and a room has
 a few hundred distinct records against thousands of leaves.
@@ -425,7 +435,7 @@ room in a leaf is therefore a prefix of the run (7.2).
 **Point lookup** (`FindLeaf`): compute the level voxel of the point; the
 cell is `(X / cellVoxels, Y / cellVoxels)`; outside the grid or in an empty
 cell there is no leaf, and neither is there at or above the cell's height
-(`cellVoxels`, or `CHGT[cell]` in version 3; the grid reaches up to its
+(`cellVoxels`, or `CHGT[cell]` in versions 3 and 4; the grid reaches up to its
 tallest cell). Scan the column's leaves for the one whose
 `[zLo, zLo + height)` holds `z`; none means solid there.
 
@@ -668,7 +678,7 @@ for (int i = 0; i < sectionCount; i++) {
     const uint8_t* d = image + headerBytes + 16 * i;
     remember(tag(d), rdu32(d + 8) /* offset */, rdu32(d + 12) /* length */);
 }
-// Version 3: CHGT[cell] is each cell's height in voxels; version 2: cellVoxels
+// Versions 3 and 4: CHGT[cell] is each cell's height in voxels; version 2: cellVoxels
 // for every placed cell. tallest = the largest of them.
 // Validate once: sections inside the image and sized to the header's counts,
 // ROOT and COLS in range and rising, every leaf under its cell's height, runs of a
@@ -844,11 +854,17 @@ step, so the walk needs the jump.
   cell's runs above `cellVoxels` for damage, or a low cell's space above
   its ceiling for voxels it was never told are solid, so the version
   changes. It is written only for such a level: a level of cube rooms is
-  still version 2, byte for byte, and this build reads both.
+  still version 2, byte for byte. **Version 4** widens a leaf's `zLo` and
+  `height` to 16 bits, their high bytes in the leaf record's spare pair,
+  and lets `CHGT` reach 65,535, for a grid built from a compiled map taller
+  than 255 voxels: a version 3 reader would read the low bytes alone and
+  put every run above voxel 255 in the wrong place. It is written only for
+  such a grid, so every level that fits a byte keeps its version and its
+  bytes. This build reads all three.
 - A **new optional section** gets a new tag and changes no version.
   **`BSPB`** (the binding to a compiled map, section 12) is the first: an
   older reader skips it and sees a level bound to no map, and this build
-  reads a file without it the same way, so a version 2 or 3 file written
+  reads a file without it the same way, so a version 2, 3 or 4 file written
   before it is read unchanged and a level without a binding still writes
   the same bytes.
 - The **header** records its size; a reader finds the directory by
@@ -993,7 +1009,15 @@ holds differs from a linked level's in these ways:
   low corner rounded down to the voxel, cells are 256 units (16 voxels of
   16), and every cell is as tall as the map. A map more than 16 voxels tall
   is a version 3 file whose `CHGT` gives every placed cell the same
-  height; a map taller than 255 voxels is refused.
+  height, and a map taller than 255 voxels a version 4 file (section 16);
+  one taller than 65,535 voxels is refused.
+- **Space no play leaf's box reaches** is outside without the build asking
+  the tree: each cell's columns are walked only over the heights a play
+  leaf's bounds (padded by a voxel) reach, and a cell no box reaches is
+  empty without being built. A voxel's centre lies in its own leaf's box,
+  so the file is the same bytes as walking every voxel; on a jump map,
+  whose rooms float apart in a void, it is what makes the height
+  affordable.
 - **Cells are not rooms.** `CELL` names no room, there are no doors and no
   points of interest, and the spawn and arrivals are −1. A neighbour across
   a cell face (section 8) is only a step across a grid line.

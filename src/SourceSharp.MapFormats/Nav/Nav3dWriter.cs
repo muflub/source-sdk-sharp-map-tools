@@ -183,12 +183,41 @@ public static class Nav3dWriter
         byte[] file = new byte[Nav3dFormat.EnvelopeBytes + stored.Length];
         Span<byte> e = file;
         Nav3dFormat.Magic.CopyTo(e);
-        BinaryPrimitives.WriteInt32LittleEndian(e[8..], level.CellHeights is null ? Nav3dFormat.CubeVersion : Nav3dFormat.Version);
+        BinaryPrimitives.WriteInt32LittleEndian(e[8..], VersionOf(level));
         e[12] = (byte)compression.Codec;
         BinaryPrimitives.WriteInt32LittleEndian(e[16..], image.Length);
         BinaryPrimitives.WriteInt32LittleEndian(e[20..], stored.Length);
         stored.CopyTo(file, Nav3dFormat.EnvelopeBytes);
         return file;
+    }
+
+    /// <summary>
+    /// The oldest version that holds a level: 2 for cube cells, 3 for cells of
+    /// their own heights that fit a byte, 4 for a cell taller than that. A
+    /// level keeps the version it always had, so a map that fits a byte is
+    /// written byte for byte as before version 4 existed.
+    /// </summary>
+    /// <param name="level">The level.</param>
+    /// <returns>The version its file carries.</returns>
+    public static int VersionOf(Nav3dLevel level)
+    {
+        ArgumentNullException.ThrowIfNull(level);
+        if (level.CellHeights is not { } heights)
+        {
+            return Nav3dFormat.CubeVersion;
+        }
+
+        // A loop, not a lambda: the compiler caches a lambda in a static
+        // field, which the library's no-mutable-statics rule refuses.
+        foreach (int height in heights)
+        {
+            if (height > Nav3dFormat.MaxShapedColumnVoxels)
+            {
+                return Nav3dFormat.Version;
+            }
+        }
+
+        return Nav3dFormat.ShapedVersion;
     }
 
     private static long Align4(long value) => (value + 3) & ~3L;
@@ -299,8 +328,9 @@ public static class Nav3dWriter
             throw new ArgumentException($"{placed} placed cells own {(long)placed * block} columns, not {columnCount}.", nameof(level));
         }
 
-        // Each block's height: the cube's, or its cell's own (version 3),
-        // which is 1 to 255 for a placed cell and 0 for an empty one.
+        // Each block's height: the cube's, or its cell's own (versions 3
+        // and 4), which is 1 to 65535 for a placed cell and 0 for an empty
+        // one; above 255 the file is version 4.
         int[] blockHeight = new int[Math.Max(1, columnCount / Math.Max(1, block))];
         Array.Fill(blockHeight, level.CellVoxels);
         if (level.CellHeights is { } heights)
@@ -460,8 +490,13 @@ public static class Nav3dWriter
         {
             Nav3dLeaf leaf = leaves[i];
             Span<byte> r = bytes.AsSpan(i * Nav3dFormat.LeafRecordBytes);
-            r[0] = leaf.ZLo;
-            r[1] = leaf.Height;
+            // The low bytes where every version has them, the high bytes in
+            // the record's spare pair (version 4; zero below voxel 256, so a
+            // version 2 or 3 record is unchanged).
+            r[0] = (byte)leaf.ZLo;
+            r[1] = (byte)leaf.Height;
+            r[6] = (byte)(leaf.ZLo >> 8);
+            r[7] = (byte)(leaf.Height >> 8);
             BinaryPrimitives.WriteUInt16LittleEndian(r[2..], (ushort)leaf.Flags);
             BinaryPrimitives.WriteUInt16LittleEndian(r[4..], leaf.Cost);
             BinaryPrimitives.WriteUInt32LittleEndian(r[8..], leaf.PlayerClearance);

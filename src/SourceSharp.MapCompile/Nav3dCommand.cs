@@ -19,7 +19,7 @@ using SourceSharp.MapTools.Nav;
 namespace SourceSharp.MapCompile;
 
 /// <summary>
-/// <c>ssmap nav3d &lt;map.bsp&gt; [-out &lt;file.nav3d&gt;] [-game &lt;dir&gt;] [-nav-codec &lt;codec&gt;] [-voxel N] [-threads N] [-playspace on|off] [-timings] [-check]</c>:
+/// <c>ssmap nav3d &lt;map.bsp&gt; [-out &lt;file.nav3d&gt;] [-game &lt;dir&gt;] [-nav-codec &lt;codec&gt;] [-voxel N] [-threads N] [-playspace on|off] [-hull [widths]] [-timings] [-check]</c>:
 /// the 3D navigation of any compiled map, built from the <c>.bsp</c> alone,
 /// or with <c>-check</c> a built one checked against the map.
 /// </summary>
@@ -47,10 +47,19 @@ namespace SourceSharp.MapCompile;
 /// from the game's content. It prints the count and the first places that
 /// have none, and fails when there is any.
 /// </para>
+/// <para>
+/// <b>The hull navigation.</b> <c>-hull</c> writes a <c>.navhull</c>
+/// (<see cref="HullNavFromBsp"/>) in place of the <c>.nav3d</c>: the same
+/// grid, kept for bodies of the widths given (comma-separated, default 32
+/// and 48), which merges into boxes and so holds a map whose <c>.nav3d</c>
+/// would be too large, a jump map's. It goes beside the map as
+/// <c>&lt;map&gt;.navhull</c> unless <c>-out</c> names it; <c>-check</c>
+/// does not read one.
+/// </para>
 /// </remarks>
 public static class Nav3dCommand
 {
-    private const string Usage = "usage: ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>] [-playspace on|off] [-timings] [-check]";
+    private const string Usage = "usage: ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>] [-playspace on|off] [-hull [widths]] [-timings] [-check]";
 
     /// <summary>How many places without ground <c>-check</c> lists before it says how many more there are.</summary>
     public const int ListedFindings = 20;
@@ -79,6 +88,7 @@ public static class Nav3dCommand
         bool check = false;
         bool playSpace = true;
         bool timings = false;
+        IReadOnlyList<float>? hull = null;
         for (int i = 0; i < args.Count; i++)
         {
             string arg = args[i];
@@ -111,6 +121,15 @@ public static class Nav3dCommand
             {
                 playSpace = args[++i] == "on";
             }
+            else if (Is(arg, "hull") && hull is null)
+            {
+                hull = HullNavFromBsp.DefaultWidths;
+                if (hasValue && TryWidths(args[i + 1], out float[] widths))
+                {
+                    hull = widths;
+                    i++;
+                }
+            }
             else if (Is(arg, "timings") && !timings)
             {
                 timings = true;
@@ -131,6 +150,7 @@ public static class Nav3dCommand
         }
 
         if (target is null
+            || (hull is not null && check)
             || !VPath.TryCreate(Path.GetFullPath(target), out VPath mapPath)
             || (outText is not null && !VPath.TryCreate(Path.GetFullPath(outText), out _)))
         {
@@ -138,7 +158,9 @@ public static class Nav3dCommand
             return Program.ExitUsage;
         }
 
-        VPath navPath = outText is null ? NavPathOf(mapPath) : VPath.Create(Path.GetFullPath(outText));
+        VPath navPath = outText is not null ? VPath.Create(Path.GetFullPath(outText))
+            : hull is not null ? VPath.Create(Path.ChangeExtension(mapPath.ToString(), NavHullFormat.Extension))
+            : NavPathOf(mapPath);
         string? gameDirectory = game is not null ? Path.GetFullPath(game) : await DefaultGameAsync(disk, mapPath, cancellationToken).ConfigureAwait(false);
         if (gameDirectory is null)
         {
@@ -153,10 +175,12 @@ public static class Nav3dCommand
         }
 
         NavBuildTimer? timer = timings ? new NavBuildTimer(() => Environment.CpuUsage.TotalTime) : null;
-        int exit = await BuildAndWriteAsync(
-            disk, steamRoots, mapPath, navPath, gameDirectory, compression, Options(voxel, threads) with { PlaySpace = playSpace, Timer = timer },
-            "ssmap nav3d", output, cancellationToken)
-            .ConfigureAwait(false);
+        BspNavOptions options = Options(voxel, threads) with { PlaySpace = playSpace, Timer = timer };
+        int exit = hull is not null
+            ? await BuildAndWriteHullAsync(disk, steamRoots, mapPath, navPath, gameDirectory, compression, hull, options, "ssmap nav3d", output, cancellationToken)
+                .ConfigureAwait(false)
+            : await BuildAndWriteAsync(disk, steamRoots, mapPath, navPath, gameDirectory, compression, options, "ssmap nav3d", output, cancellationToken)
+                .ConfigureAwait(false);
         if (timer is not null)
         {
             foreach (string line in TimingLines(timer))
@@ -393,6 +417,121 @@ public static class Nav3dCommand
         options.Timer?.Mark("write");
         await output.WriteLineAsync($"{tool}: wrote {HostPaths.Display(navPath)}: {Summary(result.Level, length, clock.Elapsed)}").ConfigureAwait(false);
         return Program.ExitSuccess;
+    }
+
+    /// <summary>
+    /// Reads a compiled map, builds its hull navigation for the widths given
+    /// and writes it (<c>ssmap nav3d -hull</c>).
+    /// </summary>
+    /// <param name="disk">Where the map, the game and the output live.</param>
+    /// <param name="steamRoots">Where Steam keeps its games.</param>
+    /// <param name="mapPath">The <c>.bsp</c>.</param>
+    /// <param name="navPath">Where the <c>.navhull</c> goes.</param>
+    /// <param name="gameDirectory">The directory holding <c>gameinfo.txt</c>, or null to build without props.</param>
+    /// <param name="compression">How the file's image is stored.</param>
+    /// <param name="widths">The body widths to build ceilings for.</param>
+    /// <param name="options">The grid.</param>
+    /// <param name="tool">The name the report's lines start with.</param>
+    /// <param name="output">Where the report goes.</param>
+    /// <param name="cancellationToken">Cancels the work.</param>
+    /// <returns><see cref="Program.ExitSuccess"/>, or <see cref="RoomCommands.ExitFailed"/> with a line saying why.</returns>
+    public static async Task<int> BuildAndWriteHullAsync(
+        IFileSystem disk,
+        IReadOnlyList<VPath> steamRoots,
+        VPath mapPath,
+        VPath navPath,
+        string? gameDirectory,
+        NavCompression compression,
+        IReadOnlyList<float> widths,
+        BspNavOptions options,
+        string tool,
+        TextWriter output,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(disk);
+        ArgumentNullException.ThrowIfNull(steamRoots);
+        ArgumentNullException.ThrowIfNull(widths);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(output);
+        Stopwatch clock = Stopwatch.StartNew();
+        if (await ReadMapAsync(disk, mapPath, tool, output, cancellationToken).ConfigureAwait(false) is not { } map)
+        {
+            return RoomCommands.ExitFailed;
+        }
+
+        options.Timer?.Mark("read");
+        if (await LoadModelsAsync(disk, steamRoots, map.Bsp, gameDirectory, tool, output, cancellationToken).ConfigureAwait(false) is not { } models)
+        {
+            return RoomCommands.ExitFailed;
+        }
+
+        options.Timer?.Mark("models");
+        HullNavResult result;
+        byte[] bytes;
+        try
+        {
+            result = await HullNavFromBsp.BuildAsync(
+                map.Bsp, map.Binding, models.Hull, widths, options with { ModelPieces = models.Pieces }, cancellationToken).ConfigureAwait(false);
+            bytes = NavHullWriter.Write(result.Level, compression);
+        }
+        catch (Exception exception) when (exception is NavBuildException or ArgumentException)
+        {
+            await output.WriteLineAsync($"{tool}: {HostPaths.Display(mapPath)}: no navigation: {exception.Message}").ConfigureAwait(false);
+            return RoomCommands.ExitFailed;
+        }
+
+        foreach (string warning in result.Warnings)
+        {
+            await output.WriteLineAsync($"{tool}: warning: {warning}").ConfigureAwait(false);
+        }
+
+        try
+        {
+            await disk.ReplaceAsync(
+                navPath, async (stream, token) => await stream.WriteAsync(bytes, token).ConfigureAwait(false), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            await output.WriteLineAsync($"{tool}: cannot write {HostPaths.Display(navPath)}: {exception.Message}").ConfigureAwait(false);
+            return RoomCommands.ExitFailed;
+        }
+
+        options.Timer?.Mark("write");
+        await output.WriteLineAsync($"{tool}: wrote {HostPaths.Display(navPath)}: {HullSummary(result.Level, bytes.Length, clock.Elapsed)}").ConfigureAwait(false);
+        return Program.ExitSuccess;
+    }
+
+    /// <summary>The line <c>ssmap nav3d -hull</c> ends with: the file's size, its grid, its boxes and links, and the time.</summary>
+    /// <param name="level">The hull navigation.</param>
+    /// <param name="bytes">The file's length.</param>
+    /// <param name="elapsed">How long the read, build and write took.</param>
+    /// <returns>The line.</returns>
+    public static string HullSummary(NavHullLevel level, long bytes, TimeSpan elapsed)
+    {
+        ArgumentNullException.ThrowIfNull(level);
+        int placed = Enumerable.Range(0, level.Columns * level.Rows).Count(c => level.CellStarts[c + 1] > level.CellStarts[c]);
+        int floors = level.Boxes.Count(b => (level.Keys[(int)b.Key].Flags & NavHullFlags.Walkable) != 0);
+        return string.Create(CultureInfo.InvariantCulture,
+            $"{bytes:N0} bytes, {placed} of {level.Columns * level.Rows} cells ({level.Columns} x {level.Rows}, {level.ColumnVoxels} voxels up), "
+            + $"{level.Boxes.Length:N0} boxes, {level.Keys.Count:N0} keys, {floors:N0} walkable floors, {level.Jumps.Count:N0} jump links, "
+            + $"widths {string.Join(", ", level.Widths)}, {elapsed.TotalSeconds:0.0} s");
+    }
+
+    /// <summary>Reads <c>-hull</c>'s widths: comma-separated, each a finite number above 0.</summary>
+    private static bool TryWidths(string text, out float[] widths)
+    {
+        string[] parts = text.Split(',');
+        widths = new float[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+        {
+            if (!float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out widths[i]) || !(widths[i] > 0) || !float.IsFinite(widths[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>Reads a compiled map and its binding, or writes a line saying why it cannot.</summary>

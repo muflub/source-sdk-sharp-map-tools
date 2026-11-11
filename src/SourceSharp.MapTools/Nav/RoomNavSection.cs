@@ -233,8 +233,11 @@ public static class RoomNavSection
 
         foreach (NavRun run in columns.Runs)
         {
-            w.U8(run.ZLo);
-            w.U8(run.Height);
+            // A room's column is at most 255 voxels (NavSettings.MaxColumnVoxels),
+            // so its runs are bytes in the pack; checked, so a run that broke
+            // that rule fails here rather than wrapping into another voxel.
+            w.U8(checked((byte)run.ZLo));
+            w.U8(checked((byte)run.Height));
             w.Key(run.Key);
         }
 

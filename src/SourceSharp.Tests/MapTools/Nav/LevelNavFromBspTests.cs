@@ -267,16 +267,20 @@ public sealed class LevelNavFromBspTests(BspNavMap map) : IClassFixture<BspNavMa
         Assert.Equal(quiet, Nav3dWriter.Write(result.Level));
     }
 
-    /// <summary>A map taller than a column holds, and a cell the voxel does not divide, are refused by name.</summary>
+    /// <summary>
+    /// A map taller than a version 4 column holds (65,535 voxels), and a cell
+    /// the voxel does not divide, are refused by name; the hall is 256 units
+    /// tall, 65,536 voxels of 1/256, refused before a cell is built.
+    /// </summary>
     [Fact]
     public void AMapTheGridCannotHoldIsRefused()
     {
         NavBuildException tall = Assert.Throws<NavBuildException>(() => map.Build(new BspNavOptions
         {
-            Settings = NavSettings.Default with { VoxelSize = 1 },
-            CellSize = 64,
+            Settings = NavSettings.Default with { VoxelSize = 1f / 256 },
+            CellSize = 0.5f,
         }));
-        Assert.Contains("256 voxels of 1; a .nav3d column holds at most 255", tall.Message, StringComparison.Ordinal);
+        Assert.Contains("65536 voxels of 0.0039; a .nav3d column holds at most 65535", tall.Message, StringComparison.Ordinal);
 
         Assert.Throws<NavBuildException>(() => map.Build(new BspNavOptions { CellSize = 250 }));
         Assert.Throws<NavBuildException>(() => LevelNavFromBsp.Build(new BspData(), default, null));

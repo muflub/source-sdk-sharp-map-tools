@@ -183,11 +183,11 @@ public sealed record NavGrid(NavRegion Region, NavRecordTable Records, NavVoxelK
 }
 
 /// <summary>A leaf of a room or level before it is written: a run of voxels in one column with one key.</summary>
-/// <param name="ZLo">The run's lowest voxel.</param>
+/// <param name="ZLo">The run's lowest voxel; 16 bits, as a version 4 <c>.nav3d</c> leaf's, so a compiled map's column may run past voxel 255.</param>
 /// <param name="Height">How many voxels it holds.</param>
 /// <param name="Key">The key its voxels share; the floor fields are its bottom voxel's.</param>
 [StructLayout(LayoutKind.Auto)]
-public readonly record struct NavRun(byte ZLo, byte Height, NavVoxelKey Key);
+public readonly record struct NavRun(ushort ZLo, ushort Height, NavVoxelKey Key);
 
 /// <summary>
 /// A cell's (or any box's) voxel columns as runs: the leaves. Each column
@@ -239,7 +239,7 @@ public sealed record NavColumns(int SizeX, int SizeY, int[] ColumnStarts, NavRun
                     if (start >= 0 && (key.IsSolid || alone || !key.SameRun(first) || records.HasBrushes(first.PlayerRecord)
                         || records.HasBrushes(first.NpcRecord)))
                     {
-                        runs.Add(new NavRun((byte)start, (byte)(z - start), first));
+                        runs.Add(new NavRun((ushort)start, (ushort)(z - start), first));
                         start = -1;
                     }
 

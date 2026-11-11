@@ -534,7 +534,8 @@ of rooms) of any compiled map, from the `.bsp` alone: a stock map such as
 otherwise (`none`, `deflate[:0-9]`, `brotli[:0-11]`).
 
 - **The grid** is 256-unit cells of 16-unit voxels laid over the world
-  model's bounds, every cell as tall as the map (at most 255 voxels), with
+  model's bounds, every cell as tall as the map (a version 4 file past 255
+  voxels, so a jump map's stacked rooms fit; at most 65,535), with
   the room defaults: step 18, jump 56 up and 100 across, the presets
   `standing 32 72 player; flyer 32 32 npc`. Each cell is built from the
   solids within 128 units of it, so a clearance is exact for any agent up to
@@ -589,6 +590,17 @@ props' `.phy` pieces from `-game`. A place has ground when the player's box,
 moved down a step (18 units) from its feet, meets a solid. It lists the
 first 20 places that have none, the count, and fails when there is any
 (`NavFloorCheck` in the library).
+
+**`-hull [w,w,...]`** writes a `.navhull` instead (`<map>.navhull` unless
+`-out` names it): the same grid and free space, kept for bodies of the
+widths given (32 and 48 by default, TF2's player and the narrower body a
+bot tests a drop with). Each box stores, per width, the lowest ceiling a
+centred body meets, so a fit at any height is the answer the `.nav3d`'s
+`FitsAtCentre` gives, and space whose answers agree merges into boxes. A
+jump map whose `.nav3d` would be gigabytes fits: jump_academy2 is 3.9
+million boxes, 27 MB, in about a minute, where its `.nav3d` would be 126
+million leaves. The format is `docs/navhull-format.md`; `NavHullReader` in
+`SourceSharp.MapFormats` reads it. `-check` does not read one.
 
 ### `preview`
 
