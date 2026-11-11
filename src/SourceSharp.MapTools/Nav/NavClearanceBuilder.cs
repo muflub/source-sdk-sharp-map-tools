@@ -76,7 +76,41 @@ public static class NavClearanceBuilder
     /// <param name="cancellationToken">Cancels the build between columns.</param>
     /// <returns>The grid.</returns>
     public static NavGrid Build(
-        NavGeometry geometry, NavRegion region, NavSettings settings, NavRecordTable records, CancellationToken cancellationToken = default)
+        NavGeometry geometry, NavRegion region, NavSettings settings, NavRecordTable records, CancellationToken cancellationToken = default) =>
+        Build(geometry, region, settings, records, null, cancellationToken);
+
+    /// <summary>
+    /// Builds the grid of a box of voxels, adding its records to a table
+    /// another grid may share, with voxels the caller makes solid whatever
+    /// the geometry says (a compiled map's outside).
+    /// </summary>
+    /// <param name="geometry">The geometry.</param>
+    /// <param name="region">The voxels.</param>
+    /// <param name="settings">The floor threshold and cost weights.</param>
+    /// <param name="records">The record table to number records in.</param>
+    /// <param name="solid">
+    /// By region index, the voxels whose key is <see cref="NavVoxelKey.Solid"/>
+    /// whatever the geometry says; null for none.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the build between columns.</param>
+    /// <returns>The grid.</returns>
+    /// <remarks>
+    /// <para>
+    /// The grid is the one building every voxel and then making these solid
+    /// would give, record for record, without building their records: a
+    /// voxel above one of them still stands on it exactly when its geometry
+    /// blocks it, so for the one under each run of voxels that are not made
+    /// solid that much is worked out (whether its staircase or an
+    /// overhanging brush blocks it), with the column's lists as its own turn
+    /// leaves them. Nothing else of a voxel made solid reaches the grid: its
+    /// key is solid, and its record would only have taken a number in the
+    /// table that no key names. Records are numbered in the order first met,
+    /// so the numbers of the others can differ; what each key's record says
+    /// does not.
+    /// </para>
+    /// </remarks>
+    public static NavGrid Build(
+        NavGeometry geometry, NavRegion region, NavSettings settings, NavRecordTable records, bool[]? solid, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         ArgumentNullException.ThrowIfNull(settings);
@@ -90,15 +124,20 @@ public static class NavClearanceBuilder
             throw new ArgumentOutOfRangeException(nameof(region), "the voxel has a positive edge.");
         }
 
+        if (solid is not null && solid.Length != region.SizeX * region.SizeY * region.SizeZ)
+        {
+            throw new ArgumentException("the solid voxels are one flag per voxel of the region.", nameof(solid));
+        }
+
         Prepared prepared = new(geometry);
-        Scratch scratch = new();
+        Scratch scratch = new(prepared.Brushes.Length);
         NavVoxelKey[] keys = new NavVoxelKey[region.SizeX * region.SizeY * region.SizeZ];
         for (int y = 0; y < region.SizeY; y++)
         {
             for (int x = 0; x < region.SizeX; x++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                Column(prepared, region, settings, records, scratch, x, y, keys);
+                Column(prepared, region, settings, records, scratch, solid, x, y, keys);
             }
         }
 
@@ -111,7 +150,7 @@ public static class NavClearanceBuilder
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static void Column(
-        Prepared p, NavRegion region, NavSettings settings, NavRecordTable records, Scratch scratch, int x, int y, NavVoxelKey[] keys)
+        Prepared p, NavRegion region, NavSettings settings, NavRecordTable records, Scratch scratch, bool[]? solid, int x, int y, NavVoxelKey[] keys)
     {
         double s = region.VoxelSize;
         double x0 = region.OriginX + (x * s);
@@ -156,13 +195,36 @@ public static class NavClearanceBuilder
         }
 
         scratch.LowestTop = double.NegativeInfinity;
+        scratch.SinceDrop = DropEvery;
+        scratch.NextColumn();
 
         int below0 = -1;
         int below1 = -1;
         for (int z = 0; z < region.SizeZ; z++)
         {
             NavBox voxel = region.Voxel(x, y, z);
+            int index = region.Index(x, y, z);
+            bool made = solid is not null && solid[index];
+            if (!made && below0 == Unworked)
+            {
+                // The voxel under was made solid and its record not built:
+                // whether its geometry blocks each class is what this voxel
+                // stands on, worked out before this voxel's drop, with the
+                // lists as the voxel under's own turn left them.
+                NavBox under = region.Voxel(x, y, z - 1);
+                below0 = Blocks(p, scratch, under, 0) ? NavRecordTable.BlockedIndex : Open;
+                below1 = p.ClassesAgree ? below0 : Blocks(p, scratch, under, 1) ? NavRecordTable.BlockedIndex : Open;
+            }
+
             DropBelow(scratch, voxel.MinZ + E);
+            if (made)
+            {
+                keys[index] = NavVoxelKey.Solid;
+                below0 = Unworked;
+                below1 = Unworked;
+                continue;
+            }
+
             // Where every solid stops both classes, the NPC class's record,
             // floor and flags are the player's: each test reads a mask with
             // both bits or neither, and an identical record is numbered once.
@@ -210,7 +272,7 @@ public static class NavClearanceBuilder
                 flags |= Nav3dLeafFlags.GroundedNpc | (walkable1 ? Nav3dLeafFlags.WalkableNpc : 0);
             }
 
-            keys[region.Index(x, y, z)] = record0 == NavRecordTable.BlockedIndex && record1 == NavRecordTable.BlockedIndex
+            keys[index] = record0 == NavRecordTable.BlockedIndex && record1 == NavRecordTable.BlockedIndex
                 ? NavVoxelKey.Solid
                 : new NavVoxelKey(record0, record1, flags, settings.Cost(water, ladder), floor0, floor1);
             below0 = record0;
@@ -218,41 +280,79 @@ public static class NavClearanceBuilder
         }
     }
 
+    /// <summary>How many voxels up a column at least go between two drops (<see cref="DropBelow"/>).</summary>
+    private const int DropEvery = 8;
+
     /// <summary>
     /// Drops from a column's lists the solids wholly below a voxel: every
     /// test of a voxel skips a solid whose top is not above the voxel's
     /// bottom (by the epsilon), and the voxels of a column only rise, so
     /// such a solid is never needed again. The lists keep their order.
     /// </summary>
+    /// <remarks>
+    /// A drop only saves the tests that would skip a solid anyway, so when it
+    /// happens changes no answer. Each drop reads the whole of every list,
+    /// and solids' tops are spread over the column's height, so a drop at
+    /// every voxel a top is passed cost more than it saved; a drop waits
+    /// until the column has risen <see cref="DropEvery"/> voxels since the
+    /// last, and the solids passed meanwhile are skipped by the tests.
+    /// </remarks>
     /// <param name="scratch">The column's lists.</param>
     /// <param name="above">The voxel's bottom plus the epsilon: a solid is kept while its top is above it.</param>
     private static void DropBelow(Scratch scratch, double above)
     {
-        if (!(scratch.LowestTop > above))
+        scratch.SinceDrop++;
+        if (!(scratch.LowestTop > above) && scratch.SinceDrop >= DropEvery)
         {
+            scratch.SinceDrop = 0;
             double lowest = double.PositiveInfinity;
-            lowest = Keep(scratch.Axial, above, lowest, static c => c.Top);
-            lowest = Keep(scratch.Sloped, above, lowest, static c => c.MaxZ);
-            lowest = Keep(scratch.Overhang, above, lowest, static c => c.MaxZ);
+            lowest = Keep(scratch.Axial, above, lowest, default(CandidateTop));
+            lowest = Keep(scratch.Sloped, above, lowest, default(SlopedTop));
+            lowest = Keep(scratch.Overhang, above, lowest, default(OverhangTop));
             scratch.LowestTop = lowest;
         }
 
-        static double Keep<T>(List<T> list, double above, double lowest, Func<T, double> top)
+        // The top is read through a struct, so each list's loop calls it
+        // directly rather than through a delegate.
+        static double Keep<T, TTop>(List<T> list, double above, double lowest, TTop top)
+            where TTop : struct, ITop<T>
         {
+            Span<T> items = CollectionsMarshal.AsSpan(list);
             int kept = 0;
-            for (int i = 0; i < list.Count; i++)
+            for (int i = 0; i < items.Length; i++)
             {
-                double t = top(list[i]);
+                double t = top.Of(items[i]);
                 if (t > above)
                 {
                     lowest = Math.Min(lowest, t);
-                    list[kept++] = list[i];
+                    items[kept++] = items[i];
                 }
             }
 
             list.RemoveRange(kept, list.Count - kept);
             return lowest;
         }
+    }
+
+    /// <summary>How <see cref="DropBelow"/> reads an entry's top.</summary>
+    private interface ITop<T>
+    {
+        double Of(in T item);
+    }
+
+    private readonly struct CandidateTop : ITop<Candidate>
+    {
+        public double Of(in Candidate item) => item.Top;
+    }
+
+    private readonly struct SlopedTop : ITop<SlopedFloor>
+    {
+        public double Of(in SlopedFloor item) => item.MaxZ;
+    }
+
+    private readonly struct OverhangTop : ITop<OverhangSolid>
+    {
+        public double Of(in OverhangSolid item) => item.MaxZ;
     }
 
     /// <summary>Whether a brush of a list overlaps a voxel.</summary>
@@ -277,6 +377,49 @@ public static class NavClearanceBuilder
             if (v.Maxs.X > voxel.MinX + E && v.Mins.X < voxel.MaxX - E
                 && v.Maxs.Y > voxel.MinY + E && v.Mins.Y < voxel.MaxY - E
                 && v.Maxs.Z > voxel.MinZ + E && v.Mins.Z < voxel.MaxZ - E)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The voxel under is made solid and whether it blocks is not yet worked out.</summary>
+    private const int Unworked = -2;
+
+    /// <summary>The voxel under is made solid and does not block: any number but the blocked record's.</summary>
+    private const int Open = -3;
+
+    /// <summary>
+    /// Whether a voxel's geometry blocks it for one class: exactly when
+    /// <see cref="Record"/> answers the blocked record, worked out the same
+    /// way up to that answer (the staircase, then the overhanging brushes'
+    /// overlap), without the rest of the record.
+    /// </summary>
+    private static bool Blocks(Prepared p, Scratch scratch, in NavBox voxel, int clipClass)
+    {
+        int bit = 1 << clipClass;
+        double z0 = voxel.MinZ;
+        List<Nav3dCorner> stair = scratch.Stair;
+        stair.Clear();
+        Staircase(p, scratch, voxel, bit, stair);
+        if (IsBlocked(stair))
+        {
+            return true;
+        }
+
+        foreach (OverhangSolid o in scratch.Overhang)
+        {
+            if ((o.Mask & bit) == 0 || o.MaxZ <= z0 + E)
+            {
+                continue;
+            }
+
+            bool apart = o.MaxX <= voxel.MinX + E || o.MinX >= voxel.MaxX - E
+                || o.MaxY <= voxel.MinY + E || o.MinY >= voxel.MaxY - E
+                || o.MaxZ <= voxel.MinZ + E || o.MinZ >= voxel.MaxZ - E;
+            if (!apart && o.Brush.Overlaps(voxel))
             {
                 return true;
             }
@@ -435,7 +578,7 @@ public static class NavClearanceBuilder
                     continue;
                 }
 
-                if (SlopedCorner(p.Brushes[f.Brush], voxel) is { } candidate)
+                if (SlopedCornerInColumn(p.Brushes[f.Brush], f.Brush, scratch, voxel) is { } candidate)
                 {
                     int at = pending.Count;
                     pending.Add(default);
@@ -565,6 +708,20 @@ public static class NavClearanceBuilder
     {
         NavBox tall = voxel with { MaxZ = Math.Max(voxel.MaxZ, brush.MaxZ) + 1 };
         double threshold = brush.GrowthThreshold(tall, NavGrowth.Sideways, out _);
+        return double.IsPositiveInfinity(threshold)
+            ? null
+            : new Candidate(double.IsNegativeInfinity(threshold) ? double.NegativeInfinity : threshold - E, brush.MinZ, brush.MaxZ, 0);
+    }
+
+    /// <summary>
+    /// <see cref="SlopedCorner"/> for a sloped solid of the column's lists:
+    /// the same corner, with the parts of the growth test that are the same
+    /// for every voxel of the column worked out once per column, the first
+    /// time the brush is asked about there (<see cref="NavBrush.PrepareSidewaysColumn"/>).
+    /// </summary>
+    private static Candidate? SlopedCornerInColumn(NavBrush brush, int index, Scratch scratch, in NavBox voxel)
+    {
+        double threshold = brush.SidewaysThreshold(scratch.ColumnOf(brush, index, voxel), voxel.MinZ, Math.Max(voxel.MaxZ, brush.MaxZ) + 1);
         return double.IsPositiveInfinity(threshold)
             ? null
             : new Candidate(double.IsNegativeInfinity(threshold) ? double.NegativeInfinity : threshold - E, brush.MinZ, brush.MaxZ, 0);
@@ -736,8 +893,44 @@ public static class NavClearanceBuilder
     }
 
     /// <summary>The build's reusable lists: one set per build, so a column allocates nothing per voxel.</summary>
-    private sealed class Scratch
+    private sealed class Scratch(int brushes)
     {
+        // Each sloped solid's column numbers (NavBrush.PrepareSidewaysColumn),
+        // worked out the first time a voxel of the column asks: the column
+        // they were worked out in, and where they start in the pool.
+        private readonly int[] preparedIn = new int[brushes];
+        private readonly int[] preparedAt = new int[brushes];
+        private double[] pool = new double[256];
+        private int poolUsed;
+        private int column;
+
+        /// <summary>Starts a new column: every solid's numbers are worked out again when asked.</summary>
+        public void NextColumn()
+        {
+            column++;
+            poolUsed = 0;
+        }
+
+        /// <summary>A solid's numbers for the column a voxel is in, worked out on the column's first ask.</summary>
+        public ReadOnlySpan<double> ColumnOf(NavBrush brush, int index, in NavBox voxel)
+        {
+            int length = brush.SidewaysColumnLength;
+            if (preparedIn[index] != column)
+            {
+                if (poolUsed + length > pool.Length)
+                {
+                    Array.Resize(ref pool, Math.Max(poolUsed + length, pool.Length * 2));
+                }
+
+                brush.PrepareSidewaysColumn(voxel.MinX, voxel.MinY, voxel.MaxX, voxel.MaxY, pool.AsSpan(poolUsed, length));
+                preparedIn[index] = column;
+                preparedAt[index] = poolUsed;
+                poolUsed += length;
+            }
+
+            return pool.AsSpan(preparedAt[index], length);
+        }
+
         public List<Candidate> Axial { get; } = [];
 
         public List<Candidate> Merged { get; } = [];
@@ -750,6 +943,9 @@ public static class NavClearanceBuilder
 
         /// <summary>The lowest top among the column's lists, so a voxel drops nothing until one is reached.</summary>
         public double LowestTop { get; set; } = double.NegativeInfinity;
+
+        /// <summary>How many voxels the column has risen since its last drop.</summary>
+        public int SinceDrop { get; set; }
 
         public List<Nav3dCorner> Stair { get; } = [];
 

@@ -102,6 +102,37 @@ public sealed class Nav3dCommandTests(BspNavMap map) : IClassFixture<BspNavMap>
         Assert.Equal(-1, nav.FindLeaf(InTheProp));
     }
 
+    /// <summary>
+    /// <c>-timings</c> reports each phase, the host's around the build's own,
+    /// the cells' work and the total, and writes the same file as a run
+    /// without it; without it there are no timing lines.
+    /// </summary>
+    [Fact]
+    public async Task TimingsReportEachPhaseAndChangeNothing()
+    {
+        InMemoryFileSystem fs = Game();
+        using StringWriter plain = new();
+        Assert.Equal(Program.ExitSuccess, await Nav3dCommand.RunAsync(fs, [], ["/game/maps/hall.bsp", "-out", "/out/a.nav3d"], plain));
+        Assert.DoesNotContain("time ", plain.ToString(), StringComparison.Ordinal);
+
+        using StringWriter timed = new();
+        int exit = await Nav3dCommand.RunAsync(fs, [], ["/game/maps/hall.bsp", "-out", "/out/b.nav3d", "-timings", "-threads", "2"], timed);
+
+        Assert.True(exit == Program.ExitSuccess, timed.ToString());
+        string[] lines = [.. timed.ToString().Split('\n').Where(l => l.StartsWith("ssmap nav3d: time ", StringComparison.Ordinal))];
+        Assert.Equal(
+            ["read", "models", "brushes", "props", "displacements", "geometry", "play space", "tree", "cells", "stitch", "jumps", "level", "write",
+                "cells:", "total"],
+            lines.Select(l => l["ssmap nav3d: time ".Length..].Split(' ', StringSplitOptions.RemoveEmptyEntries)[0] switch
+            {
+                "play" => "play space",
+                string word => word,
+            }));
+        Assert.All(lines.Where(l => !l.Contains("cells:", StringComparison.Ordinal)), l => Assert.Contains(" s cpu ", l, StringComparison.Ordinal));
+        Assert.Contains("6 built", lines[13], StringComparison.Ordinal);
+        Assert.Equal(fs.GetBytes(At("/out/a.nav3d")), fs.GetBytes(At("/out/b.nav3d")));
+    }
+
     /// <summary>A map outside any game, with no <c>-game</c>, is built without props, and says so.</summary>
     [Fact]
     public async Task WithoutAGameThePropsAreLeftOutAndTheOutputSaysSo()

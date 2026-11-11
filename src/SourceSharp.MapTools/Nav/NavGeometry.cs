@@ -118,10 +118,17 @@ public sealed class NavGeometry
     /// <param name="bsp">The BSP.</param>
     /// <param name="modelBounds">A model's movement hull by its path as an entity names it, or null when unknown; null to leave props out.</param>
     /// <returns>The geometry.</returns>
-    public static NavGeometry FromBsp(BspData bsp, Func<string, (Vec3 Mins, Vec3 Maxs)?>? modelBounds = null)
+    public static NavGeometry FromBsp(BspData bsp, Func<string, (Vec3 Mins, Vec3 Maxs)?>? modelBounds = null) => FromBsp(bsp, modelBounds, 1);
+
+    /// <summary>The geometry of a compiled BSP, its brushes built on up to <paramref name="maxDegree"/> threads; the same at any degree.</summary>
+    /// <param name="bsp">The BSP.</param>
+    /// <param name="modelBounds">A model's movement hull by its path as an entity names it, or null when unknown; null to leave props out.</param>
+    /// <param name="maxDegree">How many brushes are built at once (<see cref="NavBrush.FromBspIndexed(BspData, int)"/>).</param>
+    /// <returns>The geometry.</returns>
+    public static NavGeometry FromBsp(BspData bsp, Func<string, (Vec3 Mins, Vec3 Maxs)?>? modelBounds, int maxDegree)
     {
         ArgumentNullException.ThrowIfNull(bsp);
-        List<(int Index, NavBrush Brush)> all = NavBrush.FromBspIndexed(bsp);
+        List<(int Index, NavBrush Brush)> all = NavBrush.FromBspIndexed(bsp, maxDegree);
         Dictionary<int, NavBrush> byIndex = all.ToDictionary(b => b.Index, b => b.Brush);
         List<int>[] modelBrushes = ModelBrushes(bsp);
 
@@ -241,43 +248,82 @@ public sealed class NavGeometry
     /// does not decide which side is solid.
     /// </para>
     /// </remarks>
-    public static IReadOnlyList<NavBrush> Displacements(BspData bsp, double depth)
+    public static IReadOnlyList<NavBrush> Displacements(BspData bsp, double depth) => Displacements(bsp, depth, 1);
+
+    /// <summary>
+    /// <see cref="Displacements(BspData, double)"/> with the displacements'
+    /// solids made on up to <paramref name="maxDegree"/> threads: each
+    /// displacement's solids are made alone and the lists joined in
+    /// displacement order, so the list is the same at any degree.
+    /// </summary>
+    /// <param name="bsp">The map.</param>
+    /// <param name="depth">How far each triangle is extruded.</param>
+    /// <param name="maxDegree">How many displacements are made at once.</param>
+    /// <returns>The solids, displacement by displacement, triangle by triangle.</returns>
+    public static IReadOnlyList<NavBrush> Displacements(BspData bsp, double depth, int maxDegree)
     {
         ArgumentNullException.ThrowIfNull(bsp);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(depth);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxDegree, 1);
         IReadOnlyList<Rad.DisplacementSurface> surfaces = Rad.DisplacementShadowCasters.Build(bsp);
         if (surfaces.Count == 0)
         {
             return [];
         }
 
+        List<NavBrush>?[] each = new List<NavBrush>?[surfaces.Count];
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo?[] failed = new System.Runtime.ExceptionServices.ExceptionDispatchInfo?[surfaces.Count];
+        System.Threading.Tasks.Parallel.For(0, surfaces.Count, new ParallelOptions { MaxDegreeOfParallelism = maxDegree }, i =>
+        {
+            try
+            {
+                each[i] = Solids(bsp, surfaces[i], depth);
+            }
+            catch (Exception e)
+            {
+                failed[i] = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(e);
+            }
+        });
+
+        // A displacement that cannot be read throws as it did one at a
+        // time: the first in order, as itself.
+        List<NavBrush> result = [];
+        for (int i = 0; i < surfaces.Count; i++)
+        {
+            failed[i]?.Throw();
+            result.AddRange(each[i]!);
+        }
+
+        return result;
+    }
+
+    /// <summary>One displacement's solids, triangle by triangle: see <see cref="Displacements(BspData, double)"/>.</summary>
+    private static List<NavBrush> Solids(BspData bsp, Rad.DisplacementSurface surface, double depth)
+    {
         ReadOnlySpan<DispInfo> infos = BspStructView.As<DispInfo>(bsp[BspLump.DispInfo]);
         ReadOnlySpan<DispTri> tags = BspStructView.As<DispTri>(bsp[BspLump.DispTris]);
         ReadOnlySpan<DFace> faces = BspStructView.As<DFace>(bsp[BspLump.Faces]);
         ReadOnlySpan<DPlane> planes = BspStructView.As<DPlane>(bsp[BspLump.Planes]);
         List<NavBrush> result = [];
-        foreach (Rad.DisplacementSurface surface in surfaces)
+        DFace face = faces[surface.FaceIndex];
+        DPlane plane = planes[face.PlaneNum];
+        Vec3 front = face.Side == 0 ? plane.Normal : -plane.Normal;
+        ReadOnlySpan<Vec3> vertices = surface.Vertices;
+        ReadOnlySpan<int> indices = surface.TriangleIndices;
+        int triangles = indices.Length / 3;
+        int firstTag = infos[surface.Index].DispTriStart;
+        bool tagged = firstTag >= 0 && firstTag + triangles <= tags.Length;
+        for (int t = 0; t < triangles; t++)
         {
-            DFace face = faces[surface.FaceIndex];
-            DPlane plane = planes[face.PlaneNum];
-            Vec3 front = face.Side == 0 ? plane.Normal : -plane.Normal;
-            ReadOnlySpan<Vec3> vertices = surface.Vertices;
-            ReadOnlySpan<int> indices = surface.TriangleIndices;
-            int triangles = indices.Length / 3;
-            int firstTag = infos[surface.Index].DispTriStart;
-            bool tagged = firstTag >= 0 && firstTag + triangles <= tags.Length;
-            for (int t = 0; t < triangles; t++)
+            if (tagged && (tags[firstTag + t].Tags & (ushort)DispTriTags.Remove) != 0)
             {
-                if (tagged && (tags[firstTag + t].Tags & (ushort)DispTriTags.Remove) != 0)
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                if (Prism(vertices[indices[3 * t]], vertices[indices[(3 * t) + 1]], vertices[indices[(3 * t) + 2]], front, depth, (int)surface.Contents)
-                    is { } prism)
-                {
-                    result.Add(prism);
-                }
+            if (Prism(vertices[indices[3 * t]], vertices[indices[(3 * t) + 1]], vertices[indices[(3 * t) + 2]], front, depth, (int)surface.Contents)
+                is { } prism)
+            {
+                result.Add(prism);
             }
         }
 
@@ -287,7 +333,7 @@ public sealed class NavGeometry
     /// <summary>The least normal z of a displacement triangle extruded straight down; one below it is extruded along its normal.</summary>
     public const double UpFacingNormalZ = 0.01;
 
-    /// <summary>A triangle extruded into a convex solid: see <see cref="Displacements"/>.</summary>
+    /// <summary>A triangle extruded into a convex solid: see <see cref="Displacements(BspData, double)"/>.</summary>
     internal static NavBrush? Prism(Vec3 a, Vec3 b, Vec3 c, Vec3 front, double depth, int contents)
     {
         (double X, double Y, double Z) A = (a.X, a.Y, a.Z), B = (b.X, b.Y, b.Z), C = (c.X, c.Y, c.Z);

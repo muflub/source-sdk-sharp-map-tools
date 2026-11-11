@@ -5,6 +5,8 @@
 //
 //=============================================================================//
 
+using SourceSharp.MapFormats.Bsp;
+using SourceSharp.MapFormats.Bsp.Structs;
 using SourceSharp.MapFormats.Geometry;
 
 using SourceSharp.MapFormats.Nav;
@@ -198,6 +200,164 @@ public sealed class NavBrushTests
         }
 
         Assert.True(finite > 1000 && infinite > 1000, $"{finite} finite and {infinite} infinite thresholds compared");
+    }
+
+    /// <summary>
+    /// A column prepared once (<see cref="NavBrush.PrepareSidewaysColumn"/>)
+    /// answers each of its boxes with the bits the sideways growth test gives
+    /// that box: for slanted, overhanging and cornered brushes in every turn,
+    /// a box, and a prism standing on a slope, over columns beside, under,
+    /// over and inside them, at heights below, through and above, footprints
+    /// on the brushes' own coordinates included (where a gap is exactly zero).
+    /// </summary>
+    [Fact]
+    public void APreparedColumnGivesEachBoxsSidewaysAnswerToTheBit()
+    {
+        float r = MathF.Sqrt(0.5f);
+        NavBrush overhang = NavBrush.FromPlanes([
+            (new Vec3(1, 0, 0), 20f), (new Vec3(-1, 0, 0), 0f), (new Vec3(0, 1, 0), 10f), (new Vec3(0, -1, 0), 0f),
+            (new Vec3(0, 0, 1), 30f), (new Vec3(r, 0, -r), -10f * r)], 1)!;
+        float k = 1f / MathF.Sqrt(3f);
+        NavBrush corner = NavBrush.FromPlanes([
+            (new Vec3(-1, 0, 0), 0f), (new Vec3(0, -1, 0), 0f), (new Vec3(0, 0, -1), 0f), (new Vec3(k, k, k), 12f * k)], 1)!;
+        Vec3 slope = new Vec3(0.3f, -0.2f, 1f).Normalise().Normalised;
+        NavBrush prism = NavBrush.FromPlanes([
+            (slope, Vec3.Dot(slope, new Vec3(4, 4, 8))), (new Vec3(0, 0, -1), 0f),
+            (new Vec3(1, 0, 0), 12f), (new Vec3(-1, 0, 0), -2f), (new Vec3(0, 1, 0), 14f), (new Vec3(-0.6f, -0.8f, 0), -1f)], 1)!;
+        NavBrush box = NavBrush.Box(new Vec3(2, 3, 4), new Vec3(9, 8, 16), 1);
+        int finite = 0;
+        int infinite = 0;
+        int compared = 0;
+        foreach (NavBrush shape in (NavBrush[])[Wedge(), overhang, corner, prism, box])
+        {
+            for (int turn = 0; turn < 4; turn++)
+            {
+                NavBrush brush = shape.Turned(turn, 20).Translated(new Vec3(0.37f, -0.21f, 0.13f));
+                double[] prepared = new double[brush.SidewaysColumnLength];
+                double[] xs = [-12, -4.5, brush.MinX - 2, brush.MinX, 3, 9.25, brush.MaxX, 26];
+                double[] ys = [-12, brush.MinY - 2, brush.MinY, 2.5, 7.75, brush.MaxY, 30];
+                foreach (double x in xs)
+                {
+                    foreach (double y in ys)
+                    {
+                        brush.PrepareSidewaysColumn(x, y, x + 2, y + 2, prepared);
+                        for (double z = -8; z <= 36; z += 1.375)
+                        {
+                            foreach (double top in (double[])[z + 1.5, Math.Max(z + 1.5, brush.MaxZ) + 1])
+                            {
+                                NavBox voxel = new(x, y, z, x + 2, y + 2, top);
+                                double expected = brush.GrowthThreshold(voxel, NavGrowth.Sideways, out _);
+                                double actual = brush.SidewaysThreshold(prepared, z, top);
+                                Assert.True(
+                                    BitConverter.DoubleToInt64Bits(expected) == BitConverter.DoubleToInt64Bits(actual),
+                                    $"turn {turn}, box {voxel}: growth test {expected}, prepared column {actual}");
+                                _ = double.IsPositiveInfinity(expected) ? infinite++ : finite++;
+                                compared++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Assert.True(finite > 2000 && infinite > 2000, $"{finite} finite and {infinite} infinite thresholds compared");
+    }
+
+    /// <summary>
+    /// A BSP of 700 brushes (boxes, and some cut by a slanted plane, and
+    /// some whose planes bound nothing) gives the same brushes, at the same
+    /// indices, built on four threads as on one.
+    /// </summary>
+    [Fact]
+    public async Task ABspsBrushesAreTheSameBuiltOnManyThreads()
+    {
+        BspData bsp = await LoadAsync(Brushes(700, broken: []));
+
+        List<(int Index, NavBrush Brush)> one = NavBrush.FromBspIndexed(bsp);
+        List<(int Index, NavBrush Brush)> four = NavBrush.FromBspIndexed(bsp, 4);
+
+        Assert.True(one.Count > 500 && one.Count < 700, $"{one.Count} brushes of 700");
+        Assert.Equal(one.Select(b => b.Index), four.Select(b => b.Index));
+        Assert.Equal(one.Select(b => b.Brush.PlaneFloats()), four.Select(b => b.Brush.PlaneFloats()));
+        Assert.Equal(one.Count, NavBrush.FromBsp(bsp).Count);
+    }
+
+    /// <summary>
+    /// Brushes that cannot be read throw as they did one at a time: the
+    /// first in lump order, as itself, though a later one fails another way.
+    /// </summary>
+    [Fact]
+    public async Task TheFirstUnreadableBrushThrowsAsItself()
+    {
+        BspData bsp = await LoadAsync(Brushes(700, broken: [(300, 1_000_000, 6), (650, 0, -5)]));
+
+        Assert.Throws<IndexOutOfRangeException>(() => NavBrush.FromBspIndexed(bsp, 4));
+        Assert.Throws<IndexOutOfRangeException>(() => NavBrush.FromBspIndexed(bsp, 1));
+
+        BspData later = await LoadAsync(Brushes(700, broken: [(650, 0, -5)]));
+        Assert.Throws<OverflowException>(() => NavBrush.FromBspIndexed(later, 4));
+    }
+
+    private static async Task<BspData> LoadAsync(byte[] file)
+    {
+        using MemoryStream stream = new(file, writable: false);
+        return await BspFile.LoadAsync(stream);
+    }
+
+    /// <summary>
+    /// A BSP holding only brushes: brush i a 10-unit box at (20 i, 0, 0),
+    /// every third also cut by a slanted plane, every 50th given an inverted
+    /// side so its planes bound nothing; a broken brush is given its own
+    /// first side and side count.
+    /// </summary>
+    private static byte[] Brushes(int count, IReadOnlyList<(int Brush, int FirstSide, int Sides)> broken)
+    {
+        List<DPlane> planes = [];
+        List<DBrushSide> sides = [];
+        List<DBrush> brushes = [];
+        for (int i = 0; i < count; i++)
+        {
+            float x = 20 * i;
+            List<(Vec3 Normal, float Dist)> faces =
+            [
+                (new Vec3(1, 0, 0), x + 10), (new Vec3(-1, 0, 0), -x), (new Vec3(0, 1, 0), 10), (new Vec3(0, -1, 0), 0),
+                (new Vec3(0, 0, 1), 10), (new Vec3(0, 0, -1), i % 50 == 7 ? -20 : 0),
+            ];
+            if (i % 3 == 0)
+            {
+                Vec3 n = new Vec3(0.4f, 0.2f, 1f).Normalise().Normalised;
+                faces.Add((n, Vec3.Dot(n, new Vec3(x + 5, 5, 7))));
+            }
+
+            int first = sides.Count;
+            foreach ((Vec3 normal, float dist) in faces)
+            {
+                sides.Add(new DBrushSide { PlaneNum = (ushort)planes.Count, TexInfo = -1, DispInfo = -1 });
+                planes.Add(new DPlane { Normal = normal, Dist = dist });
+            }
+
+            brushes.Add(new DBrush { FirstSide = first, NumSides = faces.Count, Contents = 1 });
+        }
+
+        foreach ((int brush, int firstSide, int count2) in broken)
+        {
+            brushes[brush] = brushes[brush] with { FirstSide = firstSide, NumSides = count2 };
+        }
+
+        return new BspTestBuilder()
+            .Structs(BspLump.Planes, [.. planes])
+            .Structs(BspLump.BrushSides, [.. sides])
+            .Structs(BspLump.Brushes, [.. brushes])
+            .Build();
+    }
+
+    /// <summary>A prepared column needs room for all of its numbers.</summary>
+    [Fact]
+    public void APreparedColumnTooShortIsRefused()
+    {
+        NavBrush wedge = Wedge();
+        Assert.True(wedge.SidewaysColumnLength > 1);
+        Assert.Throws<ArgumentOutOfRangeException>(() => wedge.PrepareSidewaysColumn(0, 0, 1, 1, new double[wedge.SidewaysColumnLength - 1]));
     }
 
     [Fact]

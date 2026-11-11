@@ -19,7 +19,7 @@ using SourceSharp.MapTools.Nav;
 namespace SourceSharp.MapCompile;
 
 /// <summary>
-/// <c>ssmap nav3d &lt;map.bsp&gt; [-out &lt;file.nav3d&gt;] [-game &lt;dir&gt;] [-nav-codec &lt;codec&gt;] [-voxel N] [-threads N] [-playspace on|off] [-check]</c>:
+/// <c>ssmap nav3d &lt;map.bsp&gt; [-out &lt;file.nav3d&gt;] [-game &lt;dir&gt;] [-nav-codec &lt;codec&gt;] [-voxel N] [-threads N] [-playspace on|off] [-timings] [-check]</c>:
 /// the 3D navigation of any compiled map, built from the <c>.bsp</c> alone,
 /// or with <c>-check</c> a built one checked against the map.
 /// </summary>
@@ -50,7 +50,7 @@ namespace SourceSharp.MapCompile;
 /// </remarks>
 public static class Nav3dCommand
 {
-    private const string Usage = "usage: ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>] [-playspace on|off] [-check]";
+    private const string Usage = "usage: ssmap nav3d <map.bsp> [-out <file.nav3d>] [-game <dir>] [-nav-codec <codec>] [-voxel <units>] [-threads <n>] [-playspace on|off] [-timings] [-check]";
 
     /// <summary>How many places without ground <c>-check</c> lists before it says how many more there are.</summary>
     public const int ListedFindings = 20;
@@ -78,6 +78,7 @@ public static class Nav3dCommand
         float voxel = NavSettings.DefaultVoxelSize;
         bool check = false;
         bool playSpace = true;
+        bool timings = false;
         for (int i = 0; i < args.Count; i++)
         {
             string arg = args[i];
@@ -109,6 +110,10 @@ public static class Nav3dCommand
             else if (Is(arg, "playspace") && hasValue && args[i + 1] is "on" or "off")
             {
                 playSpace = args[++i] == "on";
+            }
+            else if (Is(arg, "timings") && !timings)
+            {
+                timings = true;
             }
             else if (Is(arg, "check") && !check)
             {
@@ -142,11 +147,65 @@ public static class Nav3dCommand
                 .ConfigureAwait(false);
         }
 
-        return check
-            ? await CheckAsync(disk, steamRoots, mapPath, navPath, gameDirectory, threads, "ssmap nav3d", output, cancellationToken).ConfigureAwait(false)
-            : await BuildAndWriteAsync(
-                disk, steamRoots, mapPath, navPath, gameDirectory, compression, Options(voxel, threads) with { PlaySpace = playSpace }, "ssmap nav3d", output, cancellationToken)
-                .ConfigureAwait(false);
+        if (check)
+        {
+            return await CheckAsync(disk, steamRoots, mapPath, navPath, gameDirectory, threads, "ssmap nav3d", output, cancellationToken).ConfigureAwait(false);
+        }
+
+        NavBuildTimer? timer = timings ? new NavBuildTimer(() => Environment.CpuUsage.TotalTime) : null;
+        int exit = await BuildAndWriteAsync(
+            disk, steamRoots, mapPath, navPath, gameDirectory, compression, Options(voxel, threads) with { PlaySpace = playSpace, Timer = timer },
+            "ssmap nav3d", output, cancellationToken)
+            .ConfigureAwait(false);
+        if (timer is not null)
+        {
+            foreach (string line in TimingLines(timer))
+            {
+                await output.WriteLineAsync($"ssmap nav3d: {line}").ConfigureAwait(false);
+            }
+        }
+
+        return exit;
+    }
+
+    /// <summary>
+    /// A timed build's report (<c>-timings</c>): one line per phase with its
+    /// wall time, its CPU time and how many cores were busy on average over
+    /// it (CPU over wall), then the cells' work and the slowest cell, and the
+    /// total.
+    /// </summary>
+    /// <param name="timer">The build's timer.</param>
+    /// <returns>The lines.</returns>
+    public static IReadOnlyList<string> TimingLines(NavBuildTimer timer)
+    {
+        ArgumentNullException.ThrowIfNull(timer);
+        List<string> lines = [];
+        TimeSpan cpuTotal = TimeSpan.Zero;
+        bool anyCpu = false;
+        foreach (NavPhaseTime phase in timer.Phases)
+        {
+            string cpu = phase.Cpu is { } used
+                ? string.Create(CultureInfo.InvariantCulture, $" {used.TotalSeconds,8:0.000} s cpu {Busy(used, phase.Wall),5:0.0} busy")
+                : string.Empty;
+            anyCpu |= phase.Cpu is not null;
+            cpuTotal += phase.Cpu ?? TimeSpan.Zero;
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"time {phase.Name,-13} {phase.Wall.TotalSeconds,8:0.000} s wall{cpu}"));
+        }
+
+        (int slowCell, TimeSpan slowTime) = timer.SlowestCell;
+        if (timer.Cells > 0)
+        {
+            lines.Add(string.Create(CultureInfo.InvariantCulture,
+                $"time cells: {timer.Cells:N0} built, {timer.CellWork.TotalSeconds:0.000} s of work, slowest cell {slowCell} {slowTime.TotalSeconds:0.000} s"));
+        }
+
+        string total = anyCpu
+            ? string.Create(CultureInfo.InvariantCulture, $" {cpuTotal.TotalSeconds,8:0.000} s cpu {Busy(cpuTotal, timer.Total),5:0.0} busy")
+            : string.Empty;
+        lines.Add(string.Create(CultureInfo.InvariantCulture, $"time {"total",-13} {timer.Total.TotalSeconds,8:0.000} s wall{total}"));
+        return lines;
+
+        static double Busy(TimeSpan cpu, TimeSpan wall) => wall > TimeSpan.Zero ? cpu / wall : 0;
     }
 
     /// <summary>
@@ -288,12 +347,18 @@ public static class Nav3dCommand
         ArgumentNullException.ThrowIfNull(output);
         Stopwatch clock = Stopwatch.StartNew();
         string display = HostPaths.Display(mapPath);
-        if (await ReadMapAsync(disk, mapPath, tool, output, cancellationToken).ConfigureAwait(false) is not { } map
-            || await LoadModelsAsync(disk, steamRoots, map.Bsp, gameDirectory, tool, output, cancellationToken).ConfigureAwait(false) is not { } models)
+        if (await ReadMapAsync(disk, mapPath, tool, output, cancellationToken).ConfigureAwait(false) is not { } map)
         {
             return RoomCommands.ExitFailed;
         }
 
+        options.Timer?.Mark("read");
+        if (await LoadModelsAsync(disk, steamRoots, map.Bsp, gameDirectory, tool, output, cancellationToken).ConfigureAwait(false) is not { } models)
+        {
+            return RoomCommands.ExitFailed;
+        }
+
+        options.Timer?.Mark("models");
         BspData bsp = map.Bsp;
         Nav3dBspBinding binding = map.Binding;
         BspNavResult result;
@@ -325,6 +390,7 @@ public static class Nav3dCommand
             return RoomCommands.ExitFailed;
         }
 
+        options.Timer?.Mark("write");
         await output.WriteLineAsync($"{tool}: wrote {HostPaths.Display(navPath)}: {Summary(result.Level, length, clock.Elapsed)}").ConfigureAwait(false);
         return Program.ExitSuccess;
     }

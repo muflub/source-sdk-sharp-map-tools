@@ -241,6 +241,42 @@ public sealed class NavGeometryTests
     }
 
     /// <summary>
+    /// Three displacements' solids made on four threads are the solids made
+    /// on one, in displacement order; and a displacement that cannot be read
+    /// throws as itself, as it did one at a time.
+    /// </summary>
+    [Fact]
+    public async Task DisplacementsMadeOnManyThreadsAreTheSameInOrder()
+    {
+        RoomDefinition definition = RoomHarness.WalkableRoom("terrain", RoomFacing.PositiveX);
+        VmfDocument vmf = RoomHarness.BuildRoomModel(definition);
+        foreach ((float y, int height) in new[] { (32f, 8), (96f, 4), (160f, 12) })
+        {
+            vmf.GetChunk(MapFileLoader.WorldChunk)!.Children.Add(RoomDisplacementHarness.Patch(
+                RoomDisplacementHarness.PatchBrush, new Box(new Vec3(64, y, 16), new Vec3(128, y + 48, 24)), power: 2, offsets: false,
+                heights: (_, _) => height));
+        }
+
+        RoomObject room = await NavRoomsFixture.CompileAsync(vmf, definition);
+
+        IReadOnlyList<NavBrush> one = NavGeometry.Displacements(room.Bsp, 16);
+        IReadOnlyList<NavBrush> four = NavGeometry.Displacements(room.Bsp, 16, 4);
+
+        Assert.Equal(96, one.Count);
+        Assert.Equal(one.Select(b => b.PlaneFloats()), four.Select(b => b.PlaneFloats()));
+        Assert.Equal(3, one.Chunk(32).Select(c => c.Max(b => b.MaxZ)).Distinct().Count());
+
+        // The second displacement's base face names a plane past the lump.
+        DispInfo info = BspStructView.As<DispInfo>(room.Bsp[BspLump.DispInfo])[1];
+        byte[] faces = room.Bsp[BspLump.Faces].Data.ToArray();
+        Span<DFace> faceSpan = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, DFace>(faces.AsSpan());
+        faceSpan[info.MapFace].PlaneNum = ushort.MaxValue;
+        room.Bsp.SetLump(BspLump.Faces, faces, room.Bsp[BspLump.Faces].Version);
+        Assert.Throws<IndexOutOfRangeException>(() => NavGeometry.Displacements(room.Bsp, 16, 4));
+        Assert.Throws<ArgumentOutOfRangeException>(() => NavGeometry.Displacements(room.Bsp, 16, 0));
+    }
+
+    /// <summary>
     /// A triangle facing up is extruded straight down (flat bottom, vertical
     /// sides); a wall triangle along its normal, backwards; and the side the
     /// base face faces is the front whichever way the triangle is wound.

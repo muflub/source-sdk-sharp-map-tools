@@ -385,6 +385,49 @@ public sealed class Nav3dFileTests
         Assert.Equal(-1, none.FindLeaf(new Vec3(1, 1, 1)));
     }
 
+    /// <summary>
+    /// The writer checks each clearance record once, however many leaves
+    /// name it, and still refuses a leaf whose offset is misaligned beside a
+    /// record already found sound, past the end, or a record that is
+    /// malformed though a leaf before it named a sound one.
+    /// </summary>
+    [Fact]
+    public void ALeafsRecordIsRefusedThoughOtherLeavesNamedSoundOnes()
+    {
+        Nav3dLevel level = Sample();
+        Assert.True(level.Leaves.Length > 2);
+        uint first = level.Leaves[0].PlayerClearance;
+        Nav3dLevel shared = Reshaped(level, [.. level.Leaves.Select(l => l with { PlayerClearance = first, NpcClearance = first })], level.Clearance);
+        Assert.NotEmpty(Nav3dWriter.Write(shared));
+
+        foreach (uint offset in (uint[])[first + 1, first + 2, (uint)level.Clearance.Length, (uint)level.Clearance.Length + 4])
+        {
+            Nav3dLeaf[] leaves = [.. shared.Leaves];
+            leaves[^1] = leaves[^1] with { NpcClearance = offset };
+            ArgumentException error = Assert.Throws<ArgumentException>(() => Nav3dWriter.Write(Reshaped(shared, leaves, shared.Clearance)));
+            Assert.Contains($"clearance record at {offset} is out of range or malformed", error.Message, StringComparison.Ordinal);
+        }
+
+        // A record that names an obstacle the level does not have is
+        // malformed: refused at the leaf naming it, after leaves naming
+        // the sound blocked record.
+        byte[] dynamic = Nav3dClearance.Encode([], [new Nav3dDynamicCorner(7, new Nav3dCorner(1, 2))], []);
+        Nav3dLeaf[] last = [.. shared.Leaves];
+        last[^1] = last[^1] with { PlayerClearance = (uint)level.Clearance.Length };
+        ArgumentException bad = Assert.Throws<ArgumentException>(() => Nav3dWriter.Write(Reshaped(shared, last, [.. level.Clearance, .. dynamic])));
+        Assert.Contains($"clearance record at {level.Clearance.Length} is out of range or malformed", bad.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A level with other leaves and clearance, every other part the same.</summary>
+    private static Nav3dLevel Reshaped(Nav3dLevel l, Nav3dLeaf[] leaves, byte[] clearance) => new()
+    {
+        CellSize = l.CellSize, VoxelSize = l.VoxelSize, CellVoxels = l.CellVoxels, CellHeights = l.CellHeights, Columns = l.Columns, Rows = l.Rows,
+        Origin = l.Origin, FloorNormalZ = l.FloorNormalZ, StepHeight = l.StepHeight, JumpHeight = l.JumpHeight, JumpDistance = l.JumpDistance,
+        Cells = l.Cells, Doors = l.Doors, Pois = l.Pois, Presets = l.Presets, Roots = l.Roots, ColumnStarts = l.ColumnStarts,
+        Leaves = leaves, Clearance = clearance, Obstacles = l.Obstacles, Brushes = l.Brushes, Jumps = l.Jumps,
+        SpawnPoi = l.SpawnPoi, UpArrivalPoi = l.UpArrivalPoi, DownArrivalPoi = l.DownArrivalPoi, LevelId = l.LevelId, PackId = l.PackId, Bsp = l.Bsp,
+    };
+
     [Fact]
     public void TheLevelIdIsStoredInRfcOrderAtAFixedOffset()
     {
