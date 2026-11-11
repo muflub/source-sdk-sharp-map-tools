@@ -108,8 +108,8 @@ public sealed record BspNavResult(Nav3dLevel Level, IReadOnlyList<string> Warnin
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>What is solid.</b> The world's brushes of every contents
-/// (<see cref="NavGeometry.FromBsp"/>: player clips are the player class's,
+/// <b>What is solid.</b> The world's brushes of every contents, those its
+/// tree holds (<see cref="NavGeometry.FromBsp"/>: player clips are the player class's,
 /// monster clips the NPC class's), each displacement's triangles
 /// (<see cref="NavGeometry.Displacements"/>, one voxel deep) and each solid
 /// static prop's collision pieces, each solid up to its own top

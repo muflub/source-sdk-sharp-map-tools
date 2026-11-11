@@ -88,8 +88,41 @@ public sealed class NavGeometryTests
         Assert.Single(plain.Obstacles);
         Assert.Contains(plain.Warnings, w => w.Contains("models/crate.mdl", StringComparison.Ordinal));
 
-        // The world's brushes: the room's own, less the door's and the trigger's.
-        Assert.Equal(NavBrush.FromBsp(room.Bsp).Count - 2, geometry.Brushes.Count);
+        // The world's brushes: the room's own that its tree holds, less the door's and the trigger's;
+        // the doorway's sill and lintel, inside the floor's and the ceiling's brushes, are in no leaf.
+        Assert.Equal(NavBrush.FromBsp(room.Bsp).Count - 4, geometry.Brushes.Count);
+    }
+
+    /// <summary>
+    /// A <c>func_viscluster</c> and a <c>func_occluder</c> leave their brushes in the lump (the
+    /// compile writes every map brush, as stock's EmitBrushes does) but in no model's tree, and
+    /// nothing collides with them: they are not the world's. Taken for it, ctf_2fort's viscluster
+    /// boxes and occluder planes walled its doorways and the sides of its bridge.
+    /// </summary>
+    [Fact]
+    public async Task AVisclustersAndAnOccludersBrushesAreNotTheWorlds()
+    {
+        RoomDefinition definition = RoomHarness.WalkableRoom("vis", RoomFacing.PositiveX);
+        VmfDocument vmf = RoomHarness.BuildRoomModel(definition);
+        VmfChunk cluster = Entity("func_viscluster", 800021);
+        cluster.Children.Add(RoomModel.Slab(RoomHarness.Plain, new Vec3(96, 64, 16), new Vec3(112, 192, 176), 800022));
+        VmfChunk occluder = Entity("func_occluder", 800023, ("StartActive", "1"));
+        occluder.Children.Add(RoomModel.Slab(RoomHarness.Plain, new Vec3(160, 64, 16), new Vec3(176, 192, 176), 800024));
+        vmf.Chunks.Add(cluster);
+        vmf.Chunks.Add(occluder);
+        RoomObject room = await NavRoomsFixture.CompileAsync(vmf, definition);
+
+        NavGeometry geometry = NavGeometry.FromBsp(room.Bsp);
+
+        // The stimulus: both slabs are in the compiled lump.
+        List<NavBrush> lump = NavBrush.FromBsp(room.Bsp);
+        Assert.Contains(lump, b => b.MinX == 96 && b.MaxX == 112 && b.MinY == 64);
+        Assert.Contains(lump, b => b.MinX == 160 && b.MaxX == 176 && b.MinY == 64);
+        Assert.DoesNotContain(geometry.Brushes, b => b.MinX == 96 && b.MaxX == 112 && b.MinY == 64);
+        Assert.DoesNotContain(geometry.Brushes, b => b.MinX == 160 && b.MaxX == 176 && b.MinY == 64);
+        // The control: the world's own brushes stay, the floor and the plug in the room's doorway among them.
+        Assert.Contains(geometry.Brushes, b => (b.MinX, b.MinY, b.MinZ, b.MaxX, b.MaxY, b.MaxZ) == (0, 0, 0, 256, 256, 16));
+        Assert.Contains(geometry.Brushes, b => (b.MinX, b.MinY, b.MinZ, b.MaxX, b.MaxY, b.MaxZ) == (240, 80, 16, 256, 176, 240));
     }
 
     /// <summary>

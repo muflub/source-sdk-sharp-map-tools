@@ -16,7 +16,7 @@
     -->
     <IsPackable>true</IsPackable>
     <PackageId>SourceSharp.MapTools</PackageId>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <Authors>SourceSharp</Authors>
     <Description>SourceSharp's map compile passes as a library: the .nav3d builder over a compiled map (LevelNavFromBsp), the room pipeline, and the passes they share. CPU only; no native library on the navigation path.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
