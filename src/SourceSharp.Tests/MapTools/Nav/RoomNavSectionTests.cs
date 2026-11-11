@@ -176,6 +176,26 @@ public sealed class RoomNavSectionTests(NavRoomsFixture fixture) : IClassFixture
         Assert.Contains(expected, refused.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A room's runs are bytes in its pack: a run that reached past voxel 255
+    /// (only a compiled map's column can) is refused by the writer, not
+    /// wrapped into a low voxel.
+    /// </summary>
+    [Fact]
+    public void ARunPastAByteIsRefusedRatherThanWrapped()
+    {
+        RoomNav nav = fixture.Nav("east");
+        RoomNav With(NavRun run)
+        {
+            NavRun[] runs = [.. nav.Columns.Runs];
+            runs[0] = run;
+            return nav with { Columns = nav.Columns with { Runs = runs } };
+        }
+
+        Assert.Throws<OverflowException>(() => RoomNavSection.Write(With(nav.Columns.Runs[0] with { ZLo = 300 }), NavCompression.None));
+        Assert.Throws<OverflowException>(() => RoomNavSection.Write(With(nav.Columns.Runs[0] with { Height = 256 }), NavCompression.None));
+    }
+
     [Fact]
     public void AVoxelOutsideTheCellARecordOutOfRangeOrRunsOutOfShapeAreRefused()
     {

@@ -283,9 +283,10 @@ public sealed class Nav3dReader
         }
 
         int version = BinaryPrimitives.ReadInt32LittleEndian(envelope[8..]);
-        if (version != Nav3dFormat.Version && version != Nav3dFormat.CubeVersion)
+        if (version is not (Nav3dFormat.Version or Nav3dFormat.ShapedVersion or Nav3dFormat.CubeVersion))
         {
-            throw new InvalidDataException($".nav3d version {version}; this build reads version {Nav3dFormat.Version}.");
+            throw new InvalidDataException(
+                $".nav3d version {version}; this build reads versions {Nav3dFormat.CubeVersion} to {Nav3dFormat.Version}.");
         }
 
         NavCodec codec = (NavCodec)envelope[12];
@@ -414,21 +415,24 @@ public sealed class Nav3dReader
             throw new InvalidDataException("the .nav3d spawn or arrival index names no point of interest.");
         }
 
-        // Version 3: each cell's own height, required; version 2 has none,
-        // and a stray one there is another version's section, ignored.
+        // Versions 3 and 4: each cell's own height, required; version 2 has
+        // none, and a stray one there is another version's section, ignored.
+        // Version 3's runs are bytes, so its cells are at most 255 tall;
+        // version 4's are 16 bits.
         int[]? cellHeights = null;
-        if (version == Nav3dFormat.Version)
+        if (version != Nav3dFormat.CubeVersion)
         {
+            int tallest = version == Nav3dFormat.ShapedVersion ? Nav3dFormat.MaxShapedColumnVoxels : Nav3dFormat.MaxColumnVoxels;
             Section heights = Require(sections, Nav3dFormat.CellHeightsTag, 4, cells);
             cellHeights = new int[cells];
             for (int c = 0; c < cells; c++)
             {
                 cellHeights[c] = BinaryPrimitives.ReadInt32LittleEndian(b[(heights.Offset + (c * 4))..]);
                 bool empty = BinaryPrimitives.ReadInt32LittleEndian(b[(s.Roots.Offset + (c * 4))..]) == -1;
-                if (empty ? cellHeights[c] != 0 : cellHeights[c] is < 1 or > Nav3dFormat.MaxColumnVoxels)
+                if (empty ? cellHeights[c] != 0 : cellHeights[c] < 1 || cellHeights[c] > tallest)
                 {
                     throw new InvalidDataException(
-                        $"cell {c} is {cellHeights[c]} voxels tall; a placed cell is 1 to {Nav3dFormat.MaxColumnVoxels}, an empty one 0.");
+                        $"cell {c} is {cellHeights[c]} voxels tall; a placed cell of a version {version} file is 1 to {tallest}, an empty one 0.");
                 }
             }
         }
@@ -483,8 +487,8 @@ public sealed class Nav3dReader
     {
         ReadOnlySpan<byte> r = Record(_s.Leaves, leaf, Nav3dFormat.LeafRecordBytes);
         return new Nav3dLeaf(
-            r[0],
-            r[1],
+            LeafZLo(r),
+            LeafHeight(r),
             (Nav3dLeafFlags)BinaryPrimitives.ReadUInt16LittleEndian(r[2..]),
             BinaryPrimitives.ReadUInt16LittleEndian(r[4..]),
             BinaryPrimitives.ReadUInt32LittleEndian(r[8..]),
@@ -567,13 +571,14 @@ public sealed class Nav3dReader
         ReadOnlySpan<byte> leaves = Slice(_s.Leaves);
         for (int l = first; l < end; l++)
         {
-            int zLo = leaves[l * Nav3dFormat.LeafRecordBytes];
+            ReadOnlySpan<byte> r = leaves.Slice(l * Nav3dFormat.LeafRecordBytes, Nav3dFormat.LeafRecordBytes);
+            int zLo = LeafZLo(r);
             if (z < zLo)
             {
                 return -1;
             }
 
-            if (z < zLo + leaves[(l * Nav3dFormat.LeafRecordBytes) + 1])
+            if (z < zLo + LeafHeight(r))
             {
                 return l;
             }
@@ -1244,6 +1249,17 @@ public sealed class Nav3dReader
         return true;
     }
 
+    /// <summary>
+    /// A leaf record's low voxel: the low byte at offset 0 and the high byte at
+    /// offset 6. Version 4 writes the high byte; versions 2 and 3 hold zero
+    /// there, so one decode reads every version, and a version 2 or 3 file
+    /// that put anything else there leaves its cell and is refused.
+    /// </summary>
+    private static ushort LeafZLo(ReadOnlySpan<byte> record) => (ushort)(record[0] | (record[6] << 8));
+
+    /// <summary>A leaf record's height in voxels: the low byte at offset 1, the high byte at offset 7 (<see cref="LeafZLo"/>).</summary>
+    private static ushort LeafHeight(ReadOnlySpan<byte> record) => (ushort)(record[1] | (record[7] << 8));
+
     private static Section Require(Dictionary<string, Section> sections, string tag, int record, int count)
     {
         if (!sections.TryGetValue(tag, out Section section))
@@ -1305,12 +1321,14 @@ public sealed class Nav3dReader
                 for (uint l = previous; l < start; l++)
                 {
                     ReadOnlySpan<byte> r = b.Slice(s.Leaves.Offset + ((int)l * Nav3dFormat.LeafRecordBytes), Nav3dFormat.LeafRecordBytes);
-                    if (r[1] < 1 || r[0] <= last || r[0] + r[1] > blockHeight[(j - 1) / block])
+                    int zLo = LeafZLo(r);
+                    int height = LeafHeight(r);
+                    if (height < 1 || zLo <= last || zLo + height > blockHeight[(j - 1) / block])
                     {
-                        throw new InvalidDataException($"leaf {l} runs from voxel {r[0]} for {r[1]}, overlapping its column's last or leaving its cell.");
+                        throw new InvalidDataException($"leaf {l} runs from voxel {zLo} for {height}, overlapping its column's last or leaving its cell.");
                     }
 
-                    last = r[0] + r[1] - 1;
+                    last = zLo + height - 1;
                 }
             }
 
@@ -1364,9 +1382,9 @@ public sealed class Nav3dReader
                     throw new InvalidDataException($"leaf {l}'s clearance record at {offset} is out of range or malformed.");
                 }
 
-                if (Nav3dClearance.BrushCount(clearance[(int)offset..]) > 0 && r[1] != 1)
+                if (Nav3dClearance.BrushCount(clearance[(int)offset..]) > 0 && LeafHeight(r) != 1)
                 {
-                    throw new InvalidDataException($"leaf {l} lists an overhanging brush but runs {r[1]} voxels; such a leaf is one voxel.");
+                    throw new InvalidDataException($"leaf {l} lists an overhanging brush but runs {LeafHeight(r)} voxels; such a leaf is one voxel.");
                 }
             }
         }

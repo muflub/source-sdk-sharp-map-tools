@@ -438,7 +438,7 @@ public sealed class Nav3dFileTests
     public static TheoryData<string, string> Corruptions => new()
     {
         { "magic", "magic is missing" },
-        { "version", "this build reads version 3" },
+        { "version", "this build reads versions 2 to 4" },
         { "codec", "codec 9 is not one" },
         { "stored", "stored bytes" },
         { "truncated", "stored bytes" },

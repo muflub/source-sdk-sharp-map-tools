@@ -13,7 +13,7 @@ namespace SourceSharp.MapFormats.Nav;
 /// One leaf: a vertical run of voxels in one column, every voxel of it with
 /// the same clearance, flags and cost.
 /// </summary>
-/// <param name="ZLo">The run's lowest voxel, counted from the cell's floor.</param>
+/// <param name="ZLo">The run's lowest voxel, counted from the cell's floor. 16 bits: a version 4 column runs past voxel 255.</param>
 /// <param name="Height">How many voxels the run holds, at least 1.</param>
 /// <param name="Flags">Water, ladder, and per clip class whether it stands on a floor and whether that floor is walkable.</param>
 /// <param name="Cost">The traversal cost multiplier in 8.8 fixed point: 256 is 1.0.</param>
@@ -22,7 +22,7 @@ namespace SourceSharp.MapFormats.Nav;
 /// <param name="PlayerFloorZ">For the player class, the altitude of the surface under the run when <see cref="Nav3dLeafFlags.GroundedPlayer"/>; else 0.</param>
 /// <param name="NpcFloorZ">For the NPC class, likewise.</param>
 public readonly record struct Nav3dLeaf(
-    byte ZLo, byte Height, Nav3dLeafFlags Flags, ushort Cost, uint PlayerClearance, uint NpcClearance, float PlayerFloorZ, float NpcFloorZ)
+    ushort ZLo, ushort Height, Nav3dLeafFlags Flags, ushort Cost, uint PlayerClearance, uint NpcClearance, float PlayerFloorZ, float NpcFloorZ)
 {
     /// <summary>The run's highest voxel.</summary>
     public int ZHi => ZLo + Height - 1;

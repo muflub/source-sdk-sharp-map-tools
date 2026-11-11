@@ -534,7 +534,8 @@ of rooms) of any compiled map, from the `.bsp` alone: a stock map such as
 otherwise (`none`, `deflate[:0-9]`, `brotli[:0-11]`).
 
 - **The grid** is 256-unit cells of 16-unit voxels laid over the world
-  model's bounds, every cell as tall as the map (at most 255 voxels), with
+  model's bounds, every cell as tall as the map (a version 4 file past 255
+  voxels, so a jump map's stacked rooms fit; at most 65,535), with
   the room defaults: step 18, jump 56 up and 100 across, the presets
   `standing 32 72 player; flyer 32 32 npc`. Each cell is built from the
   solids within 128 units of it, so a clearance is exact for any agent up to

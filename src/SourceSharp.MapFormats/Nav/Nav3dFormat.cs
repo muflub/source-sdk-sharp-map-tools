@@ -35,7 +35,13 @@ namespace SourceSharp.MapFormats.Nav;
 /// the cell's edge for damage, or a low cell's space above its ceiling for
 /// solid it was never told about. It is written only for such a level: a
 /// level of cube rooms is version 2, byte for byte what it was
-/// (<see cref="CubeVersion"/>).
+/// (<see cref="CubeVersion"/>). Version 4 (section 16) widens a leaf's low
+/// voxel and height to 16 bits, the high bytes in the leaf record's two
+/// spare bytes, so one column can hold a map taller than 255 voxels (a jump
+/// map's rooms stand over the whole height of the world). An older reader
+/// would read only the low bytes and misplace every run above voxel 255.
+/// It is written only for such a level (<see cref="ShapedVersion"/>
+/// otherwise), so every level that fits a byte keeps its bytes.
 /// </para>
 /// </remarks>
 public static class Nav3dFormat
@@ -43,8 +49,19 @@ public static class Nav3dFormat
     /// <summary>The file's eight magic bytes: <c>SSNAV3D</c> and a NUL.</summary>
     public static ReadOnlySpan<byte> Magic => "SSNAV3D\0"u8;
 
-    /// <summary>The newest version this build reads and writes: a level whose cells differ in height.</summary>
-    public const int Version = 3;
+    /// <summary>
+    /// The newest version this build reads and writes: a level with a column
+    /// taller than <see cref="MaxShapedColumnVoxels"/>, whose leaves' low
+    /// voxels and heights take 16 bits.
+    /// </summary>
+    public const int Version = 4;
+
+    /// <summary>
+    /// The version of a level whose cells differ in height but whose columns
+    /// all fit <see cref="MaxShapedColumnVoxels"/>: version 3, which this
+    /// build still writes for such a level and reads.
+    /// </summary>
+    public const int ShapedVersion = 3;
 
     /// <summary>
     /// The version of a level whose every cell is a cube: version 2, which
@@ -82,14 +99,24 @@ public static class Nav3dFormat
     public const int MaxCellVoxels = 128;
 
     /// <summary>
-    /// The most voxels up one placed cell's columns (version 3): a leaf's low
-    /// voxel and its height are bytes, so a run ends at voxel 255 at most.
+    /// The most voxels up one placed cell's columns in a version 3 file: its
+    /// leaves' low voxels and heights are bytes, so a run ends at voxel 255
+    /// at most. A room's own column is held to it too (the room pack's runs
+    /// are bytes).
     /// </summary>
-    public const int MaxColumnVoxels = 255;
+    public const int MaxShapedColumnVoxels = 255;
 
     /// <summary>
-    /// Section, version 3: each cell's height in voxels, <c>int32</c>, 1 to
-    /// <see cref="MaxColumnVoxels"/> for a placed cell, 0 for an empty one.
+    /// The most voxels up one placed cell's columns in a version 4 file: its
+    /// leaves' low voxels and heights are 16 bits.
+    /// </summary>
+    public const int MaxColumnVoxels = ushort.MaxValue;
+
+    /// <summary>
+    /// Section, versions 3 and 4: each cell's height in voxels, <c>int32</c>,
+    /// 1 to <see cref="MaxShapedColumnVoxels"/> (version 3) or
+    /// <see cref="MaxColumnVoxels"/> (version 4) for a placed cell, 0 for an
+    /// empty one.
     /// A version 2 file has none: every placed cell is <c>cellVoxels</c> tall.
     /// </summary>
     public const string CellHeightsTag = "CHGT";

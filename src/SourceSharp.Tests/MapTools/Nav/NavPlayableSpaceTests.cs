@@ -210,7 +210,7 @@ public sealed class NavPlayableSpaceTests(TallSkyboxMap map) : IClassFixture<Tal
     {
         Assert.NotNull(VisibilityLump.Read(map.Bsp[BspLump.Visibility]));
         DModel world = BspStructView.As<DModel>(map.Bsp[BspLump.Models])[0];
-        Assert.True((world.Maxs.Z - world.Mins.Z) / 16 > Nav3dFormat.MaxColumnVoxels, $"world {world.Mins.Z}..{world.Maxs.Z}");
+        Assert.True((world.Maxs.Z - world.Mins.Z) / 16 > Nav3dFormat.MaxShapedColumnVoxels, $"world {world.Mins.Z}..{world.Maxs.Z}");
     }
 
     [Fact]
@@ -282,8 +282,15 @@ public sealed class NavPlayableSpaceTests(TallSkyboxMap map) : IClassFixture<Tal
 
         int exit = await Nav3dCommand.RunAsync(fs, [], [bsp], on);
         Assert.True(exit == Program.ExitSuccess, on.ToString());
-        Assert.Equal(RoomCommands.ExitFailed, await Nav3dCommand.RunAsync(fs, [], [bsp, "-playspace", "off", "-out", bsp + ".off"], off));
-        Assert.Contains("a .nav3d column holds at most 255", off.ToString(), StringComparison.Ordinal);
+        Assert.Contains("20 voxels up", on.ToString(), StringComparison.Ordinal);
+
+        // Off, the grid covers the whole world, skybox and stage too: taller
+        // than a byte of voxels, so a version 4 file.
+        exit = await Nav3dCommand.RunAsync(fs, [], [bsp, "-playspace", "off", "-out", bsp + ".off"], off);
+        Assert.True(exit == Program.ExitSuccess, off.ToString());
+        byte[] whole = fs.GetBytes(VPath.Create(Path.GetFullPath(bsp + ".off")))!;
+        Assert.Equal(Nav3dFormat.Version, System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(whole.AsSpan(8)));
+        Assert.True(Nav3dReader.Open(whole).TallestCell > Nav3dFormat.MaxShapedColumnVoxels);
     }
 
     [Theory]

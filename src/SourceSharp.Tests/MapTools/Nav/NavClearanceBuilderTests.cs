@@ -98,17 +98,19 @@ public sealed class NavClearanceBuilderTests
     }
 
     /// <summary>
-    /// A column may run 255 voxels up (format section 2: a cell's height,
-    /// version 3), not only a cell's edge of 128: a compiled map 166 voxels
-    /// tall at 8-unit voxels was refused by the builder though the file holds it.
+    /// A column may run past a cell's edge of 128 and past a byte (format
+    /// section 2: a cell's height, versions 3 and 4): a compiled map 166
+    /// voxels tall at 8-unit voxels was refused by the builder though the
+    /// file holds it, and a jump map is thousands. It stops at 65,535, the
+    /// most a version 4 leaf reaches.
     /// </summary>
     [Fact]
-    public void AColumnRunsUpTo255VoxelsAndNoFurther()
+    public void AColumnRunsPastAByteUpTo65535Voxels()
     {
-        NavGrid tall = NavClearanceBuilder.Build(new NavGeometry { Brushes = [Floor] }, new NavRegion(0, 0, 0, 2, 2, 255, 16), NavSettings.Default);
+        NavGrid tall = NavClearanceBuilder.Build(new NavGeometry { Brushes = [Floor] }, new NavRegion(0, 0, 0, 2, 2, 256, 16), NavSettings.Default);
         Assert.True(tall[0, 0, 0].IsSolid);
-        Assert.False(tall[1, 1, 254].IsSolid);
-        Assert.Throws<ArgumentOutOfRangeException>(() => NavClearanceBuilder.Build(new NavGeometry { Brushes = [Floor] }, new NavRegion(0, 0, 0, 2, 2, 256, 16), NavSettings.Default));
+        Assert.False(tall[1, 1, 255].IsSolid);
+        Assert.Throws<ArgumentOutOfRangeException>(() => NavClearanceBuilder.Build(new NavGeometry { Brushes = [Floor] }, new NavRegion(0, 0, 0, 2, 2, 65536, 16), NavSettings.Default));
     }
 
     /// <summary>
@@ -489,6 +491,21 @@ public sealed class NavClearanceBuilderTests
         Assert.Throws<ArgumentOutOfRangeException>(() => NavClearanceBuilder.Build(geometry, Cell with { SizeX = 0 }, NavSettings.Default));
         Assert.Throws<ArgumentOutOfRangeException>(() => NavClearanceBuilder.Build(geometry, Cell with { VoxelSize = 0 }, NavSettings.Default));
         Assert.Throws<ArgumentOutOfRangeException>(() => NavClearanceBuilder.Build(geometry, Cell with { SizeZ = Nav3dFormat.MaxColumnVoxels + 1 }, NavSettings.Default));
+    }
+
+    /// <summary>
+    /// A column taller than a byte of voxels (a compiled map's, version 4)
+    /// is one run from its floor to its top where nothing changes up it: the
+    /// run's low voxel and height are 16 bits.
+    /// </summary>
+    [Fact]
+    public void AColumnTallerThanAByteIsOneRunWhereNothingChanges()
+    {
+        NavRegion tall = new(0, 0, 0, 1, 1, 300, 16);
+        NavGrid grid = NavClearanceBuilder.Build(new NavGeometry { Brushes = [NavBrush.Box(new Vec3(-64, -64, -16), new Vec3(64, 64, 0), 1)] }, tall, NavSettings.Default);
+
+        NavRun run = Assert.Single(NavColumns.Of(grid).Column(0, 0).ToArray());
+        Assert.Equal(((ushort)0, (ushort)300), (run.ZLo, run.Height));
     }
 
     /// <summary>A threshold is stored as the float at or below it: an agent the grid says fits, fits.</summary>

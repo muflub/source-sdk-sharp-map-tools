@@ -146,9 +146,11 @@ public sealed record NavSettings
 
     /// <summary>
     /// The most voxels up one room's columns: a run's low voxel and height
-    /// are bytes in the file (<see cref="Nav3dFormat.MaxColumnVoxels"/>).
+    /// are bytes in the room pack and in a linked level's version 3 file
+    /// (<see cref="Nav3dFormat.MaxShapedColumnVoxels"/>). Only a compiled
+    /// map's navigation runs taller (version 4).
     /// </summary>
-    public const int MaxColumnVoxels = Nav3dFormat.MaxColumnVoxels;
+    public const int MaxColumnVoxels = Nav3dFormat.MaxShapedColumnVoxels;
 
     /// <summary>The default presets, as the <see cref="AgentsKey"/> key spells them.</summary>
     public const string DefaultAgents = "standing 32 72 player; flyer 32 32 npc";

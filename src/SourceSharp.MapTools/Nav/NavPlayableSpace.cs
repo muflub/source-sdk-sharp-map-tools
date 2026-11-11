@@ -19,6 +19,17 @@ namespace SourceSharp.MapTools.Nav;
 /// <param name="LeafInPlay">By leaf index, whether the leaf is in a play-space cluster; a solid leaf never is.</param>
 public sealed record NavPlaySpace(Box Bounds, IReadOnlyList<bool> LeafInPlay)
 {
+    /// <summary>
+    /// The bounds of each leaf in the play space, in leaf order: the boxes
+    /// <see cref="Bounds"/> is the union of. A point whose leaf is in the
+    /// play space lies in its leaf's box, so space no box reaches holds no
+    /// play space, which lets a build skip it without walking the tree
+    /// (<see cref="LevelNavFromBsp"/>). The compiler stores a leaf's bounds
+    /// as whole units, which can fall up to a unit inside the leaf, so a
+    /// caller pads them.
+    /// </summary>
+    public IReadOnlyList<Box> LeafBounds { get; init; } = [];
+
     /// <summary>Whether <paramref name="leaf"/> is open space a player can be in.</summary>
     /// <param name="leaf">A leaf index.</param>
     /// <returns>True for a leaf of the play space.</returns>
@@ -155,6 +166,7 @@ public static class NavPlayableSpace
 
         Box? union = null;
         bool[] inPlay = new bool[clusters.Length];
+        List<Box> playBounds = [];
         for (int i = 0; i < clusters.Length; i++)
         {
             int c = clusters[i];
@@ -164,10 +176,11 @@ public static class NavPlayableSpace
             }
 
             inPlay[i] = true;
+            playBounds.Add(bounds[i]);
             union = union is { } u ? new Box(Lower(u.Mins, bounds[i].Mins), Upper(u.Maxs, bounds[i].Maxs)) : bounds[i];
         }
 
-        return union is { } found ? new NavPlaySpace(found, inPlay) : null;
+        return union is { } found ? new NavPlaySpace(found, inPlay) { LeafBounds = playBounds } : null;
     }
 
     private static Vec3 Lower(Vec3 a, Vec3 b) => new(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Min(a.Z, b.Z));

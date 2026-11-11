@@ -101,6 +101,14 @@ public sealed record BspNavOptions
     /// changes the file.
     /// </summary>
     public NavBuildTimer? Timer { get; init; }
+
+    /// <summary>
+    /// Whether the build marks space no play leaf's box reaches outside
+    /// without walking the tree (<see cref="LevelNavFromBsp.PlaySpans"/>).
+    /// True always outside the facts, which turn it off to show it changes
+    /// no byte.
+    /// </summary>
+    internal bool SkipOutsidePlay { get; init; } = true;
 }
 
 /// <summary>What <see cref="LevelNavFromBsp.Build"/> made: the navigation, and what it could not read.</summary>
@@ -132,12 +140,16 @@ public sealed record BspNavResult(Nav3dLevel Level, IReadOnlyList<string> Warnin
 /// is solid in the navigation, so the space between the map's outer walls
 /// and its bounding box (and any sealed void) holds no leaves; a voxel that
 /// straddles a wall is solid already, because the wall's brush overlaps it.
-/// A cell that is outside throughout is an empty cell.
+/// A cell that is outside throughout is an empty cell. With a play space,
+/// the space no play leaf's box reaches is outside without asking the tree
+/// (<see cref="PlaySpans"/>), which is what lets a jump map, whose rooms
+/// stand apart over the whole height of the world, build at all.
 /// </para>
 /// <para>
 /// <b>Cells are a grid, not rooms.</b> Every cell is
 /// <see cref="BspNavOptions.CellSize"/> square and as tall as the map (the
-/// file's version 3 cell heights when that is not one cell), with no room,
+/// file's version 3 cell heights when that is not one cell, version 4 when
+/// the map is taller than 255 voxels), with no room,
 /// no doors and no points of interest: a reader's neighbours run across
 /// cell faces wherever the columns are open, so a step that crosses a cell
 /// face is only that, not a doorway.
@@ -283,7 +295,7 @@ public static class LevelNavFromBsp
         if (nz > Nav3dFormat.MaxColumnVoxels)
         {
             throw new NavBuildException(string.Create(CultureInfo.InvariantCulture,
-                $"the map is {topZ - oz:0.##} units tall, {nz} voxels of {voxel:0.##}; a .nav3d column holds at most {Nav3dFormat.MaxColumnVoxels}: build it with a larger voxel."));
+                $"the map is {topZ - oz:0.##} units tall, {nz} voxels of {voxel:0.####}; a .nav3d column holds at most {Nav3dFormat.MaxColumnVoxels}: build it with a larger voxel."));
         }
 
         BspTreeView tree = BspTreeView.FromBsp(bsp);
@@ -294,6 +306,14 @@ public static class LevelNavFromBsp
             overhangIndex[overhang[i]] = i;
         }
 
+        // Which voxel heights of each cell can hold play space: those a play
+        // leaf's box reaches. The rest is outside without asking the tree,
+        // and a cell no box reaches is empty without being built. A jump
+        // map's rooms stand far apart over the whole height of the world,
+        // and nearly all of its columns are the void between them.
+        int[][]? spans = space is { LeafBounds.Count: > 0 } && options.SkipOutsidePlay
+            ? PlaySpans(space.LeafBounds, columns, rows, nz, ox, oy, oz, cell, voxel)
+            : null;
         timer?.Mark("tree");
 
         // Costliest first, one cell at a time: a cell's time grows with the
@@ -309,7 +329,9 @@ public static class LevelNavFromBsp
         {
             long started = timer is null ? 0 : System.Diagnostics.Stopwatch.GetTimestamp();
             NavRegion region = new(ox + ((c % columns) * cell), oy + ((c / columns) * cell), oz, n, n, nz, voxel);
-            built[c] = BuildCell(geometry, region, settings, options.Reach, tree, space, overhangIndex, cancellationToken);
+            built[c] = spans is not null && spans[c].Length == 0
+                ? null
+                : BuildCell(geometry, region, settings, options.Reach, tree, space, spans?[c], overhangIndex, cancellationToken);
             timer?.Cell(c, System.Diagnostics.Stopwatch.GetElapsedTime(started));
             options.Progress?.Invoke(Interlocked.Increment(ref done), built.Length);
         });
@@ -374,9 +396,14 @@ public static class LevelNavFromBsp
     }
 
     /// <summary>One cell: its columns, its own records, and its overhanging brushes' places in the level's list; null when it is outside throughout.</summary>
+    /// <param name="spans">
+    /// The voxel heights that can hold play space, as <c>[lo, hi)</c> pairs
+    /// ascending (<see cref="PlaySpans"/>); every other voxel is outside. Null
+    /// to ask the tree for every voxel.
+    /// </param>
     private static CellBuild? BuildCell(
         NavGeometry geometry, NavRegion region, NavSettings settings, double reach, BspTreeView tree, NavPlaySpace? space,
-        Dictionary<NavBrush, int> overhangIndex, CancellationToken cancellationToken)
+        int[]? spans, Dictionary<NavBrush, int> overhangIndex, CancellationToken cancellationToken)
     {
         // Which voxels lie outside the map: their centre in a solid leaf, or,
         // with a play space, in a leaf outside it (the 3D skybox, a stage no
@@ -385,6 +412,12 @@ public static class LevelNavFromBsp
         // the whole column at once (BspTreeView.LeavesAlong): each centre's
         // leaf is the one LeafOf gives it.
         bool[] outside = new bool[region.SizeX * region.SizeY * region.SizeZ];
+        if (spans is not null)
+        {
+            Array.Fill(outside, true);
+        }
+
+        int[] whole = [0, region.SizeZ];
         bool anyInside = false;
         float[] heights = new float[region.SizeZ];
         int[] leaves = new int[region.SizeZ];
@@ -399,14 +432,19 @@ public static class LevelNavFromBsp
             for (int x = 0; x < region.SizeX; x++)
             {
                 NavBox v = region.Voxel(x, y, 0);
-                tree.LeavesAlong((float)((v.MinX + v.MaxX) / 2), (float)((v.MinY + v.MaxY) / 2), heights, leaves);
-                for (int z = 0; z < region.SizeZ; z++)
+                int[] along = spans ?? whole;
+                for (int k = 0; k < along.Length; k += 2)
                 {
-                    int leaf = leaves[z];
-                    bool solid = (leaf >= 0 && leaf < tree.LeafContents.Length && (tree.LeafContents[leaf] & BspTreeView.ContentsSolid) != 0)
-                        || (space is not null && !space.Holds(leaf));
-                    outside[region.Index(x, y, z)] = solid;
-                    anyInside |= !solid;
+                    (int lo, int hi) = (along[k], along[k + 1]);
+                    tree.LeavesAlong((float)((v.MinX + v.MaxX) / 2), (float)((v.MinY + v.MaxY) / 2), heights.AsSpan(lo, hi - lo), leaves.AsSpan(lo, hi - lo));
+                    for (int z = lo; z < hi; z++)
+                    {
+                        int leaf = leaves[z];
+                        bool solid = (leaf >= 0 && leaf < tree.LeafContents.Length && (tree.LeafContents[leaf] & BspTreeView.ContentsSolid) != 0)
+                            || (space is not null && !space.Holds(leaf));
+                        outside[region.Index(x, y, z)] = solid;
+                        anyInside |= !solid;
+                    }
                 }
             }
         }
@@ -436,6 +474,83 @@ public static class LevelNavFromBsp
         NavVoxelKey[] keys = grid.Keys;
         int[] brushes = [.. NavClearanceBuilder.OverhangBrushes(near).Select(b => overhangIndex[b])];
         return new CellBuild(NavColumns.Of(region, keys, records), records, brushes);
+    }
+
+    /// <summary>
+    /// Per cell, the voxel heights a play leaf's box reaches, as ascending,
+    /// disjoint <c>[lo, hi)</c> pairs; empty for a cell no box reaches.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A voxel is outside when the leaf its centre lies in is not in the play
+    /// space, and that centre lies in its own leaf's box, so a voxel whose
+    /// centre no play leaf's box holds is outside: the build marks it so
+    /// without walking the tree, and the grid is the one walking every
+    /// voxel would give, byte for byte. Each box is padded by a voxel, more
+    /// than the unit the compiler's whole-unit bounds can fall inside a
+    /// leaf, so padding only ever adds voxels the tree is then asked about.
+    /// </para>
+    /// <para>
+    /// Built box by box: each box adds its height range to every cell its
+    /// footprint reaches, and each cell's ranges are then sorted and merged.
+    /// The cost is the boxes' cell counts, not the grid's voxels, which for a
+    /// map of rooms in a void is what makes its height affordable.
+    /// </para>
+    /// </remarks>
+    internal static int[][] PlaySpans(
+        IReadOnlyList<Box> boxes, int columns, int rows, int nz, double ox, double oy, double oz, double cell, double voxel)
+    {
+        List<(int Lo, int Hi)>?[] ranges = new List<(int Lo, int Hi)>?[columns * rows];
+        foreach (Box box in boxes)
+        {
+            int cx0 = (int)Math.Floor((box.Mins.X - voxel - ox) / cell);
+            int cx1 = (int)Math.Floor((box.Maxs.X + voxel - ox) / cell);
+            int cy0 = (int)Math.Floor((box.Mins.Y - voxel - oy) / cell);
+            int cy1 = (int)Math.Floor((box.Maxs.Y + voxel - oy) / cell);
+            int lo = Math.Max(0, (int)Math.Floor((box.Mins.Z - voxel - oz) / voxel));
+            int hi = Math.Min(nz, (int)Math.Ceiling((box.Maxs.Z + voxel - oz) / voxel));
+            if (cx1 < 0 || cy1 < 0 || cx0 >= columns || cy0 >= rows || hi <= lo)
+            {
+                continue;
+            }
+
+            for (int cy = Math.Max(0, cy0); cy <= Math.Min(rows - 1, cy1); cy++)
+            {
+                for (int cx = Math.Max(0, cx0); cx <= Math.Min(columns - 1, cx1); cx++)
+                {
+                    (ranges[(cy * columns) + cx] ??= []).Add((lo, hi));
+                }
+            }
+        }
+
+        int[][] spans = new int[ranges.Length][];
+        for (int c = 0; c < ranges.Length; c++)
+        {
+            if (ranges[c] is not { } list)
+            {
+                spans[c] = [];
+                continue;
+            }
+
+            list.Sort();
+            List<int> merged = [];
+            foreach ((int lo, int hi) in list)
+            {
+                if (merged.Count > 0 && lo <= merged[^1])
+                {
+                    merged[^1] = Math.Max(merged[^1], hi);
+                }
+                else
+                {
+                    merged.Add(lo);
+                    merged.Add(hi);
+                }
+            }
+
+            spans[c] = [.. merged];
+        }
+
+        return spans;
     }
 
     /// <summary>

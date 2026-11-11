@@ -171,8 +171,8 @@ public sealed class RoomNavHeightsTests
         Assert.Equal([16, 32, 0], level.CellHeights);
 
         Assert.Equal(
-            "cell 1 is 256 voxels tall; a placed cell is 1 to 255, an empty one 0. (Parameter 'level')",
-            Assert.Throws<ArgumentException>(() => Nav3dWriter.Write(With(level, 16, 256, 0))).Message);
+            "cell 1 is 65536 voxels tall; a placed cell is 1 to 65535, an empty one 0. (Parameter 'level')",
+            Assert.Throws<ArgumentException>(() => Nav3dWriter.Write(With(level, 16, 65536, 0))).Message);
         Assert.Throws<ArgumentException>(() => Nav3dWriter.Write(With(level, 16, 32, 4)));
         Assert.Throws<ArgumentException>(() => Nav3dWriter.Write(With(level, 16, 20, 0)));
         Assert.Throws<ArgumentException>(() => Nav3dWriter.Write(With(level, 16, 32)));
@@ -181,7 +181,7 @@ public sealed class RoomNavHeightsTests
         int heights = Directory(file, Nav3dFormat.CellHeightsTag);
         byte[] zero = [.. file];
         BinaryPrimitives.WriteInt32LittleEndian(zero.AsSpan(Nav3dFormat.EnvelopeBytes + heights + 4), 0);
-        Assert.Equal("cell 1 is 0 voxels tall; a placed cell is 1 to 255, an empty one 0.", Assert.Throws<InvalidDataException>(() => Nav3dReader.Open(zero)).Message);
+        Assert.Equal("cell 1 is 0 voxels tall; a placed cell of a version 3 file is 1 to 255, an empty one 0.", Assert.Throws<InvalidDataException>(() => Nav3dReader.Open(zero)).Message);
         byte[] low = [.. file];
         BinaryPrimitives.WriteInt32LittleEndian(low.AsSpan(Nav3dFormat.EnvelopeBytes + heights + 4), 20);
         Assert.Contains("leaving its cell", Assert.Throws<InvalidDataException>(() => Nav3dReader.Open(low)).Message, StringComparison.Ordinal);

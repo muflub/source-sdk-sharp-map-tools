@@ -126,8 +126,9 @@ public static class NavInspector
         Line(text, $"grid {nav.Columns} x {nav.Rows} cells of {nav.CellSize:0.###} units, {placed} placed; voxel {nav.VoxelSize:0.###} ({nav.CellVoxels} per cell edge)");
         if (nav.Version != Nav3dFormat.CubeVersion)
         {
-            // A level of rooms of their own heights (version 3): how tall
-            // the columns run, which a file of cubes does not need to say.
+            // A level of rooms of their own heights, or a compiled map's grid
+            // (versions 3 and 4): how tall the columns run, which a file of
+            // cubes does not need to say.
             int lowest = Enumerable.Range(0, nav.CellCount).Select(nav.CellHeight).Where(h => h > 0).DefaultIfEmpty(0).Min();
             Line(text, $"cells of their own heights: {lowest} to {nav.TallestCell} voxels up");
         }
