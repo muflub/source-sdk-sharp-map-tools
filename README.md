@@ -595,11 +595,12 @@ first 20 places that have none, the count, and fails when there is any
 `-out` names it): the same grid and free space, kept for bodies of the
 widths given (32 and 48 by default, TF2's player and the narrower body a
 bot tests a drop with). Each box stores, per width, the lowest ceiling a
-centred body meets, so a fit at any height is the answer the `.nav3d`'s
-`FitsAtCentre` gives, and space whose answers agree merges into boxes. A
-jump map whose `.nav3d` would be gigabytes fits: jump_academy2 is 3.9
-million boxes, 27 MB, in about a minute, where its `.nav3d` would be 126
-million leaves. The format is `docs/navhull-format.md`; `NavHullReader` in
+centred body meets, and beside a sloped brush where a body passes under it
+and stands clear above it, so a fit at any feet and height is the answer
+the `.nav3d`'s `FitsAtCentre` gives (on ctf_2fort, 67 million asks agree),
+and space whose answers agree merges into boxes. A jump map whose `.nav3d`
+would be gigabytes fits: jump_academy2 is 3.75 million boxes, 39 MB, where
+its `.nav3d` would be 126 million leaves. The format is `docs/navhull-format.md`; `NavHullReader` in
 `SourceSharp.MapFormats` reads it. `-check` does not read one.
 
 ### `preview`

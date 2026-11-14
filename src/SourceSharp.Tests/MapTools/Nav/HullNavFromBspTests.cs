@@ -77,38 +77,87 @@ public sealed class HullNavFromBspTests(BspNavMap map, OverhangHallMap overhang)
     }
 
     [Fact]
-    public void AFitIsAnsweredAsTheClearanceRecordAnswersIt() => FitsMatch(Both());
+    public void AFitIsAnsweredAsTheClearanceRecordAnswersIt() => _ = FitsMatch(Both());
 
     /// <summary>
-    /// Under a brush whose underside slopes, the ceiling is the head room the
-    /// brush leaves a centred body on the voxel's bottom: the fit there is
-    /// the one the brush test gives.
+    /// Under and beside brushes whose faces slope downward (a slab with a
+    /// sloped underside, a ramp a player stands on and passes under), a fit
+    /// is the brush test's at any feet: on a floor inside the voxel below, a
+    /// step up, or mid-voxel. The map must hold such asks whose answer
+    /// differs from the voxel bottom's, which one ceiling per voxel (version
+    /// 1) answered wrongly.
     /// </summary>
     [Fact]
-    public void UnderAnOverhangingBrushAFitIsTheBrushTests()
+    public void BesideAnOverhangingBrushAFitIsTheBrushTestsAtAnyFeet()
     {
         (Nav3dReader nav, NavHullReader hull) = Both(overhang.Bsp, overhang.Bytes);
         Assert.Contains(Enumerable.Range(0, nav.LeafCount), l => Nav3dClearance.BrushCount(nav.ClearanceRecord(l, Nav3dClipClass.Player)) > 0);
-        FitsMatch((nav, hull));
+        int beyond = FitsMatch((nav, hull));
+        Assert.True(beyond > 0, "no ask by a brush differs from the voxel bottom's");
+
+        // A record names every overhanging brush within reach; a key keeps
+        // only those a body meets below its ceiling. Both happen here: a
+        // brush-naming voxel whose key keeps none, and one whose key keeps one.
+        int pruned = 0;
+        int kept = 0;
+        for (int leaf = 0; leaf < nav.LeafCount; leaf++)
+        {
+            if (Nav3dClearance.BrushCount(nav.ClearanceRecord(leaf, Nav3dClipClass.Player)) == 0)
+            {
+                continue;
+            }
+
+            (int cell, int x, int y) = nav.LeafColumn(leaf);
+            uint overhangs = hull.Key((int)hull.Box(hull.FindBox(cell, x, y, nav.Leaf(leaf).ZLo)).Key).OverhangCount;
+            pruned += overhangs == 0 ? 1 : 0;
+            kept += overhangs > 0 ? 1 : 0;
+        }
+
+        Assert.True(pruned > 0 && kept > 0, $"{pruned} pruned, {kept} kept");
     }
 
-    private static void FitsMatch((Nav3dReader Nav, NavHullReader Hull) both)
+    /// <summary>
+    /// Every voxel's fit, as the <c>.nav3d</c> reader gives it, at the feet a
+    /// game asks with: the voxel's bottom, its middle, half a voxel under it,
+    /// and on a grounded run's bottom the floor and the floor raised a step
+    /// (a wide body on stairs). Answers how many asks of a brush-naming voxel
+    /// came out differently at those feet than at the voxel's bottom: the
+    /// asks one ceiling per voxel could not answer.
+    /// </summary>
+    private static int FitsMatch((Nav3dReader Nav, NavHullReader Hull) both)
     {
         (Nav3dReader nav, NavHullReader hull) = both;
         double s = nav.VoxelSize;
+        int beyondABottom = 0;
         foreach ((int leaf, int cell, int x, int y, int z) in Voxels(nav))
         {
             int box = hull.FindBox(cell, x, y, z);
-            double originZ = nav.Origin.Z + (z * s);
+            Nav3dLeaf l = nav.Leaf(leaf);
+            double bottom = nav.Origin.Z + (z * s);
+            List<double> feet = [bottom, bottom + (s * 0.5), bottom - (s * 0.5)];
+            if (z == l.ZLo && l.IsGrounded(Nav3dClipClass.Player))
+            {
+                feet.Add(l.PlayerFloorZ);
+                feet.Add(l.PlayerFloorZ + nav.StepHeight);
+            }
+
+            bool brushes = Nav3dClearance.BrushCount(nav.ClearanceRecord(leaf, Nav3dClipClass.Player)) > 0;
             foreach (float width in hull.Widths)
             {
                 foreach (float height in Heights)
                 {
-                    Assert.True(nav.FitsAtCentre(leaf, z, width, height, originZ, Nav3dClipClass.Player) == hull.FitsAt(box, originZ, width, height),
-                        $"{width} x {height} at ({cell}: {x}, {y}, {z})");
+                    bool atBottom = nav.FitsAtCentre(leaf, z, width, height, bottom, Nav3dClipClass.Player);
+                    foreach (double originZ in feet)
+                    {
+                        bool exact = nav.FitsAtCentre(leaf, z, width, height, originZ, Nav3dClipClass.Player);
+                        Assert.True(exact == hull.FitsAt(box, originZ, width, height), $"{width} x {height} from {originZ} at ({cell}: {x}, {y}, {z})");
+                        beyondABottom += brushes && exact != atBottom ? 1 : 0;
+                    }
                 }
             }
         }
+
+        return beyondABottom;
     }
 
     [Fact]
@@ -213,9 +262,11 @@ public sealed class HullNavFromBspTests(BspNavMap map, OverhangHallMap overhang)
 }
 
 /// <summary>
-/// The hall of <see cref="BspNavMap"/> with one more brush: a slab over the
-/// open floor between the block and the ledge whose underside slopes from 80
-/// up to 112 going east, an overhanging brush the clearance records name.
+/// The hall of <see cref="BspNavMap"/> with two more brushes, both
+/// overhanging (a face sloping downward), which the clearance records name:
+/// a slab over the open floor between the block and the ledge whose
+/// underside slopes from 80 up to 112 going east, and a ramp 8 thick rising
+/// from the floor between the ledge and the clip.
 /// </summary>
 public sealed class OverhangHallMap : IAsyncLifetime
 {
@@ -230,7 +281,11 @@ public sealed class OverhangHallMap : IAsyncLifetime
     {
         VmfDocument document = BspNavMap.Vmf();
         VmfChunk world = document.Chunks.First(c => c.Name == MapFileLoader.WorldChunk);
-        world.Children.Add(SlopedSlab(9100, (104, 120, 80), (152, 200, 128), 112));
+        world.Children.Add(SlopedSlab(9100, (104, 120), (152, 200), (80, 112), (128, 128)));
+
+        // A ramp 8 thick between the ledge and the clip, rising east from the
+        // floor: stood on along its top, passed under at its high end.
+        world.Children.Add(SlopedSlab(9101, (244, 40), (296, 120), (16, 48), (24, 56)));
         Bytes = await BspNavMap.CompileAsync(document);
         Bsp = await BspFile.LoadAsync(new MemoryStream(Bytes, writable: false));
     }
@@ -238,11 +293,13 @@ public sealed class OverhangHallMap : IAsyncLifetime
     /// <inheritdoc/>
     public Task DisposeAsync() => Task.CompletedTask;
 
-    /// <summary>A box whose bottom face rises from <c>mins.Z</c> at its west edge to <paramref name="eastBottom"/> at its east edge.</summary>
-    private static VmfChunk SlopedSlab(int id, (float X, float Y, float Z) mins, (float X, float Y, float Z) maxs, float eastBottom)
+    /// <summary>A slab whose bottom and top faces each run straight from a west height to an east height.</summary>
+    private static VmfChunk SlopedSlab(int id, (float X, float Y) mins, (float X, float Y) maxs, (float West, float East) bottom, (float West, float East) top)
     {
-        (float x0, float y0, float z0) = mins;
-        (float x1, float y1, float z1) = maxs;
+        (float x0, float y0) = mins;
+        (float x1, float y1) = maxs;
+        (float z0, float eastBottom) = bottom;
+        (float z1, float eastTop) = top;
         VmfChunk solid = new("solid");
         solid.AddKey("id", id.ToString(CultureInfo.InvariantCulture));
         void Side((float, float, float) a, (float, float, float) b, (float, float, float) c)
@@ -258,14 +315,15 @@ public sealed class OverhangHallMap : IAsyncLifetime
             side.AddKey("smoothing_groups", "0");
         }
 
-        // A slab's six sides in the winding the room model writes, the bottom
-        // tilted: its west edge at z0, its east edge at the east bottom.
-        Side((x0, y1, z1), (x1, y1, z1), (x1, y0, z1));
+        // A slab's six sides in the winding the room model writes, the top
+        // and bottom tilted: each west edge at its west height, east edge at
+        // its east height.
+        Side((x0, y1, z1), (x1, y1, eastTop), (x1, y0, eastTop));
         Side((x0, y0, z0), (x1, y0, eastBottom), (x1, y1, eastBottom));
-        Side((x1, y1, z1), (x1, y1, eastBottom), (x1, y0, eastBottom));
+        Side((x1, y1, eastTop), (x1, y1, eastBottom), (x1, y0, eastBottom));
         Side((x0, y1, z0), (x0, y1, z1), (x0, y0, z1));
-        Side((x1, y1, z1), (x0, y1, z1), (x0, y1, z0));
-        Side((x0, y0, z1), (x1, y0, z1), (x1, y0, z0));
+        Side((x1, y1, eastTop), (x0, y1, z1), (x0, y1, z0));
+        Side((x0, y0, z1), (x1, y0, eastTop), (x1, y0, eastBottom));
         return solid;
     }
 

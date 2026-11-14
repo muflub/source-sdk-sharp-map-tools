@@ -36,8 +36,15 @@ public static class NavHullFormat
     /// <summary>The file's eight magic bytes: <c>SSNAVHUL</c>.</summary>
     public static ReadOnlySpan<byte> Magic => "SSNAVHUL"u8;
 
-    /// <summary>The version this build reads and writes.</summary>
-    public const int Version = 1;
+    /// <summary>
+    /// The version this build reads and writes. Version 2 adds each key's
+    /// overhang limits (<see cref="OverhangsTag"/>): version 1 took one
+    /// ceiling at a voxel's bottom under an overhanging brush, which gave
+    /// the wrong answer for feet below that bottom (on a floor inside the
+    /// voxel under) or above it (a raised origin on stairs), so a version 1
+    /// file is refused and rebuilt.
+    /// </summary>
+    public const int Version = 2;
 
     /// <summary>The file extension <c>ssmap nav3d -hull</c> writes beside the map.</summary>
     public const string Extension = ".navhull";
@@ -81,6 +88,9 @@ public static class NavHullFormat
     /// <summary>Section: one shut record per (key, obstacle) pair (<see cref="ShutRecordBytes"/>).</summary>
     public const string ShutsTag = "SHUT";
 
+    /// <summary>Section: one overhang record per (key, overhanging brush) pair (<see cref="OverhangRecordBytes"/>).</summary>
+    public const string OverhangsTag = "OVHG";
+
     /// <summary>Section: one 48-byte record per dynamic obstacle, the <c>.nav3d</c> <c>DYNO</c> layout.</summary>
     public const string ObstaclesTag = "DYNO";
 
@@ -99,10 +109,15 @@ public static class NavHullFormat
     /// <summary>An obstacle record: the <c>.nav3d</c> <c>DYNO</c> record.</summary>
     public const int ObstacleRecordBytes = Nav3dFormat.ObstacleRecordBytes;
 
-    /// <summary>A key record's size for a number of widths: flags, cost, floor, shut range, then a ceiling per width.</summary>
+    /// <summary>A key record's size for a number of widths: flags, cost, floor, shut range, overhang range, then a ceiling per width.</summary>
     /// <param name="widths">The file's width count.</param>
     /// <returns>The size in bytes.</returns>
-    public static int KeyRecordBytes(int widths) => 16 + (4 * widths);
+    public static int KeyRecordBytes(int widths) => 24 + (4 * widths);
+
+    /// <summary>An overhang record's size for a number of widths: per width, two <c>float64</c> limits.</summary>
+    /// <param name="widths">The file's width count.</param>
+    /// <returns>The size in bytes.</returns>
+    public static int OverhangRecordBytes(int widths) => 16 * widths;
 
     /// <summary>A shut record's size for a number of widths: the obstacle, then a ceiling per width.</summary>
     /// <param name="widths">The file's width count.</param>

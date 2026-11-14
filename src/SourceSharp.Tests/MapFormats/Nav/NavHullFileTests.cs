@@ -28,10 +28,11 @@ public sealed class NavHullFileTests
     /// <summary>
     /// Two cells of 2 x 2 columns, 8 voxels of 16 up, built for widths 16 and
     /// 32. Cell 0: a floor box over its south row (the door lowers its
-    /// ceilings when shut), the open box above it, and a player-clip column
+    /// ceilings when shut), the open box above it (an overhanging brush in it
+    /// passed under up to 50 or stood over from 90), and a player-clip column
     /// in its north-west corner. Cell 1: a ladder up its west columns on a
-    /// floor at 32, beside the open box. One jump link from the floor to the
-    /// ladder's floor.
+    /// floor at 32, beside the open box, under a brush passed under up to 70.
+    /// One jump link from the floor to the ladder's floor.
     /// </summary>
     internal static NavHullLevel Sample() => new()
     {
@@ -57,11 +58,16 @@ public sealed class NavHullFileTests
         Keys =
         [
             new NavHullKey(Floor, 256, 0, [128, 64], 0, 1),
-            new NavHullKey(NavHullFlags.None, 256, 0, [128, 64], 0, 0),
-            new NavHullKey(NavHullFlags.Ladder | Floor, 384, 32, [100, float.NegativeInfinity], 0, 0),
+            new NavHullKey(NavHullFlags.None, 256, 0, [128, 64], 0, 0, 0, 1),
+            new NavHullKey(NavHullFlags.Ladder | Floor, 384, 32, [100, float.NegativeInfinity], 0, 0, 1, 1),
             new NavHullKey(NavHullFlags.PlayerBlocked, 256, 0, [float.NegativeInfinity, float.NegativeInfinity], 0, 0),
         ],
         Shuts = [new NavHullShut(0, [40, 30])],
+        Overhangs =
+        [
+            new NavHullOverhang([50, 50], [90, 90]),
+            new NavHullOverhang([70, 70], [double.PositiveInfinity, double.PositiveInfinity]),
+        ],
         Obstacles = [new Nav3dObstacle("gate", "func_door", 0, 7, Nav3dObstacleKind.Door, new Vec3(0, 0, 0), new Vec3(32, 16, 64))],
         Jumps = [new NavHullJump(0, 3, 1, 0, 0, 0, 32, Nav3dDirection.East, 1)],
     };
@@ -163,8 +169,8 @@ public sealed class NavHullFileTests
         Assert.False(nav.Stands(0, 32, 65));
         Assert.False(nav.Stands(1, 16, 10));
 
-        Assert.True(nav.Climbs(3, 16, 68));
-        Assert.False(nav.Climbs(3, 16, 69));
+        Assert.True(nav.Climbs(3, 16, 38));
+        Assert.False(nav.Climbs(3, 16, 39));
         Assert.False(nav.Climbs(3, 32, 1));
         Assert.False(nav.Climbs(0, 16, 1));
 
@@ -172,8 +178,39 @@ public sealed class NavHullFileTests
         Assert.False(nav.StandsWithShut(0, 0, 16, 41));
         Assert.True(nav.StandsWithShut(0, 0, 32, 30));
         Assert.False(nav.StandsWithShut(1, 0, 16, 1));
-        Assert.True(nav.StandsWithShut(3, 0, 16, 68));
+        Assert.True(nav.StandsWithShut(3, 0, 16, 38));
+        Assert.False(nav.StandsWithShut(3, 0, 16, 39));
         Assert.Throws<ArgumentOutOfRangeException>(() => nav.StandsWithShut(0, 1, 16, 1));
+    }
+
+    /// <summary>
+    /// An overhanging brush is cleared by passing under it (the top at most
+    /// its under-limit) or standing over it (the feet at least its
+    /// over-limit), whatever the ceiling; between, a body meets it.
+    /// </summary>
+    [Fact]
+    public void AnOverhangIsPassedUnderOrStoodOver()
+    {
+        NavHullReader nav = Open();
+        Assert.Equal(new NavHullOverhang([50, 50], [90, 90]), nav.Overhang(0));
+        Assert.Equal((0u, 1u), (nav.Key(1).OverhangFirst, nav.Key(1).OverhangCount));
+
+        Assert.True(nav.FitsAt(1, 32, 16, 18));
+        Assert.False(nav.FitsAt(1, 32, 16, 19));
+        Assert.False(nav.FitsAt(1, 89, 16, 10));
+        Assert.True(nav.FitsAt(1, 90, 16, 38));
+        Assert.False(nav.FitsAt(1, 90, 16, 39));
+
+        Assert.True(nav.Stands(3, 16, 38));
+        Assert.False(nav.Stands(3, 16, 39));
+
+        NavHullOverhang o = nav.Overhang(0);
+        Assert.True(o.Clears(0, 32, 50));
+        Assert.True(o.Clears(1, 90, 200));
+        Assert.False(o.Clears(0, 89, 51));
+        Assert.Equal(o.GetHashCode(), new NavHullOverhang([50, 50], [90, 90]).GetHashCode());
+        Assert.NotEqual(o, nav.Overhang(1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => nav.Overhang(2));
     }
 
     [Fact]
@@ -200,7 +237,7 @@ public sealed class NavHullFileTests
         NavHullReader bound = NavHullReader.Open(NavHullWriter.Write(new NavHullLevel
         {
             VoxelSize = level.VoxelSize, CellVoxels = level.CellVoxels, Columns = level.Columns, Rows = level.Rows, ColumnVoxels = level.ColumnVoxels,
-            Widths = level.Widths, CellStarts = level.CellStarts, Boxes = level.Boxes, Keys = level.Keys, Shuts = level.Shuts,
+            Widths = level.Widths, CellStarts = level.CellStarts, Boxes = level.Boxes, Keys = level.Keys, Shuts = level.Shuts, Overhangs = level.Overhangs,
             Obstacles = level.Obstacles, Jumps = level.Jumps, Bsp = binding,
         }));
         Assert.Equal(binding, bound.Bsp);
@@ -244,7 +281,7 @@ public sealed class NavHullFileTests
     public static TheoryData<string, string> Corruptions => new()
     {
         { "magic", "magic is missing" },
-        { "version", "this build reads version 1" },
+        { "version", "this build reads version 2" },
         { "stored", "stored bytes" },
         { "raw", "stored and image lengths differ" },
         { "counts", "counts are out of range" },
@@ -259,6 +296,8 @@ public sealed class NavHullFileTests
         { "cells", "not a partition of the 4 boxes" },
         { "box", "box 1 leaves its cell" },
         { "key", "key 0 names shut records out of range" },
+        { "overhangs", "key 1 names overhang records out of range" },
+        { "overhang size", "\"OVHG\" section is" },
         { "shut", "shut record 0 names an obstacle out of range" },
         { "obstacle", "obstacle 0 names a cell out of range" },
         { "jump", "jump link 0 names boxes 0 and 3" },
@@ -290,7 +329,7 @@ public sealed class NavHullFileTests
         switch (fault)
         {
             case "magic": bytes[0] = (byte)'X'; break;
-            case "version": bytes[8] = 2; break;
+            case "version": bytes[8] = 1; break;
             case "stored": BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(20), 5); break;
             case "raw": BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(16), bytes.Length); break;
             case "counts": BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(image + 40), 0); break;
@@ -305,6 +344,8 @@ public sealed class NavHullFileTests
             case "cells": BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(At("CELB") + 8), 3); break;
             case "box": bytes[At("BOXS") + NavHullFormat.BoxRecordBytes + 2] = 3; break;
             case "key": BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(At("KEYS") + 12), 2); break;
+            case "overhangs": BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(At("KEYS") + NavHullFormat.KeyRecordBytes(2) + 20), 3); break;
+            case "overhang size": BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(Entry("OVHG") + 12), 40); break;
             case "shut": BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(At("SHUT")), 1); break;
             case "obstacle": BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(At("DYNO") + 8), 2); break;
             case "jump": bytes[At("JUMP") + 10] = 1; break;
@@ -324,7 +365,10 @@ public sealed class NavHullFileTests
         { "starts", "cell starts are not 3 entries" },
         { "backwards", "cell 1's boxes end before they start" },
         { "box", "leaves its cell or names a key out of range" },
-        { "key", "a ceiling per width and shut records in range" },
+        { "key", "a ceiling per width and shut and overhang records in range" },
+        { "key overhangs", "a ceiling per width and shut and overhang records in range" },
+        { "overhang", "two limits per width, neither NaN" },
+        { "overhang width", "two limits per width, neither NaN" },
         { "shut", "a ceiling per width and an obstacle in range" },
         { "obstacle", "names cell 5 of 2" },
         { "jump", "out of order or range" },
@@ -345,6 +389,9 @@ public sealed class NavHullFileTests
             "backwards" => Copy(s, starts: [0, 5, 4]),
             "box" => Copy(s, boxes: [.. s.Boxes.Select((b, i) => i == 1 ? b with { X1 = 3 } : b)]),
             "key" => Copy(s, keys: [s.Keys[0] with { ShutCount = 2 }, .. s.Keys.Skip(1)]),
+            "key overhangs" => Copy(s, keys: [.. s.Keys.Take(2), s.Keys[2] with { OverhangCount = 2 }, s.Keys[3]]),
+            "overhang" => Copy(s, overhangs: [s.Overhangs[0], new NavHullOverhang([1, double.NaN], [2, 3])]),
+            "overhang width" => Copy(s, overhangs: [s.Overhangs[0], new NavHullOverhang([1], [2])]),
             "shut" => Copy(s, shuts: [new NavHullShut(3, [1, 2])]),
             "obstacle" => Copy(s, obstacles: [s.Obstacles[0] with { Cell = 5 }]),
             "jump" => Copy(s, jumps: [s.Jumps[0] with { BoxA = 3, BoxB = 0 }]),
@@ -360,7 +407,7 @@ public sealed class NavHullFileTests
     private static NavHullLevel Copy(
         NavHullLevel s, int? voxels = null, IReadOnlyList<float>? widths = null, uint[]? starts = null, NavHullBox[]? boxes = null,
         IReadOnlyList<NavHullKey>? keys = null, IReadOnlyList<NavHullShut>? shuts = null, IReadOnlyList<Nav3dObstacle>? obstacles = null,
-        IReadOnlyList<NavHullJump>? jumps = null) => new()
+        IReadOnlyList<NavHullJump>? jumps = null, IReadOnlyList<NavHullOverhang>? overhangs = null) => new()
         {
             VoxelSize = s.VoxelSize,
             CellVoxels = voxels ?? s.CellVoxels,
@@ -372,6 +419,7 @@ public sealed class NavHullFileTests
             Boxes = boxes ?? s.Boxes,
             Keys = keys ?? s.Keys,
             Shuts = shuts ?? s.Shuts,
+            Overhangs = overhangs ?? s.Overhangs,
             Obstacles = obstacles ?? s.Obstacles,
             Jumps = jumps ?? s.Jumps,
         };
