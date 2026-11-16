@@ -1675,6 +1675,22 @@ public enum StockQuirk
     /// </para>
     /// </remarks>
     BoxBevelWindingBounds,
+
+    /// <summary>
+    /// <c>Cubemap_FindClosestCubemap</c> answers a side with no winding (a
+    /// bevel) with sample 0 even when the map has no <c>env_cubemap</c>, and
+    /// the specular-side pass then reads slot 0 of the empty sample table.
+    /// </summary>
+    /// <remarks>
+    /// The table is a zero-initialised global, so the reference patches the
+    /// bevel's material to a cubemap at the origin, one the map does not
+    /// have: a <c>_0_0_0</c> patch in the pak whose <c>$envmap</c> names a
+    /// texture nothing writes. <see cref="CompliancePolicy.Correct"/> leaves
+    /// such a side unpatched when there are no samples. Before this entry
+    /// the port read past its empty list and threw, so a map with a
+    /// specular sloped brush and no cubemap could not be compiled at all.
+    /// </remarks>
+    CubemapNoSampleReadsZero,
 }
 
 /// <summary>
