@@ -15,6 +15,7 @@ using SourceSharp.MapFormats.Nav;
 
 using SourceSharp.MapTools.Io;
 using SourceSharp.MapTools.Nav;
+using SourceSharp.MapTools.Rooms;
 
 namespace SourceSharp.MapCompile;
 
@@ -41,8 +42,9 @@ namespace SourceSharp.MapCompile;
 /// </para>
 /// <para>
 /// <b>The check.</b> <c>-check</c> builds nothing: it reads the navigation
-/// (beside the map, or where <c>-out</c> says), refuses one bound to other
-/// bytes, and checks that every place a player stands has ground under it
+/// (beside the map, or where <c>-out</c> says), refuses one bound to another
+/// map (other bytes, or for a level made by <c>ssmap link</c>, which binds
+/// by the worldspawn's <c>ss_level_id</c>, another level id), and checks that every place a player stands has ground under it
 /// in the map's own collision (<see cref="NavFloorCheck"/>), the props'
 /// from the game's content. It prints the count and the first places that
 /// have none, and fails when there is any.
@@ -285,7 +287,11 @@ public static class Nav3dCommand
             return RoomCommands.ExitFailed;
         }
 
-        if (!nav.MatchesBsp(map.Binding))
+        // A navigation built from a compiled map records the map's bytes; a
+        // linked level's records none and binds by the level id the link
+        // stamped into the map's worldspawn, as the game matches it.
+        bool linked = RoomCompileIds.LevelIdOf(map.Bsp) is Guid levelId && nav.MatchesMap(levelId.ToString("D"));
+        if (!nav.MatchesBsp(map.Binding) && !linked)
         {
             await output.WriteLineAsync($"{tool}: {HostPaths.Display(navPath)} was not built from {HostPaths.Display(mapPath)}: build it again").ConfigureAwait(false);
             return RoomCommands.ExitFailed;

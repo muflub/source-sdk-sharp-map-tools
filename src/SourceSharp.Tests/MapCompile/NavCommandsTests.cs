@@ -131,6 +131,38 @@ public sealed class NavCommandsTests
         return await BspFile.LoadAsync(stream);
     }
 
+    /// <summary>
+    /// <c>ssmap nav3d -check</c> accepts a linked level's navigation, which
+    /// binds to its map by the worldspawn's level id rather than by the map's
+    /// bytes, and still refuses it against a map with another id.
+    /// </summary>
+    [Fact]
+    public async Task CheckAcceptsALinkedLevelsNavigationByItsLevelId()
+    {
+        InMemoryFileSystem fs = Game();
+        (int exit, string log) = await RoomAsync(fs);
+        Assert.True(exit == Program.ExitSuccess, log);
+        (exit, log) = await LinkAsync(fs);
+        Assert.True(exit == Program.ExitSuccess, log);
+        Assert.Null(Nav3dReader.Open(fs.GetBytes(At("/out/level.nav3d"))!).Bsp);
+
+        using StringWriter checkedLog = new();
+        exit = await Nav3dCommand.RunAsync(fs, [], ["/out/level.bsp", "-check"], checkedLog);
+
+        Assert.True(exit == Program.ExitSuccess, checkedLog.ToString());
+        Assert.Matches(@"ssmap nav3d: checked .*level\.nav3d: [\d,]+ places a player stands, 0 with no ground", checkedLog.ToString());
+
+        // The same map with another level id is not the one it was linked to.
+        BspData map = await MapAsync(fs);
+        RoomCompileIds.Stamp(map, null, Guid.Parse("11111111-2222-8333-8444-555555555555"));
+        using MemoryStream other = new();
+        await BspFile.SaveAsync(map, other);
+        fs.AddFile(Rooted("/out/other.bsp"), other.ToArray());
+        using StringWriter refused = new();
+        Assert.Equal(RoomCommands.ExitFailed, await Nav3dCommand.RunAsync(fs, [], ["/out/other.bsp", "-out", "/out/level.nav3d", "-check"], refused));
+        Assert.Contains("was not built from", refused.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task RoomThenLinkWritesTheNavigationBesideTheMapWithOneIdInBoth()
     {

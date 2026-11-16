@@ -425,6 +425,92 @@ public class CubemapTests
     }
 
     [Fact]
+    public async Task WithNoCubemapsABevelSideIsLeftAlone()
+    {
+        // A wedge has no face looking along +y, so the loader gives it a box
+        // bevel there: a side with the wedge's material and no winding. The
+        // nearest-cubemap search answers such a side with sample 0 whether or
+        // not the map has one; with none (every generated Descent level), the
+        // fix-up read past the empty list and threw.
+        VmfMap vmf = SurfaceUnit.Room(SurfaceUnit.Plain);
+        vmf.WorldSolids.Add(SpecularWedge());
+        SurfaceUnit.Loaded loaded = await SurfaceUnit.LoadAsync(vmf);
+        Assert.Contains(loaded.Map.BrushSides, s => s.Winding.IsNull && s.TexInfo != TexInfoTable.TexInfoNode);
+        CubemapFixups fixups = new(loaded.Context, loaded.Map, loaded.Patcher);
+
+        await fixups.AttachDefaultCubemapToSpecularSidesAsync();
+
+        Assert.Equal(0, loaded.Patcher.Pak.Count);
+    }
+
+    [Fact]
+    public async Task UnderStockABevelIsPatchedToACubemapAtTheOrigin()
+    {
+        // The reference's side of the quirk: sample 0 of its zeroed table.
+        VmfMap vmf = SurfaceUnit.Room(SurfaceUnit.Plain);
+        vmf.WorldSolids.Add(SpecularWedge());
+        SurfaceUnit.Loaded loaded = await SurfaceUnit.LoadAsync(vmf, ComplianceOptions.Correct.Flipping(StockQuirk.CubemapNoSampleReadsZero));
+        MapBrushSide bevel = loaded.Map.BrushSides.First(s => s.Winding.IsNull && s.TexInfo != TexInfoTable.TexInfoNode);
+        CubemapFixups fixups = new(loaded.Context, loaded.Map, loaded.Patcher);
+        Assert.Equal(0, fixups.FindClosestCubemap(Vec3.Zero, bevel));
+
+        await fixups.AttachDefaultCubemapToSpecularSidesAsync();
+
+        Assert.True(loaded.Patcher.Pak.Contains("materials/maps/unit/unit/specular_0_0_0.vmt"));
+    }
+
+    [Fact]
+    public async Task WithACubemapABevelSideTakesTheFirstSample()
+    {
+        // The other side of the same rule: with samples, a side with no
+        // winding still gets sample 0, as the reference has it.
+        VmfMap vmf = SurfaceUnit.Room(SurfaceUnit.Plain);
+        vmf.WorldSolids.Add(SpecularWedge());
+        RoomKit.PointEntity(vmf, "env_cubemap", new Point(0f, 0f, 128f));
+        RoomKit.PointEntity(vmf, "env_cubemap", new Point(0f, 0f, 160f));
+        SurfaceUnit.Loaded loaded = await SurfaceUnit.LoadAsync(vmf);
+        MapBrushSide bevel = loaded.Map.BrushSides.First(s => s.Winding.IsNull && s.TexInfo != TexInfoTable.TexInfoNode);
+        CubemapFixups fixups = new(loaded.Context, loaded.Map, loaded.Patcher);
+
+        Assert.Equal(0, fixups.FindClosestCubemap(Vec3.Zero, bevel));
+    }
+
+    [Fact]
+    public async Task WithNoCubemapsASideWithNoWindingFindsNone()
+    {
+        VmfMap vmf = SurfaceUnit.Room(SurfaceUnit.Plain);
+        vmf.WorldSolids.Add(SpecularWedge());
+        SurfaceUnit.Loaded loaded = await SurfaceUnit.LoadAsync(vmf);
+        MapBrushSide bevel = loaded.Map.BrushSides.First(s => s.Winding.IsNull && s.TexInfo != TexInfoTable.TexInfoNode);
+
+        Assert.Equal(-1, new CubemapFixups(loaded.Context, loaded.Map, loaded.Patcher).FindClosestCubemap(Vec3.Zero, bevel));
+    }
+
+    /// <summary>A specular wedge in the room: sloping from 16 high at y = -32 to an edge at y = 32, with no face along +y.</summary>
+    private static VmfSolid SpecularWedge()
+    {
+        const float x0 = -32f, x1 = 32f, y0 = -32f, y1 = 32f, z0 = 64f, z1 = 80f;
+        const string alongX = "[1 0 0 0] 0.25", alongY = "[0 -1 0 0] 0.25", plusY = "[0 1 0 0] 0.25", downZ = "[0 0 -1 0] 0.25";
+
+        // Sloping top, bottom, +x, -x, -y; each face's texture axes lie in it.
+        (Point[] Points, string U, string V)[] faces =
+        [
+            ([new(x0, y1, z0), new(x1, y1, z0), new(x1, y0, z1)], alongX, alongY),
+            ([new(x0, y0, z0), new(x1, y0, z0), new(x1, y1, z0)], alongX, alongY),
+            ([new(x1, y1, z1), new(x1, y1, z0), new(x1, y0, z0)], plusY, downZ),
+            ([new(x0, y1, z0), new(x0, y1, z1), new(x0, y0, z1)], plusY, downZ),
+            ([new(x0, y0, z1), new(x1, y0, z1), new(x1, y0, z0)], alongX, downZ),
+        ];
+        VmfSolid wedge = new();
+        foreach ((Point[] f, string u, string v) in faces)
+        {
+            wedge.Sides.Add(new VmfSide { P0 = f[0], P1 = f[1], P2 = f[2], Material = SurfaceUnit.Specular, UAxis = u, VAxis = v });
+        }
+
+        return wedge;
+    }
+
+    [Fact]
     public async Task AManuallyReferencedSideIsLeftToItsOwnCubemap()
     {
         //, bManuallyPickedByAnEnvCubemap.

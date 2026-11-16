@@ -1464,6 +1464,28 @@ public static class ComplianceCatalogue
             + "plane: a wedge whose top plane's distance was snapped by 0.006 has its thin edge 0.38 "
             + "along, and the bevel follows the plane there."),
 
+        StockQuirk.CubemapNoSampleReadsZero => new(
+            quirk,
+            "A bevel is patched to a cubemap the map does not have",
+            "With no env_cubemap in the map, a specular side with no winding (a sloped brush's "
+            + "bevel) is still answered with sample 0, read from the empty, zeroed sample table: "
+            + "its material is patched to a cubemap at the origin that nothing writes.",
+            "With no samples, such a side is left unpatched.",
+            CompileTools.Vbsp,
+            [
+                "SourceSharp.MapTools.Bsp.Cubemaps.CubemapFixups.FindClosestCubemap",
+            ],
+            QuirkObservation.Demonstrated,
+            "Found compiling generated Descent levels, which have no env_cubemap and do have "
+            + "sloped specular brushes: the port threw reading its empty sample list. Facts load "
+            + "a specular wedge with no cubemap and show Stock patches its bevel to a _0_0_0 "
+            + "cubemap while Correct patches nothing.",
+            [
+                "CubemapTests.UnderStockABevelIsPatchedToACubemapAtTheOrigin",
+                "CubemapTests.WithNoCubemapsABevelSideIsLeftAlone",
+                "CubemapTests.WithNoCubemapsASideWithNoWindingFindsNone",
+            ]),
+
         _ => throw new ArgumentOutOfRangeException(
             nameof(quirk), quirk, "no ComplianceCatalogue entry for this StockQuirk"),
     };

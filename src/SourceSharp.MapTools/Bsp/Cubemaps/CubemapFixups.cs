@@ -208,7 +208,12 @@ public sealed class CubemapFixups
                 continue;
             }
 
-            (int X, int Y, int Z) origin = SampleOrigin(_context.CubemapSamples[cubemap].Origin);
+            // Only StockQuirk.CubemapNoSampleReadsZero asks for a sample the
+            // map does not have: the reference's table is zeroed, so its
+            // origin is (0, 0, 0).
+            (int X, int Y, int Z) origin = cubemap < _context.CubemapSamples.Count
+                ? SampleOrigin(_context.CubemapSamples[cubemap].Origin)
+                : (0, 0, 0);
             side.TexInfo = await CreateTexInfoAsync(side.TexInfo, origin, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -253,7 +258,8 @@ public sealed class CubemapFixups
     /// <returns>
     /// The nearest sample in front of the side's plane, else the nearest
     /// sample, else -1 when there are none; 0 for a side with no winding
-    /// ("a valid (if random) cubemap",).
+    /// ("a valid (if random) cubemap"), or -1 when there are none unless
+    /// <see cref="StockQuirk.CubemapNoSampleReadsZero"/> is emulated.
     /// </returns>
     public int FindClosestCubemap(Vec3 entityOrigin, MapBrushSide side)
     {
@@ -261,7 +267,9 @@ public sealed class CubemapFixups
 
         if (side.Winding.IsNull)
         {
-            return 0;
+            // StockQuirk.CubemapNoSampleReadsZero: sample 0 even when there
+            // is none, which the reference reads from its zeroed table.
+            return _context.CubemapSamples.Count > 0 || _context.Options.Compliance.Emulates(StockQuirk.CubemapNoSampleReadsZero) ? 0 : -1;
         }
 
         ReadOnlySpan<Vec3> points = _map.Windings.Points(side.Winding);
